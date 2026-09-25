@@ -1,0 +1,22 @@
+[package]
+name = "dispatch-bench"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone on purpose: this empty [workspace] stops cargo from adopting the harness into sparq's
+# workspace, so it never appears in `cargo test --workspace` or the clippy matrix. It is also listed
+# in the root Cargo.toml's `exclude`, explicitly, because a measurement cited by an ADR must be
+# re-runnable on the stage device without becoming a build dependency of the instrument.
+[workspace]
+
+# Mirrors sparq's [profile.release] exactly (sparq/Cargo.toml), so the ratio measured
+# here is the ratio the stage device would see. Absolute numbers do NOT transfer: this
+# is a 2-core virtualised sandbox at ~1 GB RAM, not SATURN, and not Windows.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+debug = 1
+
+[dependencies]

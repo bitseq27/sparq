@@ -1,0 +1,686 @@
+
+===== test002 RUN 24/09/2026 15:00:44.31 on SATURN user bitseq =====
+ ================================================================
+ sparq test002 - WO-006 acceptance round 2: find the real device
+ everything shown here is also written to test002.log
+ at the end you send back ONE file: test002.log from the repo root
+ ================================================================
+ " "
+ [00] environment
+
+---- [RUN] os version ----
+
+Microsoft Windows [Version 10.0.19045.6216]
+---- [RC 0] os version ----
+ processor: AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD
+ cores: 32
+ " "
+ [01] stray zip-artefact guard - defect #71
+ no stray copy artefacts - tree is clean
+ " "
+ [02] Windows audio ground truth - what the OS itself sees.
+ This bypasses sparq entirely; it settles which endpoints are real.
+ " "
+ [02a] sessions - a lingering remote session keeps Remote Audio alive
+
+---- [RUN] qwinsta - session table ----
+ SESSIONNAME       USERNAME                 ID  STATE   TYPE        DEVICE 
+ services                                    0  Disc                        
+>console           bitseq                    1  Active                      
+ rdp-tcp                                 65536  Listen                      
+---- [RC 0] qwinsta - session table ----
+ " "
+ [02b] power scheme - HIGH PERFORMANCE expected for acceptance numbers
+
+---- [RUN] powercfg active scheme ----
+Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  (High performance)---- [RC 0] powercfg active scheme ----
+ " "
+ [02c] PnP audio endpoints - real NAMES and states. Status OK means
+ present and working; UNKNOWN usually means not present.
+
+---- [RUN] pnp AudioEndpoint table ----
+Unknown  OUT 1-4 (BEHRINGER UMC 204HD 192k)   [SWD\MMDEVAPI\{0.0.0.00000000}.{856044FD-E79C-4664-BAAA-6988309F957B}]
+Unknown  3 - BenQ EL2870U (AMD High Definition Audio Device)   [SWD\MMDEVAPI\{0.0.0.00000000}.{C53C9394-26A4-4B2D-BDA9-471558EEB45E}]
+Unknown  BenQ EL2870U (NVIDIA High Definition Audio)   [SWD\MMDEVAPI\{0.0.0.00000000}.{39C0CB29-2A1A-4A77-B4D0-F8A5802B2621}]
+OK       OUT 3-4 (BEHRINGER UMC 204HD 192k)   [SWD\MMDEVAPI\{0.0.0.00000000}.{593C4844-1F18-4EDA-8318-5B50490B2B57}]
+Unknown  OUT 1-2 (BEHRINGER UMC 204HD 192k)   [SWD\MMDEVAPI\{0.0.0.00000000}.{D0EC6E54-D445-4D23-942C-F6C7BD778FFA}]
+Unknown  OUT 3-4 (BEHRINGER UMC 204HD 192k)   [SWD\MMDEVAPI\{0.0.0.00000000}.{AD929CE3-78F3-4DA7-AB0D-4BA24DDC5B97}]
+OK       Speakers (Steam Streaming Speakers)   [SWD\MMDEVAPI\{0.0.0.00000000}.{180E7E24-4417-4D24-A52B-090371D76B51}]
+OK       BenQ EL2870U (NVIDIA High Definition Audio)   [SWD\MMDEVAPI\{0.0.0.00000000}.{8EE2E34B-7ECF-4CBF-A714-3CA5E9E6F959}]
+OK       OUT 1-4 (BEHRINGER UMC 204HD 192k)   [SWD\MMDEVAPI\{0.0.0.00000000}.{1E9F6BF9-A4B9-4DF4-971B-4A8231F24AF4}]
+OK       Microphone Array (PC-LM1E Audio)   [SWD\MMDEVAPI\{0.0.1.00000000}.{73DA4CDE-5E62-42AE-A7EC-0FB4A52D7400}]
+OK       BenQ EL2870U (NVIDIA High Definition Audio)   [SWD\MMDEVAPI\{0.0.0.00000000}.{D6C329D5-8A6D-478E-A36F-713832C58D7C}]
+OK       Microphone (Steam Streaming Microphone)   [SWD\MMDEVAPI\{0.0.1.00000000}.{1FE92556-989C-46E7-93B7-E209A1609608}]
+Unknown  IN 1-2 (BEHRINGER UMC 204HD 192k)   [SWD\MMDEVAPI\{0.0.1.00000000}.{23E38B22-E563-42FD-937F-A0D94BA5C820}]
+Unknown  BenQ EL2870U (NVIDIA High Definition Audio)   [SWD\MMDEVAPI\{0.0.0.00000000}.{C69B3BFA-1C4F-46FA-8B7A-374F6B1FF278}]
+OK       OUT 1-2 (BEHRINGER UMC 204HD 192k)   [SWD\MMDEVAPI\{0.0.0.00000000}.{D8DB3E5B-5BEF-49F3-97CF-1DDE49343F42}]
+OK       IN 1-2 (BEHRINGER UMC 204HD 192k)   [SWD\MMDEVAPI\{0.0.1.00000000}.{54BA7EFA-8222-4A7D-967D-F29645D9BB61}]
+OK       BenQ EL2870U (NVIDIA High Definition Audio)   [SWD\MMDEVAPI\{0.0.0.00000000}.{FE8AD54D-9CD4-4DD3-AEFB-D15C309D7B4A}]
+Unknown  BenQ EL2870U (NVIDIA High Definition Audio)   [SWD\MMDEVAPI\{0.0.0.00000000}.{D0311FEC-E9CF-4D89-874B-6515FE14DA58}]
+Unknown  BenQ EL2870U (NVIDIA High Definition Audio)   [SWD\MMDEVAPI\{0.0.0.00000000}.{BCB12568-5E86-4AF1-9344-A645C80E854B}]
+OK       Speakers (Steam Streaming Microphone)   [SWD\MMDEVAPI\{0.0.0.00000000}.{FED48AB8-F7AB-4474-80A0-B368FD74B809}]
+---- [RC 0] pnp AudioEndpoint table ----
+ " "
+ [02d] sound devices and drivers
+
+---- [RUN] Win32_SoundDevice table ----
+AMD High Definition Audio Device   status=OK info=3
+USB Audio Device   status=OK info=3
+Steam Streaming Microphone   status=OK info=3
+Steam Streaming Speakers   status=OK info=3
+NVIDIA Virtual Audio Device (Wave Extensible) (WDM)   status=OK info=3
+NVIDIA High Definition Audio   status=OK info=3
+BEHRINGER UMC 204HD 192k   status=OK info=3
+---- [RC 0] Win32_SoundDevice table ----
+ " "
+ [02e] MMDevices registry - name and state per endpoint GUID, read from
+ the registry instead of the COM property store that is being denied.
+ state: 1 = ACTIVE, 2 = DISABLED, 4 = NOT PRESENT, 8 = UNPLUGGED.
+ The GUIDs here match the ids sparq lists in step [05] one for one.
+
+---- [RUN] MMDevices registry walk - render and capture ----
+== MMDevices Render ==
+{0eafe61f-591a-445c-a8f9-bea2921a8764}  state=8  name=Digital Output
+{12b2d42a-273b-440f-8845-67d6cfc18e11}  state=4  name=BenQ EL2870U
+{1715a0da-0016-4733-8612-64818c007b76}  state=536870916  name=BenQ EL2870U
+{180e7e24-4417-4d24-a52b-090371d76b51}  state=1  name=Speakers
+{1ad4dd8c-83be-467f-b73d-031d46a061bd}  state=536870916  name=BenQ EL2870U
+{1e9f6bf9-a4b9-4df4-971b-4a8231f24af4}  state=1  name=OUT 1-4
+{1f21263f-db8c-424f-a509-47436ca82f7b}  state=4  name=1 - BenQ EL2870U
+{1f77a4f4-23ec-4d07-b133-7a41d42b2492}  state=8  name=Digital Output
+{2d8218bf-07b1-4346-874f-db25ddcf4519}  state=4  name=BenQ EL2870U
+{3965f1f0-ea66-490f-abdf-de3d0bc6da7a}  state=4  name=Realtek Digital Output
+{3bdfec5d-3468-420f-a0a9-6d0908f6ae9a}  state=4  name=SPDIF Interface
+{3bed0a0f-031d-4c84-b48c-fdfb6129ab77}  state=536870916  name=Digital Audio (HDMI)
+{4a1c6039-35be-453f-9db1-70aedc548e33}  state=4  name=Digital Audio (HDMI)
+{51405870-d937-49fa-b4a6-0bc8688cab1c}  state=4  name=Speakers
+{528bd2d8-e138-4e7f-9b39-91a893ea274c}  state=536870916  name=Digital Audio (HDMI)
+{55f3cb8e-ca43-4ff5-b163-3a39031d08e3}  state=4  name=Headphones
+{593c4844-1f18-4eda-8318-5b50490b2b57}  state=1  name=OUT 3-4
+{59ada32a-f550-47a4-bccd-245122db0d3c}  state=8  name=Digital Output
+{5acb37f2-88ef-4350-8d8e-fd5a752cafc9}  state=4  name=Digital Audio (HDMI)
+{5ef824b2-d8d0-45a1-8615-86ca85819670}  state=536870916  name=BenQ EL2870U
+{65e47ecc-ce48-4598-945d-1c77f6793e8f}  state=268435460  name=EXT0
+{7f030fc0-a942-47b8-b1bd-3c3080ec4d81}  state=4  name=Digital Audio (HDMI)
+{84c10c98-588d-4415-b60d-d1d073e75192}  state=536870916  name=BenQ EL2870U
+{856044fd-e79c-4664-baaa-6988309f957b}  state=4  name=OUT 1-4
+{8ee2e34b-7ecf-4cbf-a714-3ca5e9e6f959}  state=1  name=BenQ EL2870U
+{93aca49b-ce76-4406-b2dc-70f9528f441d}  state=268435460  name=Internal AUX Jack
+{93f0e308-8ee3-4c8d-b6cc-74f47e8cb741}  state=4  name=Headphones
+{9467c669-a003-4f55-b19f-6eaf37e3e118}  state=4  name=Speakers
+{a06df8f2-5710-4649-8d4c-190836d03633}  state=536870916  name=NVIDIA Output
+{a77b7213-c9ac-4511-9722-e3e9fa790532}  state=4  name=Speakers
+{ad929ce3-78f3-4da7-ab0d-4ba24ddc5b97}  state=4  name=OUT 3-4
+{b98cb5ee-318a-43ef-bd18-3187107365d1}  state=536870916  name=BenQ EL2870U
+{be27947c-0ed2-4d7e-9ccd-36b356d57967}  state=4  name=NVIDIA Output
+{bffa721e-427a-42c2-a92b-e4583f8968ba}  state=8  name=Digital Output
+{c53c9394-26a4-4b2d-bda9-471558eeb45e}  state=4  name=3 - BenQ EL2870U
+{c8d40bb6-faaa-4a55-b123-238943ff5f6e}  state=536870916  name=Digital Audio (HDMI)
+{cae015bc-4a4c-429a-b261-359929a0850e}  state=536870916  name=Digital Audio (HDMI)
+{d0311fec-e9cf-4d89-874b-6515fe14da58}  state=8  name=BenQ EL2870U
+{d0ec6e54-d445-4d23-942c-f6c7bd778ffa}  state=4  name=OUT 1-2
+{d6c329d5-8a6d-478e-a36f-713832c58d7c}  state=1  name=BenQ EL2870U
+{d8db3e5b-5bef-49f3-97cf-1dde49343f42}  state=1  name=OUT 1-2
+{e04cfb62-2a77-4ed4-ada0-a3d03315449b}  state=268435460  name=Internal AUX Jack
+{e368dd17-5fca-4467-8a13-f4f9e60014fc}  state=536870916  name=BenQ EL2870U
+{f224929b-ef18-4e2e-b3db-e8203174d944}  state=4  name=BenQ EL2870U
+{f8a92063-677e-4bca-a6ce-dd0fd8db28c7}  state=536870916  name=BenQ EL2870U
+{fa6c5750-0e2d-4068-8541-0ff897d7b4e8}  state=536870916  name=BenQ EL2870U
+{faa19eba-03e7-481a-a218-2c0a05c4449f}  state=536870916  name=EPSON PJ
+{fd34b498-d3af-40c1-a911-fffc5b7fc88e}  state=4  name=Digital Audio (HDMI)
+{fe8ad54d-9cd4-4dd3-aefb-d15c309d7b4a}  state=1  name=BenQ EL2870U
+{fed48ab8-f7ab-4474-80a0-b368fd74b809}  state=1  name=Speakers
+== MMDevices Capture ==
+{1fe92556-989c-46e7-93b7-e209a1609608}  state=1  name=Microphone
+{23e38b22-e563-42fd-937f-a0d94ba5c820}  state=4  name=IN 1-2
+{32677059-52e9-4895-993a-b584c80f805b}  state=4  name=Line
+{32f0c334-8845-4ba3-a00a-0fb0edf8d188}  state=268435460  name=Internal AUX Jack
+{36ab5767-7e97-4a4f-8f08-412d75fe6ba7}  state=268435460  name=Internal AUX Jack
+{3da64af9-4836-40bb-917c-01dd16be5ac6}  state=4  name=Line In
+{3ec060e3-8bf4-438e-81d4-b4ba25dd0df2}  state=268435460  name=Internal AUX Jack
+{4adda3ac-ebf3-4577-afb9-5471790138c5}  state=4  name=Microphone
+{5361d845-0527-48d9-bf73-3176901325f7}  state=268435460  name=Internal AUX Jack
+{54ba7efa-8222-4a7d-967d-f29645d9bb61}  state=1  name=IN 1-2
+{6063be6c-bd0c-4f18-bf3a-53ed26f6394e}  state=268435460  name=Internal AUX Jack
+{653c7f58-9046-4183-82da-b28bfc28a9b0}  state=268435460  name=Internal AUX Jack
+{689474ee-9983-43c8-ac16-7621aebde2a9}  state=268435460  name=EXT0
+{73da4cde-5e62-42ae-a7ec-0fb4a52d7400}  state=1  name=Microphone Array
+{7d3df104-c982-46e4-a713-435f0c9e44b8}  state=4  name=Line
+{8558796d-0fce-4618-b0ac-eaee7da67a4b}  state=268435460  name=Internal AUX Jack
+{aa46a574-8f77-4513-8753-f2580210ba91}  state=4  name=Microphone
+{b3653b02-d355-4ef1-8624-2151a2310936}  state=268435460  name=Analog Connector
+{b95ccb1a-f513-4ac5-9a0a-6307a6178e43}  state=268435457  name=Internal AUX Jack
+{bb9596ec-fe43-4622-8a25-9d6a88c6793d}  state=268435460  name=Internal AUX Jack
+{bf62dd1b-415d-434c-817a-61663dfa63d6}  state=268435460  name=Internal AUX Jack
+{c0237aee-6f71-402d-8ec1-97ac6ee80163}  state=268435460  name=Stereo Mix
+{cd522036-de74-474e-8f47-e140d07f5a80}  state=4  name=Microphone
+{ea0b868e-82c9-42cc-b2e7-31edade32c48}  state=268435460  name=Internal AUX Jack
+{ed5419cd-5581-44c6-a153-aef9eda39d42}  state=268435460  name=Internal AUX Jack
+---- [RC 0] MMDevices registry walk - render and capture ----
+ " "
+ [03] PREP - with the tables above in view, do these now:
+ 1. Is the physical interface listed at all - name, state=1 ACTIVE?
+ If NOT: check its USB cable and power, replug it, watch [02c] change.
+ 2. Sound settings: make the INTERFACE the default playback device.
+ The soak has no device picker - it always uses the default.
+ 3. Interface Properties, Advanced tab: tick BOTH
+ ALLOW APPLICATIONS TO TAKE EXCLUSIVE CONTROL and
+ GIVE EXCLUSIVE MODE APPLICATIONS PRIORITY. A driver reinstall
+ resets these - this alone can explain every exclusive refusal.
+ 4. If [02a] shows a remote session still connected, log it off -
+ Remote Audio endpoints survive sessions and steal the default.
+ 5. Power plan HIGH PERFORMANCE, sleep NEVER, other audio apps closed,
+ monitors DOWN - several steps make sound.
+ Note the sparq device INDEX of the interface - you will type it below.
+ When done, press any key.
+ is the interface now default, with exclusive control ticked [y/n]
+ answer: Y
+ " "
+ [04] build - incremental; a few minutes only if sources changed
+
+---- [RUN] build via scripts\build.bat - includes the stamp guard ----
+ building sparq.exe (release, hal-wasapi + bootstrap-audio + ui-window) ...
+ first build takes a few minutes (wgpu is big); later builds are incremental.
+
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.19s
+ stamp guard: sources 75f/1218171B  -  binary 75f/1218171B
+
+sparq 0.0.0-phase0 · newest source 20720 d since epoch · src 75f/1218171B
+  module api v0 (unfrozen) · kernel 0.0.0-phase0
+
+  If that source stamp is older than your last sync, this binary is stale.
+  Fix: run scripts\build.bat, or delete target\release\sparq.exe.
+
+ built: Q:\morphosis\code\sparq\target\release\sparq.exe
+ size : 9467904 bytes
+
+ next:  scripts\devices.bat   then   scripts\run.bat
+
+ log saved to Q:\morphosis\code\sparq\scripts\..\logs\build.log
+---- [RC 0] build via scripts\build.bat - includes the stamp guard ----
+
+---- [RUN] version stamp ----
+sparq 0.0.0-phase0 · newest source 20720 d since epoch · src 75f/1218171B
+  module api v0 (unfrozen) · kernel 0.0.0-phase0
+
+  If that source stamp is older than your last sync, this binary is stale.
+  Fix: run scripts\build.bat, or delete target\release\sparq.exe.
+---- [RC 0] version stamp ----
+ " "
+ [05] sparq device list - match these GUIDs against the [02e] names
+
+---- [RUN] devices ----
+sparq devices — HAL backends in this build: null, wasapi-exclusive, wasapi-shared
+  (asio: not compiled in — WO-006 increment 2; requesting it will say so, not fake it)
+
+[null] null (virtual device)
+  out [0] sparq Null Device (deterministic, 64 ch)  <- default
+
+[wasapi-exclusive] WASAPI exclusive (event-driven)
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  out [0] <endpoint 5>  <- default
+        id: {0.0.0.00000000}.{d8db3e5b-5bef-49f3-97cf-1dde49343f42}
+  out [1] <endpoint 1>
+        id: {0.0.0.00000000}.{1e9f6bf9-a4b9-4df4-971b-4a8231f24af4}
+  out [2] <endpoint 2>
+        id: {0.0.0.00000000}.{593c4844-1f18-4eda-8318-5b50490b2b57}
+  out [3] <endpoint 3>
+        id: {0.0.0.00000000}.{8ee2e34b-7ecf-4cbf-a714-3ca5e9e6f959}
+  out [4] <endpoint 4>
+        id: {0.0.0.00000000}.{d6c329d5-8a6d-478e-a36f-713832c58d7c}
+  out [5] <endpoint 0>
+        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+  out [6] <endpoint 6>
+        id: {0.0.0.00000000}.{fe8ad54d-9cd4-4dd3-aefb-d15c309d7b4a}
+  out [7] <endpoint 7>
+        id: {0.0.0.00000000}.{fed48ab8-f7ab-4474-80a0-b368fd74b809}
+
+[wasapi-shared] WASAPI shared (event-driven)
+  out [0] <endpoint 5>  <- default
+        id: {0.0.0.00000000}.{d8db3e5b-5bef-49f3-97cf-1dde49343f42}
+  out [1] <endpoint 1>
+        id: {0.0.0.00000000}.{1e9f6bf9-a4b9-4df4-971b-4a8231f24af4}
+  out [2] <endpoint 2>
+        id: {0.0.0.00000000}.{593c4844-1f18-4eda-8318-5b50490b2b57}
+  out [3] <endpoint 3>
+        id: {0.0.0.00000000}.{8ee2e34b-7ecf-4cbf-a714-3ca5e9e6f959}
+  out [4] <endpoint 4>
+        id: {0.0.0.00000000}.{d6c329d5-8a6d-478e-a36f-713832c58d7c}
+  out [5] <endpoint 0>
+        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+  out [6] <endpoint 6>
+        id: {0.0.0.00000000}.{fe8ad54d-9cd4-4dd3-aefb-d15c309d7b4a}
+  out [7] <endpoint 7>
+        id: {0.0.0.00000000}.{fed48ab8-f7ab-4474-80a0-b368fd74b809}
+
+---- [RC 0] devices ----
+ " "
+ [06] sparq capabilities - watch for the interface: a real device lists
+ MULTIPLE rates and, with exclusive ticked, exclusive rates too
+
+---- [RUN] devices --caps ----
+sparq devices — HAL backends in this build: null, wasapi-exclusive, wasapi-shared
+  (asio: not compiled in — WO-006 increment 2; requesting it will say so, not fake it)
+
+[null] null (virtual device)
+  out [0] sparq Null Device (deterministic, 64 ch)  <- default
+        rates 8000..384000 · exclusive 44100,48000,88200,96000,176400,192000,384000 · out 1..64 ch · in 0..64 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex true · f32 native true · hw period 1.000 ms
+
+[wasapi-exclusive] WASAPI exclusive (event-driven)
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  out [0] <endpoint 5>  <- default
+        id: {0.0.0.00000000}.{d8db3e5b-5bef-49f3-97cf-1dde49343f42}
+        rates 96000 · exclusive none · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [1] <endpoint 1>
+        id: {0.0.0.00000000}.{1e9f6bf9-a4b9-4df4-971b-4a8231f24af4}
+        rates 96000 · exclusive none · out 4..4 ch · in 0..0 ch · default 96000 Hz/4 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [2] <endpoint 2>
+        id: {0.0.0.00000000}.{593c4844-1f18-4eda-8318-5b50490b2b57}
+        rates 96000 · exclusive none · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [3] <endpoint 3>
+        id: {0.0.0.00000000}.{8ee2e34b-7ecf-4cbf-a714-3ca5e9e6f959}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [4] <endpoint 4>
+        id: {0.0.0.00000000}.{d6c329d5-8a6d-478e-a36f-713832c58d7c}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [5] <endpoint 0>
+        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [6] <endpoint 6>
+        id: {0.0.0.00000000}.{fe8ad54d-9cd4-4dd3-aefb-d15c309d7b4a}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [7] <endpoint 7>
+        id: {0.0.0.00000000}.{fed48ab8-f7ab-4474-80a0-b368fd74b809}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+
+[wasapi-shared] WASAPI shared (event-driven)
+  out [0] <endpoint 5>  <- default
+        id: {0.0.0.00000000}.{d8db3e5b-5bef-49f3-97cf-1dde49343f42}
+        rates 96000 · exclusive none · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [1] <endpoint 1>
+        id: {0.0.0.00000000}.{1e9f6bf9-a4b9-4df4-971b-4a8231f24af4}
+        rates 96000 · exclusive none · out 4..4 ch · in 0..0 ch · default 96000 Hz/4 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [2] <endpoint 2>
+        id: {0.0.0.00000000}.{593c4844-1f18-4eda-8318-5b50490b2b57}
+        rates 96000 · exclusive none · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [3] <endpoint 3>
+        id: {0.0.0.00000000}.{8ee2e34b-7ecf-4cbf-a714-3ca5e9e6f959}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [4] <endpoint 4>
+        id: {0.0.0.00000000}.{d6c329d5-8a6d-478e-a36f-713832c58d7c}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [5] <endpoint 0>
+        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [6] <endpoint 6>
+        id: {0.0.0.00000000}.{fe8ad54d-9cd4-4dd3-aefb-d15c309d7b4a}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [7] <endpoint 7>
+        id: {0.0.0.00000000}.{fed48ab8-f7ab-4474-80a0-b368fd74b809}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+
+---- [RC 0] devices --caps ----
+ " "
+ [07] conformance suite - briefly opens the default device at -60 dB
+
+---- [RUN] devices --conformance ----
+sparq devices — HAL backends in this build: null, wasapi-exclusive, wasapi-shared
+  (asio: not compiled in — WO-006 increment 2; requesting it will say so, not fake it)
+
+[null] null (virtual device)
+  out [0] sparq Null Device (deterministic, 64 ch)  <- default
+
+[wasapi-exclusive] WASAPI exclusive (event-driven)
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  out [0] <endpoint 5>  <- default
+        id: {0.0.0.00000000}.{d8db3e5b-5bef-49f3-97cf-1dde49343f42}
+  out [1] <endpoint 1>
+        id: {0.0.0.00000000}.{1e9f6bf9-a4b9-4df4-971b-4a8231f24af4}
+  out [2] <endpoint 2>
+        id: {0.0.0.00000000}.{593c4844-1f18-4eda-8318-5b50490b2b57}
+  out [3] <endpoint 3>
+        id: {0.0.0.00000000}.{8ee2e34b-7ecf-4cbf-a714-3ca5e9e6f959}
+  out [4] <endpoint 4>
+        id: {0.0.0.00000000}.{d6c329d5-8a6d-478e-a36f-713832c58d7c}
+  out [5] <endpoint 0>
+        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+  out [6] <endpoint 6>
+        id: {0.0.0.00000000}.{fe8ad54d-9cd4-4dd3-aefb-d15c309d7b4a}
+  out [7] <endpoint 7>
+        id: {0.0.0.00000000}.{fed48ab8-f7ab-4474-80a0-b368fd74b809}
+
+[wasapi-shared] WASAPI shared (event-driven)
+  out [0] <endpoint 5>  <- default
+        id: {0.0.0.00000000}.{d8db3e5b-5bef-49f3-97cf-1dde49343f42}
+  out [1] <endpoint 1>
+        id: {0.0.0.00000000}.{1e9f6bf9-a4b9-4df4-971b-4a8231f24af4}
+  out [2] <endpoint 2>
+        id: {0.0.0.00000000}.{593c4844-1f18-4eda-8318-5b50490b2b57}
+  out [3] <endpoint 3>
+        id: {0.0.0.00000000}.{8ee2e34b-7ecf-4cbf-a714-3ca5e9e6f959}
+  out [4] <endpoint 4>
+        id: {0.0.0.00000000}.{d6c329d5-8a6d-478e-a36f-713832c58d7c}
+  out [5] <endpoint 0>
+        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+  out [6] <endpoint 6>
+        id: {0.0.0.00000000}.{fe8ad54d-9cd4-4dd3-aefb-d15c309d7b4a}
+  out [7] <endpoint 7>
+        id: {0.0.0.00000000}.{fed48ab8-f7ab-4474-80a0-b368fd74b809}
+
+conformance (offline suite; device backends use a short paced fallback run)
+  NOTE: the paced fallback briefly opens the default device with a -60 dB ramp.
+
+conformance · backend null
+  [PASS] enumerate — 1 device(s); default marked: 1; first is default: true
+  [PASS] capabilities are probed, not guessed — rates 8000..384000 · exclusive 44100,48000,88200,96000,176400,192000,384000 · out 1..64 ch · in 0..64 ch · default 48000 Hz/2 ch
+  [PASS] exclusive rates verified by probe — [44100, 48000, 88200, 96000, 176400, 192000, 384000]
+  [PASS] open allocates buffers up front — actual 48000 Hz / 64 fr / 2 ch vs requested 48000 / 64 / 2
+  [PASS] start → blocks flow → stop — 16 block(s), callback invocations 16; stop: Ok("ok")
+  [PASS] latency report matches the negotiated config — out 2.33 ms · in 0.00 ms · roundtrip 2.33 ms (est; hw period 1.00 ms, block 1.33 ms)
+  [PASS] error report readable after stop — state Stopped, device_errors 0, rt [NO-mmcss NO-priority NO-ideal-proc NO-workset]
+  [PASS] diagnostics counted the run; callback allocated nothing — blocks 16 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2 ns · jitter — · drift not reported
+  [PASS] injected xrun is counted exactly once — xruns 1
+conformance null: PASS (9 check(s), 0 failed)
+  [PASS] reopen cycles do not leak — 8 open/start/run/stop/drop cycles, 0 outstanding allocations
+
+conformance · backend wasapi-exclusive
+  [PASS] enumerate — 8 device(s); default marked: 1; first is default: true
+  [PASS] capabilities are probed, not guessed — rates 96000 · exclusive none · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
+  [PASS] exclusive-less endpoint is refused honestly (never silently rerouted) — Format: exclusive f32 at 96000 Hz / 2 ch is not supported by this endpoint: probe said AUDCLNT_E_UNSUPPORTED_FORMAT (0x88890008) (run `sparq devices
+  [PASS] start → blocks flow → stop — SKIP (device-dependent): endpoint offers no exclusive mode here; the null backend proves the lifecycle in full
+  [PASS] latency report matches the negotiated config — SKIP (device-dependent): no stream to report on
+conformance wasapi-exclusive: PASS (5 check(s), 0 failed)
+  [PASS] reopen cycles do not leak — SKIP (device-dependent): open refused on this endpoint (format negotiation failed: exclusive f32 at 96000 Hz / 2 ch is not supported by this endpo); the null backend proves the cycle in full
+
+sparq hal[wasapi-shared]: opened `<endpoint 5>` — 96000 Hz · 2 ch · f32 · device period 2112 fr (22.00 ms) · sparq block 64 fr
+conformance · backend wasapi-shared
+  [PASS] enumerate — 8 device(s); default marked: 1; first is default: true
+  [PASS] capabilities are probed, not guessed — rates 96000 · exclusive none · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
+  [PASS] open allocates buffers up front — actual 96000 Hz / 64 fr / 2 ch vs requested 96000 / 64 / 2
+  [PASS] start → blocks flow → stop — 262 block(s), callback invocations 262; stop: Ok("ok")
+  [PASS] latency report matches the negotiated config — out 22.67 ms · in 0.00 ms · roundtrip 22.67 ms (est; hw period 22.00 ms, block 0.67 ms)
+  [PASS] error report readable after stop — state Stopped, device_errors 0, rt [mmcss priority NO-ideal-proc workset]
+  [PASS] diagnostics counted the run; callback allocated nothing — blocks 262 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 512 ns · jitter 12.95 ms · drift +328103 ppm SUSPECT
+conformance wasapi-shared: PASS (7 check(s), 0 failed)
+  [PASS] reopen cycles do not leak — 8 open/start/run/stop/drop cycles, 0 outstanding allocations
+
+---- [RC 0] devices --conformance ----
+ " "
+ [08] TARGET - which sparq device index should the play, unplug and
+ recovery steps use? Compare [05] against the [02e] names.
+ target selection: --device 1
+ NOTE: the soak in step [12] cannot take --device - make sure the
+ chosen interface is also the Windows DEFAULT playback device.
+ " "
+ [09] WASAPI EXCLUSIVE playback - a 10 s 220 Hz tone at -12 dB.
+ This is the step RDP could never pass and test001 could not reach.
+ Press any key when ready.
+
+---- [RUN] play wasapi-exclusive 10s ----
+sparq play · HAL path (WO-006) · backend wasapi-exclusive
+  sparq       0.0.0-phase0 · newest source 20720 d since epoch · src 75f/1218171B
+
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  output devices:
+    [0] <endpoint 5> <- default
+    [1] <endpoint 1>
+    [2] <endpoint 2>
+    [3] <endpoint 3>
+    [4] <endpoint 4>
+    [5] <endpoint 0>
+    [6] <endpoint 6>
+    [7] <endpoint 7>
+  using       [1] <endpoint 1>
+  adjusted    rate 48000 Hz -> 96000 Hz (this device does not list 48000 Hz; `sparq devices --caps` shows what it does)
+  adjusted    channels 2 -> 4 (device offers 4..4)
+sparq: open failed: format negotiation failed: exclusive f32 at 96000 Hz / 4 ch is not supported by this endpoint: probe said AUDCLNT_E_UNSUPPORTED_FORMAT (0x88890008) (run `sparq devices --caps` for the verified exclusive rates; shared mode may still work: --backend wasapi-shared; remote-desktop endpoints never allow exclusive — that is the OS, not sparq)
+  hint: try the device default: sparq devices --caps shows what it accepts; on Windows shared mode the mix rate is king — match it or let the ladder fall back.
+---- [RC 2] play wasapi-exclusive 10s ----
+ HINT: still refused - recheck the exclusive tickboxes from [03] step 3,
+ close any app holding the device, and confirm the target index is the
+ interface. Later steps fall back to shared mode and say so.
+ did you hear a clean 10-second tone [y/n]
+ answer: N
+ " "
+ [10] WASAPI SHARED playback - the same 10 s tone through the fallback path
+ Press any key when ready.
+
+---- [RUN] play wasapi-shared 10s ----
+sparq play · HAL path (WO-006) · backend wasapi-shared
+  sparq       0.0.0-phase0 · newest source 20720 d since epoch · src 75f/1218171B
+
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  output devices:
+    [0] <endpoint 5> <- default
+    [1] <endpoint 1>
+    [2] <endpoint 2>
+    [3] <endpoint 3>
+    [4] <endpoint 4>
+    [5] <endpoint 0>
+    [6] <endpoint 6>
+    [7] <endpoint 7>
+  using       [1] <endpoint 1>
+  adjusted    rate 48000 Hz -> 96000 Hz (this device does not list 48000 Hz; `sparq devices --caps` shows what it does)
+  adjusted    channels 2 -> 4 (device offers 4..4)
+sparq hal[wasapi-shared]: requested 96000 Hz/4 ch refused; negotiated rung 2 (96000 Hz/4 ch, f32=true) — the mixer resamples; the latency report reflects the negotiated truth
+sparq hal[wasapi-shared]: opened `<endpoint 1>` — 96000 Hz · 4 ch · f32 · device period 2112 fr (22.00 ms) · sparq block 64 fr
+  NEGOTIATED  96000 Hz · 4 ch · block 64 (asked 48000 Hz · 2 ch) — the device gets what it asked for, and this line is the proof
+  latency     out 22.67 ms · in 0.00 ms · roundtrip 22.67 ms (est; hw period 22.00 ms, block 0.67 ms)
+  signal      syn/sine 220.00 Hz @ 0.500 -> util/gain -12.0 dB -> out
+
+  ] / [  gain +1/-1 dB     f / F  freq x2 / /2     m  mute     q  quit
+  (with --seconds, key input is disabled and a status line prints every 2 s)
+
+  rt setup    mmcss priority NO-ideal-proc workset
+
+  [t+  2.0s] blocks 3097 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.24 ms · drift +1104911 ppm SUSPECT
+  [t+  4.0s] blocks 6112 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.24 ms · drift +1151291 ppm SUSPECT
+  [t+  6.0s] blocks 9142 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.24 ms · drift +1167311 ppm SUSPECT
+  [t+  8.1s] blocks 12172 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.24 ms · drift +1175136 ppm SUSPECT
+
+  final state Stopped
+  blocks       15112
+  xruns        0 (late wakes 0, budget overruns 0, device errors 0)
+  callback     p50 1.0 µs · p99 2.0 µs · max 12.7 µs   (histogram buckets are powers of two: values are upper bounds)
+  jitter       min 1.2 µs · avg 9.99 ms · max 12.24 ms over 1004 wakes
+  drift        +1179955.95 ppm device clock vs wall — SUSPECT: beyond ±10000 ppm this is not a clock error but an implausible clock (virtual/RDP endpoint); trust the throughput and jitter numbers instead
+  allocations  0 on the audio path
+  rt setup     mmcss priority NO-ideal-proc workset
+
+  latency     out 22.67 ms · in 0.00 ms · roundtrip 22.67 ms (est; hw period 22.00 ms, block 0.67 ms)
+
+play: PASS (0 xruns, 0 allocations, clean stop)
+---- [RC 0] play wasapi-shared 10s ----
+ did you hear a clean 10-second tone [y/n]
+ answer: Y
+ " "
+ [11] UNPLUG TEST on backend wasapi-shared - removing the device mid-run must
+ give a clean error state and a recoverable stop, not a crash or hang.
+ A 30-second tone starts on the next step. ABOUT 10 SECONDS AFTER IT
+ STARTS, physically unplug the USB interface. Leave it unplugged.
+ Press any key when ready - then count 10 seconds from the tone and pull.
+
+---- [RUN] unplug test - 30s on wasapi-shared, interface unplugged at about 10s ----
+sparq play · HAL path (WO-006) · backend wasapi-shared
+  sparq       0.0.0-phase0 · newest source 20720 d since epoch · src 75f/1218171B
+
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  output devices:
+    [0] <endpoint 5> <- default
+    [1] <endpoint 1>
+    [2] <endpoint 2>
+    [3] <endpoint 3>
+    [4] <endpoint 4>
+    [5] <endpoint 0>
+    [6] <endpoint 6>
+    [7] <endpoint 7>
+  using       [1] <endpoint 1>
+  adjusted    rate 48000 Hz -> 96000 Hz (this device does not list 48000 Hz; `sparq devices --caps` shows what it does)
+  adjusted    channels 2 -> 4 (device offers 4..4)
+sparq hal[wasapi-shared]: requested 96000 Hz/4 ch refused; negotiated rung 2 (96000 Hz/4 ch, f32=true) — the mixer resamples; the latency report reflects the negotiated truth
+sparq hal[wasapi-shared]: opened `<endpoint 1>` — 96000 Hz · 4 ch · f32 · device period 2112 fr (22.00 ms) · sparq block 64 fr
+  NEGOTIATED  96000 Hz · 4 ch · block 64 (asked 48000 Hz · 2 ch) — the device gets what it asked for, and this line is the proof
+  latency     out 22.67 ms · in 0.00 ms · roundtrip 22.67 ms (est; hw period 22.00 ms, block 0.67 ms)
+  signal      syn/sine 220.00 Hz @ 0.500 -> util/gain -12.0 dB -> out
+
+  ] / [  gain +1/-1 dB     f / F  freq x2 / /2     m  mute     q  quit
+  (with --seconds, key input is disabled and a status line prints every 2 s)
+
+  rt setup    mmcss priority NO-ideal-proc workset
+
+  [t+  2.0s] blocks 3097 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.01 ms · drift +1116063 ppm SUSPECT
+  [t+  4.0s] blocks 6127 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.01 ms · drift +1157218 ppm SUSPECT
+  [t+  6.0s] blocks 9142 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.01 ms · drift +1171226 ppm SUSPECT
+
+  stream entered Removed: the endpoint was invalidated (unplugged, or its driver reset) — re-enumerate (`sparq devices`) and open again
+
+  final state Removed
+  blocks       11362
+  xruns        0 (late wakes 0, budget overruns 0, device errors 1)
+  callback     p50 2.0 µs · p99 4.1 µs · max 11.2 µs   (histogram buckets are powers of two: values are upper bounds)
+  jitter       min 400 ns · avg 10.11 ms · max 30.47 ms over 764 wakes
+  drift        +1152373.39 ppm device clock vs wall — SUSPECT: beyond ±10000 ppm this is not a clock error but an implausible clock (virtual/RDP endpoint); trust the throughput and jitter numbers instead
+  allocations  0 on the audio path
+  rt setup     mmcss priority NO-ideal-proc workset
+
+  latency     out 22.67 ms · in 0.00 ms · roundtrip 22.67 ms (est; hw period 22.00 ms, block 0.67 ms)
+
+play: NOT CLEAN — xruns 0, allocs 0, dev-err 1, state Removed. Copy this whole output into a message back.
+---- [RC 1] unplug test - 30s on wasapi-shared, interface unplugged at about 10s ----
+ rc for the unplug run was 1 - the TEXT above decides, not the rc:
+ expected is a Removed-device error, a clean stop, no hang, no crash.
+ " "
+ NOW: plug the interface back in, wait 10 seconds for Windows to settle,
+ then press any key.
+ interface re-plugged, recovery step starting
+ " "
+ [12] RECOVERY - the same 10 s tone on wasapi-shared must work again after re-plug
+
+---- [RUN] play 10s on wasapi-shared after re-plug ----
+sparq play · HAL path (WO-006) · backend wasapi-shared
+  sparq       0.0.0-phase0 · newest source 20720 d since epoch · src 75f/1218171B
+
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  output devices:
+    [0] <endpoint 5> <- default
+    [1] <endpoint 1>
+    [2] <endpoint 2>
+    [3] <endpoint 3>
+    [4] <endpoint 4>
+    [5] <endpoint 0>
+    [6] <endpoint 6>
+    [7] <endpoint 7>
+  using       [1] <endpoint 1>
+  adjusted    rate 48000 Hz -> 96000 Hz (this device does not list 48000 Hz; `sparq devices --caps` shows what it does)
+  adjusted    channels 2 -> 4 (device offers 4..4)
+sparq hal[wasapi-shared]: requested 96000 Hz/4 ch refused; negotiated rung 2 (96000 Hz/4 ch, f32=true) — the mixer resamples; the latency report reflects the negotiated truth
+sparq hal[wasapi-shared]: opened `<endpoint 1>` — 96000 Hz · 4 ch · f32 · device period 2112 fr (22.00 ms) · sparq block 64 fr
+  NEGOTIATED  96000 Hz · 4 ch · block 64 (asked 48000 Hz · 2 ch) — the device gets what it asked for, and this line is the proof
+  latency     out 22.67 ms · in 0.00 ms · roundtrip 22.67 ms (est; hw period 22.00 ms, block 0.67 ms)
+  signal      syn/sine 220.00 Hz @ 0.500 -> util/gain -12.0 dB -> out
+
+  ] / [  gain +1/-1 dB     f / F  freq x2 / /2     m  mute     q  quit
+  (with --seconds, key input is disabled and a status line prints every 2 s)
+
+  rt setup    mmcss priority NO-ideal-proc workset
+
+  [t+  2.0s] blocks 3097 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.71 ms · drift +762063 ppm SUSPECT
+  [t+  4.0s] blocks 6127 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.71 ms · drift +956826 ppm SUSPECT
+  [t+  6.0s] blocks 9142 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.71 ms · drift +1031439 ppm SUSPECT
+  [t+  8.1s] blocks 12172 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.71 ms · drift +1070916 ppm SUSPECT
+
+  final state Stopped
+  blocks       15127
+  xruns        0 (late wakes 0, budget overruns 0, device errors 0)
+  callback     p50 2.0 µs · p99 4.1 µs · max 9.5 µs   (histogram buckets are powers of two: values are upper bounds)
+  jitter       min 1.3 µs · avg 9.99 ms · max 11.71 ms over 1005 wakes
+  drift        +1095027.30 ppm device clock vs wall — SUSPECT: beyond ±10000 ppm this is not a clock error but an implausible clock (virtual/RDP endpoint); trust the throughput and jitter numbers instead
+  allocations  0 on the audio path
+  rt setup     mmcss priority NO-ideal-proc workset
+
+  latency     out 22.67 ms · in 0.00 ms · roundtrip 22.67 ms (est; hw period 22.00 ms, block 0.67 ms)
+
+play: PASS (0 xruns, 0 allocations, clean stop)
+---- [RC 0] play 10s on wasapi-shared after re-plug ----
+ did you hear the recovery tone [y/n]
+ answer: Y
+ " "
+ [13] SOAK on backend wasapi-shared - the headline criterion is ZERO xruns.
+ NOTE: exclusive refused earlier, so this is the SHARED rehearsal,
+ not the acceptance run. The log says which - honesty over vanity.
+ It MAKES SOUND the whole run; the machine must not sleep.
+ soaking 5 min at 96000 Hz / 64 on wasapi-shared - live below, logged as UTF-8.
+ status reports arrive every 30 seconds. Ctrl+C aborts; the log keeps what ran.
+sparq soak · HAL backend `wasapi-shared` · device `<endpoint 5>`
+  negotiated  96000 Hz · 2 ch · block 64 (budget 0.667 ms)
+  target      5 min paced · report every 30 s · heavy dummy load: 0 round(s)/block
+
+  rt setup    mmcss priority NO-ideal-proc workset
+
+  [t+    30s] blocks 45157 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 11.96 ms · drift +1194311 ppm SUSPECT
+  [t+    60s] blocks 90247 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 11.96 ms · drift +1196975 ppm SUSPECT
+  [t+    90s] blocks 135337 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 11.96 ms · drift +1197864 ppm SUSPECT
+  [t+   120s] blocks 180412 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 11.96 ms · drift +1198307 ppm SUSPECT
+  [t+   150s] blocks 225487 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 11.96 ms · drift +1198575 ppm SUSPECT
+  [t+   180s] blocks 270577 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 11.96 ms · drift +1198754 ppm SUSPECT
+  [t+   210s] blocks 315652 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 11.96 ms · drift +1198881 ppm SUSPECT
+  [t+   240s] blocks 360727 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 11.96 ms · drift +1198976 ppm SUSPECT
+  [t+   271s] blocks 405802 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 11.96 ms · drift +1199050 ppm SUSPECT
+
+  blocks       450307
+  xruns        0 (late wakes 0, budget overruns 0, device errors 0)
+  callback     p50 1.0 µs · p99 2.0 µs · max 108.2 µs   (histogram buckets are powers of two: values are upper bounds)
+  jitter       min 1.0 µs · avg 10.00 ms · max 11.96 ms over 30017 wakes
+  drift        +1199108.68 ppm device clock vs wall — SUSPECT: beyond ±10000 ppm this is not a clock error but an implausible clock (virtual/RDP endpoint); trust the throughput and jitter numbers instead
+  allocations  0 on the audio path
+  rt setup     mmcss priority NO-ideal-proc workset
+
+  block-time histogram (powers-of-two buckets, counts):
+     256 ns    512 ns | █ 7292
+     512 ns    1.0 µs | ████████████████████████████████████████ 241809
+     1.0 µs    2.0 µs | █████████████████████████████████ 200517
+     2.0 µs    4.1 µs | █ 639
+     4.1 µs    8.2 µs | █ 30
+     8.2 µs   16.4 µs | █ 15
+    16.4 µs   32.8 µs | █ 1
+    32.8 µs   65.5 µs | █ 1
+    65.5 µs  131.1 µs | █ 3
+
+soak: PASS (5.0 min paced, 450307 blocks, 0 xruns, 0 allocations)
+ " "
+ ================================================================
+ SUMMARY - test002 - 24/09/2026 17:57:57.59
+ ================================================================
+ [02] ground truth captured - read the tables, they are the point
+ [04] build + stamp guard : PASS rc=0
+ [05] devices : PASS rc=0
+ [06] devices --caps : PASS rc=0
+ [07] conformance : PASS rc=0
+ [09] play exclusive : FAIL rc=2
+ [10] play shared : PASS rc=0
+ [11] unplug rc=1 on wasapi-shared - judged from the TEXT above
+ [12] recovery play : PASS rc=0
+ [13] soak on wasapi-shared : PASS rc=0
+ tone heard - [09] N  [10] Y  [12] Y
+ prep confirmed by operator: Y
+ steps failing on rc: 1
+ " "
+ SEND THIS ONE FILE BACK: Q:\morphosis\code\sparq\test002.log
+ ================================================================

@@ -1,0 +1,14 @@
+# Deterministic formatting across machines and CI.
+edition = "2021"
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+newline_style = "Unix"
+use_small_heuristics = "Max"
+reorder_imports = true
+reorder_modules = true
+remove_nested_parens = true
+match_block_trailing_comma = true
+use_field_init_shorthand = true
+# `imports_granularity` and `group_imports` are nightly-only; omitted so `cargo fmt` is silent on
+# stable. Enable them in a nightly CI job if import ordering becomes worth enforcing.

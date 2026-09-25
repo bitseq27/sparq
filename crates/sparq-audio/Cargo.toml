@@ -1,0 +1,16 @@
+[package]
+name = "sparq-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "sparq DSP primitives: oscillators, gain, block graph, WAV I/O, deterministic hashing"
+
+[dependencies]
+sparq-kernel.workspace = true
+# WO-008: the executor drives `Box<dyn Module>` and wires validated manifests — the contract
+# vocabulary stays a single copy in sparq-module-api (first-party, zero third-party, forbid-unsafe).
+sparq-module-api.workspace = true
+
+[lints]
+workspace = true

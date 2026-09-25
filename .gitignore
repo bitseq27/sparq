@@ -1,0 +1,25 @@
+/target
+**/*.rs.bk
+Cargo.lock
+
+# generated from design/tokens/*.toml -- committed on purpose (ADR-000), never hand-edited
+!design/tokens/generated/*.rs
+
+# audio artefacts produced by local runs (golden references under reference/ ARE committed)
+*.local.wav
+/out
+/logs
+*.local.log
+sparq-diag.wav
+sparq-diag.log
+sparq-demo.wav
+
+# stray core dumps (one was accidentally synced in Sept 2026 — never commit these)
+/core
+
+# the standalone harness builds into its own target dir, inside the repo tree
+/tools/dispatch-bench/target
+
+# canvas/executor render outputs (written by the shell and `sparq exec`)
+canvas-render.wav
+exec.wav

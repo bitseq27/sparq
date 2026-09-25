@@ -1,0 +1,49 @@
+# sparq golden reference · Phase B demo patch
+#
+# Subject:   the fixed-topology Phase B patch (crates/sparq-audio/src/patch.rs):
+#              kick  : syn/sine + pitch env, noise burst -> flt/svf(lp 320 Hz) -> env/ad
+#              bass  : additive saw (48 partials) -> flt/svf(lp, env cutoff) -> env/adsr
+#              hat   : brown noise -> flt/svf(hp 7200) -> fx/bitcrush -> env/ad
+#              bus   : util/gain -6 dB, delay send 0.25 (dotted 8th, fb 0.34, damp 0.55)
+#            Patterns: kick four-on-the-floor; hat on the 8ths with two 16th pickups;
+#            bass a two-bar minor riff on A1 (33) with 3/7/-2 movements.
+#
+# Command:   sparq demo --bpm 138 --bars 4 --rate 48000 --ch 2 --seed 0xA17E --golden-values
+#            (default style `techno`, default mutation `none`, so the preset is reproduced exactly)
+# Test:      crates/sparq-audio/tests/golden_demo.rs
+#
+# Regeneration is EXPLICIT and reviewed (ADR-007). Never regenerate to make a test pass; regenerate
+# because a DSP change was intentional, and say so in the commit message.
+#
+# REGENERATED for Phase C1, intentionally. The rhythm stopped being three hardcoded `const [bool;16]`
+# arrays in patch.rs and became generated data: `Style::Techno` percussion built from Euclidean
+# patterns (kick E(4,16), hat E(2,4)+2) plus a 16-step bass line, all reproducible from
+# (style, seed, mutation chain). Note that rms and peak barely moved (0.0794670 -> 0.0794702, peak
+# identical) while the hash changed completely: the mix levels are unchanged and the rhythm is not.
+# That is the signature of a rhythm-only change, and it is why the hash is worth pinning at all.
+#
+# Portability: rms/peak are portable to ~1e-6 and are checked everywhere. `hash` is bit-exact and
+# therefore platform-sensitive (it depends on the platform libm's `sin`); it is asserted only on
+# x86_64. This is a *much* stronger reference than the WO-005 one: it exercises the filter, both
+# envelopes, the additive oscillator, the noise sources, the crusher, the delay and the clock.
+
+id=phaseb-demo-c1
+hash=dd975a24f03b19c1
+hash_platform=x86_64, rustc 1.98, release and debug verified identical; also verified on Windows 10 for the previous revision
+rms=0.079470217180
+peak=0.601424694
+tolerance=1e-6
+bpm=138.0
+bars=4
+sample_rate=48000
+channels=2
+seed=41342
+gain_db=-6.0
+delay_send=0.25
+crush_bits=24
+style=techno
+mutation=none
+transpose=0
+frames=333913
+duration_seconds=6.956521
+allocations=0

@@ -1,0 +1,163 @@
+# sparq design tokens — colour
+# Version 0.1.0 · authority: design/token-spec.md · consumed by: generator -> Rust constants + SVG/CSS export
+# Rule: no widget, panel or display module may contain a literal colour. Every value comes from here.
+
+[meta]
+schema = "sparq.tokens.color"
+version = "0.1.0"
+theme = "phosphor-dark"          # default and only theme in v0; "contrast-high" derived below
+
+# ---------------------------------------------------------------- ground & surface
+[ground]
+base        = "#07090C"          # application ground
+canvas      = "#05070A"          # graph canvas / full-bleed visuals (darker than chrome)
+panel       = "#0C1015"          # panels, dock, inspector
+panel_alt   = "#10151C"          # raised sections, table headers
+inset       = "#04060A"          # wells: numeric fields, scopes, meters
+overlay     = "#0E131A"          # popovers, dialogs (95% opacity)
+
+# ---------------------------------------------------------------- structure (hairlines)
+# Structure is drawn, never filled. Three opacity tiers only.
+[hairline]
+faint       = 0.10               # background grid, inactive dividers
+regular     = 0.25               # panel borders, node borders, port rings
+strong      = 0.60               # active borders, focused frames, table rules
+colour      = "#E8F1F8"          # hairlines are neutral-cool white; tint only for signal
+
+# ---------------------------------------------------------------- text
+[text]
+primary     = "#E8F1F8"
+secondary   = "#9FB0C0"
+tertiary    = "#6B7C8C"
+disabled    = "#454F59"
+inverse     = "#07090C"          # text on a filled accent
+# never use pure #FFFFFF: it blooms on OLED/projectors and reads as "consumer app"
+
+# ---------------------------------------------------------------- signal classes
+# The five accents are assigned by SIGNAL CLASS, never by module, category or taste.
+# Each class also has a non-colour redundant encoding (accessibility + monochrome printing).
+[signal.audio]
+colour      = "#FFB347"          # amber — audio-rate signal
+dim         = "#7A5622"
+glow        = "#FFD79A"
+encoding    = "solid-stroke"     # continuous line, 2px
+# phosphor sequential ramp (baked LUT lives in colormaps.toml; these are the mid stops used in mockups)
+ramp        = ["#05070A", "#120C06", "#241708", "#3A250D", "#4A3410", "#6B4A15", "#8C611A", "#B57A22", "#D18F2C", "#E8A23A", "#FFB347", "#FFC062", "#FFCE84", "#FFDC9F", "#FFE9C4", "#FFF3DE", "#FFFBF4"]
+label       = "A"
+
+[signal.cv]
+colour      = "#4FD8E8"          # cyan — control voltage / parameter modulation
+dim         = "#235F68"
+glow        = "#A8F2FB"
+encoding    = "solid-thin"       # continuous line, 1px
+label       = "C"
+
+[signal.event]
+colour      = "#FF5FA2"          # magenta — events: MIDI/UMP, OSC, triggers, gates, notes
+dim         = "#7A2C4E"
+glow        = "#FFA9CD"
+encoding    = "dashed-6-3"       # dashed line, 2px
+label       = "E"
+
+[signal.data]
+colour      = "#8BE36A"          # green — data streams: sensors, network, numeric, files, ML
+dim         = "#3F6A2F"
+glow        = "#C4F5AE"
+encoding    = "dotted-2-4"       # dotted line, 2px
+label       = "D"
+
+[signal.spatial]
+colour      = "#A98CFF"          # violet — multichannel / ambisonic / object / rig
+dim         = "#4E3F7A"
+glow        = "#D3C4FF"
+encoding    = "double-stroke"    # two parallel 1px lines, 2px apart
+label       = "S"
+
+# ---------------------------------------------------------------- states (structural, not decorative)
+# Pattern first, colour redundant: every state has a non-colour encoding (look-board.md §4).
+[state.selected]
+colour = "#E8F1F8"
+width = 1
+encoding = "corner-ticks"          # neutral frame; never an accent
+
+[state.hover]
+colour = "#E8F1F8"
+opacity = 0.35
+encoding = "tint-fill"
+
+[state.active]
+colour = "#4FD8E8"
+encoding = "filled-port"           # signal flowing / module active
+
+[state.armed]
+colour = "#FFB347"
+encoding = "underline-solid"
+
+[state.playing]
+colour = "#8BE36A"
+encoding = "transport-glyph"
+
+[state.recording]
+colour = "#FF3B30"
+encoding = "filled-dot-pulse"
+
+[state.bypassed]
+colour = "#6B7C8C"
+encoding = "diagonal-hatch-8px"
+
+[state.muted]
+colour = "#454F59"
+encoding = "diagonal-hatch-4px"
+
+[state.solo]
+colour = "#FFB347"
+encoding = "double-frame"
+
+[state.locked]
+colour = "#9FB0C0"
+encoding = "corner-lock-tick"
+
+[state.stale]
+colour = "#FFCC4D"
+encoding = "gap-dash-1-6"          # stream lost / stale (ADR-006.5)
+
+[state.error]
+colour = "#FF3B30"
+encoding = "jagged-underline"
+
+[state.warning]
+colour = "#FFCC4D"
+encoding = "dotted-underline"
+
+[state.stub]
+colour = "#6B7C8C"
+encoding = "crosshatch"            # missing module placeholder (repair dialog)
+
+# ---------------------------------------------------------------- meters & analysis
+[meter]
+level_lo    = "#8BE36A"
+level_mid   = "#FFB347"
+level_hi    = "#FF5FA2"
+over        = "#FF3B30"
+rms_fill_opacity = 0.35
+grid        = 0.10                # meter/scope gridlines use hairline.faint
+trace_persistence_half_life_ms = 300   # phosphor decay for scope persistence mode
+
+# ---------------------------------------------------------------- high-contrast theme (derived)
+[theme.contrast-high]
+extends = "phosphor-dark"
+ground.base = "#000000"
+hairline.regular = 0.45
+hairline.strong = 0.85
+text.secondary = "#C8D6E2"
+text.tertiary = "#9FB0C0"
+# accents are unchanged in hue but raised in lightness by the generator (+8% L, oklch)
+accent_lightness_lift = 0.08
+
+# ---------------------------------------------------------------- forbidden
+[forbidden]
+pure_white      = true            # no #FFFFFF anywhere
+pure_black_ui   = "canvas only"   # #000000 permitted only in the high-contrast theme and full-bleed visuals
+drop_shadow     = true
+gradient_decoration = true        # gradients allowed only in colormaps and meter fills
+arbitrary_colour = true           # any colour not in this file is a build error

@@ -1,0 +1,328 @@
+# sparq — port compatibility matrix, as data (WO-007 task 1)
+#
+# STATUS: DRAFT FOR REVIEW. Not yet consumed by code. This file is the task-1 artefact
+# the work order asks for before any Rust exists: "write the manifest schema and the
+# compatibility matrix as data/tables first, review, then code."
+#
+# WHY DATA AND NOT PROSE. ADR-005's consequences say the canvas behaviour —
+# "compatible ports glow / incompatible dim / adapter offered" — is *a direct rendering
+# of this table*. Two consumers must therefore read one table: host validation (which
+# emits E-* codes) and the canvas affordance layer. If the matrix lives in Rust match
+# arms, the UI grows a second copy and the two drift; the drift is invisible until a
+# patch refuses to connect on screen for a reason the host happily accepted.
+#
+# SOURCE OF TRUTH: docs/adr/005-port-type-system.md (accepted 2026-09-20). Where this
+# file says `status = "gap"`, ADR-005 is silent and a decision is required — those are
+# collected in WO007-TASK1-REVIEW.md §3, not invented here.
+#
+# CONSUMERS (planned): sparq-module-api validation · sparq-app canvas affordances ·
+# module browser docs generation. Generated artefacts: none yet.
+
+[meta]
+schema = "sparq.compat-matrix"
+version = "0.1.0"
+adr = "005"
+adr_status = "accepted"
+closed_set = true          # adding a port type requires a new ADR *and* a host major version
+reviewed = false           # flips to true when the packet is ratified
+
+# ---------------------------------------------------------------- port type vocabulary
+# Six types. Nothing else is ever a port type; new kinds of content are subtypes or
+# `atom` payloads (ADR-005).
+
+[port_types.audio]
+payload = "float frames"
+clock = "per sample"
+carries = "channel_set"
+audio_thread = true
+
+[port_types.cv]
+payload = "float, declared range [-1,1] or [0,1]"
+clock = "per sample OR per block"
+carries = ["rate", "range"]
+audio_thread = true
+note = "the universal modulator; broadcasts"
+
+[port_types.event]
+payload = "MIDI 2.0 UMP, OSC, trigger/gate, note (+MPE), clock"
+clock = "timestamped in t_sample"
+carries = "event_kinds"
+audio_thread = true
+note = "sample-accurate inside the audio clock domain"
+
+[port_types.data]
+payload = "typed record (named channels with dtype/unit)"
+clock = "timestamped in t_wall, declared rate class"
+carries = ["data_schema", "read_policy", "stale_policy"]
+audio_thread = true
+note = "wall-clock sources are quantised per ADR-006 latency budget + interpolation policy"
+
+[port_types.gpu]
+payload = "texture/buffer handle"
+clock = "per frame"
+carries = "handle"
+audio_thread = false
+note = "display and GPU-processing modules only; never touched from the audio thread"
+
+[port_types.atom]
+payload = "opaque versioned blob"
+clock = "on demand"
+carries = "blob"
+audio_thread = false
+note = "host<->module messages, asset refs, structured config; never on the audio thread"
+
+# ---------------------------------------------------------------- verdict vocabulary
+# Every cell resolves to exactly one verdict. The canvas renders these directly.
+
+[verdicts.compatible]
+ui = "glow"
+connect = "direct"
+
+[verdicts.conditional]
+ui = "glow-with-badge"      # connects, but the condition is surfaced, never silent
+connect = "direct"
+
+[verdicts.conversion]
+ui = "glow-with-hairline"   # connects, and the conversion is drawn (e.g. the sum warning)
+connect = "direct"
+
+[verdicts.adapter]
+ui = "dim-offer-adapter"    # one-tap insertion of the named adapter module
+connect = "via_adapter"
+
+[verdicts.refused]
+ui = "dim"
+connect = "never"
+
+# ---------------------------------------------------------------- same-type rules
+# One entry per port type. `default` applies when no `case` matches.
+
+[[same_type]]
+type = "audio"
+default = { verdict = "conditional", condition = "channel_set must be compatible or explicitly convertible", error_code = "E-CHANNELSET-INCOMPATIBLE" }
+
+  [[same_type.cases]]
+  when = "src.channel_set == dst.channel_set"
+  verdict = "compatible"
+
+  [[same_type.cases]]
+  when = "src.channel_set == 'mono' && dst.channel_set != 'mono'"
+  verdict = "compatible"
+  behaviour = "fan-out"
+  note = "one of only two documented silent up/downmixes"
+
+  [[same_type.cases]]
+  when = "src.channel_set != 'mono' && dst.channel_set == 'mono'"
+  verdict = "conversion"
+  behaviour = "sum"
+  ui_extra = "warning hairline"
+  note = "the second documented case; the warning is mandatory, not decorative"
+
+  [[same_type.cases]]
+  when = "src.channel_set startswith 'ambisonics:' && !(dst.channel_set startswith 'ambisonics:')"
+  verdict = "adapter"
+  adapter = "spa/hoa-decode"
+  note = "spatial refuses to connect to non-spatial ports unless an encoder/decoder is inserted"
+
+  [[same_type.cases]]
+  when = "!(src.channel_set startswith 'ambisonics:') && dst.channel_set startswith 'ambisonics:'"
+  verdict = "adapter"
+  adapter = "spa/hoa-encode"
+
+  [[same_type.cases]]
+  when = "src.channel_set startswith 'raw:' && dst.channel_set startswith 'raw:'"
+  verdict = "conditional"
+  condition = "M must be equal"
+  error_code = "E-CHANNELSET-INCOMPATIBLE"
+  note = "raw:M connects only to raw:M with equal M"
+
+  [[same_type.cases]]
+  when = "src.channel_set == 'variable' || dst.channel_set == 'variable'"
+  verdict = "conditional"
+  condition = "resolved at prepare: host picks the intersection with the connected neighbour and reports the choice in the UI"
+  on_change = "channel-set change is a RESOURCE change, not a graph mutation => deactivate -> prepare -> activate cascade"
+  note = "the WO-007 paper-test finding (module-api-v1 §14, HOA row). The cascade rule is the open action; see review packet §2."
+
+  [[same_type.cases]]
+  when = "src.channel_set == 'objects:K' && dst.channel_set == 'objects:J'"
+  verdict = "conditional"
+  condition = "K must equal J; otherwise convert via spa/objects"
+  adapter = "spa/objects"
+  decided = "2026-09-22 G1 APPROVED: never silently renumbered - the object count IS the spatial meaning"
+
+[[same_type]]
+type = "cv"
+default = { verdict = "compatible", note = "cv is the universal modulator" }
+
+  [[same_type.cases]]
+  when = "fan-out: one cv output -> many cv inputs"
+  verdict = "compatible"
+  multiplicity = "free"
+
+  [[same_type.cases]]
+  when = "fan-in: many cv outputs -> one cv input"
+  verdict = "adapter"
+  adapter = "util/mixer"
+  note = "requires an explicit merge/mix module; no implicit summing"
+
+  [[same_type.cases]]
+  when = "src.range != dst.range"
+  verdict = "adapter"
+  adapter = "util/range"
+  decided = "2026-09-22 G2 DECIDED (against recommendation): refuse and offer a converter. Nothing invisible happens to the sound. Adds util/range (bipolar<->unipolar) to Phase 1 - the third trivial module"
+
+  [[same_type.cases]]
+  when = "src.rate == 'audio' && dst.rate == 'block'"
+  verdict = "conditional"
+  condition = "the receiving module declares ports[].cv_reduce (last|first|mean|min|max|peak); default last"
+  decided = "2026-09-22 G3 DECIDED (against recommendation): the receiving module decides. HARD CONSTRAINT: the policy must live in the MANIFEST, never in code - a policy chosen in code would make a journal replay diverge from the original (ADR-007)"
+
+  [[same_type.cases]]
+  when = "src.rate == 'block' && dst.rate == 'audio'"
+  verdict = "conditional"
+  condition = "the host interpolates; the receiving module declares ports[].cv_interp (hold|linear|spline); default hold"
+  decided = "2026-09-22 G4/Q3 APPROVED: module declares, host performs. Symmetric with G3 - the receiving module now owns both directions of a rate change"
+
+[[same_type]]
+type = "event"
+default = { verdict = "conditional", condition = "producer event_kinds must be a subset the consumer accepts", error_code = "E-EVENTKIND-UNACCEPTED" }
+
+  [[same_type.cases]]
+  when = "src.event_kinds subset_of dst.event_kinds"
+  verdict = "compatible"
+
+  [[same_type.cases]]
+  when = "src.clock_domain == 'wall' && dst.clock_domain == 'audio'"
+  verdict = "conditional"
+  condition = "quantised per the stream's declared latency budget and interpolation policy"
+  authority = "ADR-006"
+
+  [[same_type.cases]]
+  when = "multiplicity: many event outputs -> one event input"
+  verdict = "compatible"
+  behaviour = "fan-in free; merged into one list pre-sorted by sample offset (module-api §9)"
+  tie_break = "stable - by connection id, then insertion order, so it is reproducible in the journal"
+  decided = "2026-09-22 G5 APPROVED: free fan-in with a deterministic tie-break"
+
+[[same_type]]
+type = "data"
+default = { verdict = "refused", error_code = "E-SCHEMA-UNREGISTERED" }
+
+  [[same_type.cases]]
+  when = "src.data_schema.id == dst.data_schema.id && src.data_schema.version == dst.data_schema.version"
+  verdict = "compatible"
+  note = "unknown schemas are a load-time error, not a runtime surprise"
+
+  [[same_type.cases]]
+  when = "src.data_schema.id == dst.data_schema.id && src.data_schema.version != dst.data_schema.version"
+  verdict = "conditional"
+  condition = "loads, but every record carries flags: stale; the consumer's own stale_policy (hold|decay|zero|error) then decides what it means"
+  also_required = "a badge in the canvas AND a journal entry, so a replay records that this project opened with a version mismatch"
+  decided = "2026-09-22 G6 DECIDED (against recommendation): load with a warning, routed through the repair dialog (module-api §12). The warning is not cosmetic - it flows through the staleness machinery the consumer already declared, which is what makes it survivable"
+
+  [[same_type.cases]]
+  when = "consumer read_policy/stale_policy"
+  verdict = "compatible"
+  note = "declared by the consumer, not negotiated per connection: latest | interpolated-at(t) | window(n) | accumulate | on-change; staleness hold | decay(ms) | zero | error"
+
+[[same_type]]
+type = "gpu"
+default = { verdict = "conditional", condition = "display modules and GPU-processing modules only", error_code = "E-GPU-PORT-NOT-ALLOWED" }
+
+  [[same_type.cases]]
+  when = "both endpoints declare gpu capability"
+  verdict = "compatible"
+  constraint = "never touched from the audio thread"
+
+  [[same_type.cases]]
+  when = "module tier is T2 or T3"
+  verdict = "gap"
+  gap = "G7"
+  status = "DEFERRED 2026-09-22 - the only cell in this table still open"
+  interim_rule = "until decided, no gpu module may be T2 or T3, and module-api §14's camera-optical-flow row is PROVISIONAL: nobody builds against it"
+  not_deferred = "the gpu PORT TYPE itself is required in v0. Phase 0 ships two modules that use it - ana/tap ('gpu/display plumbing') and dsp/scope (audio/cv in, gpu out, >=60 fps at zero audio-thread cost). Both are first-party T1, which every candidate answer to G7 permits. Deferring G7 defers one cell, not the port."
+  trigger = "must be answered when the wasm tier (T2) is scoped in Phase 5"
+
+[[same_type]]
+type = "atom"
+default = { verdict = "compatible", constraint = "never on the audio thread; control thread only" }
+
+# ---------------------------------------------------------------- cross-type rules
+# ADR-005: "Same type required. Cross-type connections are refused; the UI offers a
+# one-tap adapter insertion." So the default is refusal and only the four named
+# adapters are exceptions. Anything else stays refused — an adapter that is not named
+# here does not exist and must not be implied.
+
+[cross_type]
+default = { verdict = "refused", error_code = "E-PORT-TYPE-MISMATCH", ui = "dim" }
+
+  [[cross_type.adapters]]
+  from = "data"
+  to = "cv"
+  adapter = "dat/mapper"
+  note = "ADR-005 names it 'a Mapper'. Appendix B lists dat/mapper (Phase 5-7) — the adapter is named in the ADR but not scheduled until Phase 5; see review packet §4."
+
+  [[cross_type.adapters]]
+  from = "cv"
+  to = "audio"
+  adapter = "syn/sine-or-offset"
+  note = "ADR-005: 'via an oscillator/offset'. Appendix B has no util/offset module; syn/sine is Phase 1. Naming to be settled."
+
+  [[cross_type.adapters]]
+  from = "audio"
+  to = "cv"
+  adapter = "ana/rms"
+  note = "ADR-005: 'via an analyser'. ana/rms is Phase 1 and ana/tap exists as an analysis point."
+
+  [[cross_type.adapters]]
+  from = "event"
+  to = "cv"
+  adapter = "util/gate-to-cv"
+  note = "ADR-005: 'via a gate/trigger converter'. No such module in Appendix B — see review packet §4."
+
+# ---------------------------------------------------------------- gap register
+# Cells above marked verdict = "gap" resolve here. Each needs a decision in the review
+# packet; none may be answered by an implementer at code time.
+
+[gaps.G1]
+status = "DECIDED (2026-09-22)"
+question = "objects:K -> objects:J — compatible when K == J, refused otherwise, or convertible via spa/objects?"
+why_it_matters = "Per-object spatial is a Phase 5-7 module family; the rule must exist before the modules do, because the set is closed."
+adr_005_says = "lists objects:K as a layout tag; no connection rule for it"
+
+[gaps.G2]
+status = "DECIDED (2026-09-22)"
+question = "cv range mismatch (bipolar -> unipolar and back): auto-scale, adapter, or refuse?"
+why_it_matters = "Every modulator in the system is cv. A silent rescale is exactly the kind of invisible transformation ADR-005 exists to prevent; a refusal makes half the patch unconnectable."
+adr_005_says = "'float, declared range [-1,1] or [0,1]' — declares the range, never compares two"
+
+[gaps.G3]
+status = "DECIDED (2026-09-22)"
+question = "audio-rate cv into a block-rate cv input: does the host decimate (which sample wins — first, last, or a declared reduction)?"
+why_it_matters = "Determinism (ADR-007). 'Last sample' and 'first sample' produce different golden renders, so this cannot be left to the implementation."
+adr_005_says = "'per sample or per block' — no conversion rule"
+
+[gaps.G4]
+status = "DECIDED (2026-09-22)"
+question = "block-rate cv into an audio-rate cv input: does the host interpolate, hold, or refuse? Interacts with module-api §16 Q3, which recommends host interpolation with a declared cv_interp."
+why_it_matters = "This is §16 Q3 seen from the connection side. Answering it twice, in two places, is how the table and the code drift."
+adr_005_says = "silent"
+
+[gaps.G5]
+status = "DECIDED (2026-09-22)"
+question = "event fan-in: free (as cv fan-out is), or does it require an explicit merge as cv fan-in does?"
+why_it_matters = "Sample-accurate ordering. Two event streams into one input must be merged into a single pre-sorted list (module-api §9 guarantees 'all events for the block pre-sorted by sample offset'); who owns tie-breaking when two events share a sample offset?"
+adr_005_says = "gives the rule for cv fan-in only"
+
+[gaps.G6]
+status = "DECIDED (2026-09-22)"
+question = "data schema version mismatch (same id, different version): refuse, or run a declared migration?"
+why_it_matters = "State blobs have migration chains (module-api §6). Data *streams* do not. If streams cannot migrate, every standard schema bump breaks every patch that references it — including sparq/imu9@1 and friends."
+adr_005_says = "'registered by id+version; unknown schemas are a load-time error'"
+
+[gaps.G7]
+status = "DEFERRED - Phase 5 trigger (2026-09-22)"
+question = "Are gpu ports T1-only in v0? module-api §16 Q5 recommends yes (T2/T3 GPU access lands with the wasm tier)."
+scope_correction = "The question is narrower than it first reads: it is about THIRD-PARTY (T2/T3) gpu access only. First-party T1 gpu modules exist in Phase 0, so the port type ships regardless of the answer."
+why_it_matters = "The camera optical-flow module in the §14 paper test is T3 and has a gpu input. If gpu is T1-only in v0, that module is not expressible until Phase 5 — and the paper test's verdict for it is currently a checkmark."
+adr_005_says = "'display modules and GPU-processing modules only'"

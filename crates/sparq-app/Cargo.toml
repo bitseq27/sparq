@@ -1,0 +1,63 @@
+[package]
+name = "sparq-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "sparq binary: WO-005 bootstrap (offline render + feature-gated live output)"
+
+[dependencies]
+sparq-kernel.workspace = true
+sparq-audio.workspace = true
+sparq-ui.workspace = true
+sparq-module-api.workspace = true
+cpal = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
+egui-winit = { workspace = true, optional = true }
+winit = { workspace = true, optional = true }
+# Tiny async executor for egui-wgpu's Painter setup (wgpu instance/adapter creation is async).
+# A whole executor framework would be a dependency we then have to justify; pollster is one
+# function — block_on — and nothing else.
+pollster = { version = "0.4", optional = true }
+
+[features]
+default = []
+# ADR-008: disposable bootstrap audio path. Off by default so the core build has no device
+# dependency and CI runs hermetically. Scheduled for deletion at the end of WO-006 — that is,
+# once the HAL below has passed its hardware acceptance runs (zero-xrun soak on the stage
+# machine), not before: a proven path is never deleted by an unproven one.
+bootstrap-audio = ["dep:cpal"]
+# WO-006: the real Windows HAL backends (WASAPI exclusive event-driven + shared). Windows-only
+# in effect (the kernel module is cfg(windows)); enabling it elsewhere is a harmless no-op, so
+# scripts/build.bat can pass it unconditionally.
+hal-wasapi = ["sparq-kernel/hal-wasapi"]
+# WO-012: the shell. `ui` is the hermetic half — egui proper (immediate-mode drawing + the
+# headless frame driver, which CI runs for the layout audit without a GPU). `ui-window` adds the
+# windowing stack (winit + egui-winit + egui-wgpu) and needs a graphics API at runtime; it is a
+# superset so `--features ui-window` alone is enough to build the real thing.
+ui = ["dep:egui"]
+ui-window = ["ui", "dep:winit", "dep:egui-winit", "dep:egui-wgpu", "dep:wgpu", "dep:pollster"]
+
+# The renderer backend is a per-target choice, made here and nowhere else:
+#   Windows  -> wgpu dx12  (the stage OS is Windows; DX12 also means WARP works over RDP,
+#                           where Vulkan and OpenGL typically do not)
+#   elsewhere-> wgpu gles  (keeps `cargo check --features ui-window` buildable in the small
+#                           dev sandbox: no ash, no d3d12 bindings, no OOM — the same trick
+#                           windows-sys uses in sparq-kernel, and for the same reason)
+# wgpu is a DIRECT dependency because cargo forbids "wgpu/dx12"-style slashes on a dependency's
+# dependency; features unify with egui-wgpu's own (default-features-off) wgpu, so this entry is
+# what picks the backend. egui-wgpu keeps only its "winit" feature (the Painter integration).
+[target.'cfg(windows)'.dependencies]
+egui-wgpu = { workspace = true, optional = true, features = ["winit"] }
+wgpu = { workspace = true, optional = true, features = ["dx12"] }
+
+[target.'cfg(not(windows))'.dependencies]
+egui-wgpu = { workspace = true, optional = true, features = ["winit"] }
+wgpu = { workspace = true, optional = true, features = ["gles"] }
+
+[[bin]]
+name = "sparq"
+path = "src/main.rs"
+
+[lints]
+workspace = true

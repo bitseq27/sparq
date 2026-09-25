@@ -1,0 +1,13 @@
+[package]
+name = "sparq-module-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The sparq module contract: the closed port vocabulary, manifest + validation, param snapshots, and the Module trait (WO-007)"
+
+[dependencies]
+sparq-kernel = { workspace = true }
+
+[lints]
+workspace = true

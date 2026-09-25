@@ -1,0 +1,99 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sparq-kernel",
+    "crates/sparq-audio",
+    "crates/sparq-ui",
+    "crates/sparq-module-api",
+    "crates/sparq-app",
+]
+
+# Standalone measurement harness (ADR-009 executor decision 7). Own `[workspace]`, excluded here too.
+exclude = ["tools/dispatch-bench"]
+
+# Empty crates are debt (ADR-000): a crate is added to this list only when it has contents.
+# Planned, not yet created: sparq-module-api, sparq-stream, sparq-music, sparq-sample,
+# sparq-assets, sparq-visual, sparq-perform, sparq-io, sparq-host-wasm, sparq-bridge.
+
+[workspace.package]
+version = "0.0.0-phase0"
+edition = "2021"
+rust-version = "1.80"
+license = "UNLICENSED"
+repository = "https://example.invalid/sparq"
+authors = ["sparq"]
+
+[workspace.dependencies]
+sparq-kernel = { path = "crates/sparq-kernel" }
+sparq-audio = { path = "crates/sparq-audio" }
+sparq-ui = { path = "crates/sparq-ui" }
+sparq-module-api = { path = "crates/sparq-module-api" }
+
+# Optional / feature-gated only. The core build has ZERO third-party dependencies:
+# everything testable (engine, DSP, render, golden tests) runs on std alone, so CI on a
+# device-less runner is fast and hermetic. See ADR-008: the bootstrap audio path is the
+# only place a device crate is permitted, and it is scheduled for deletion at end of WO-006.
+cpal = { version = "0.15" }
+
+# WO-012: the UI scaffold. These are the first heavyweight third-party dependencies, and per
+# ADR-003/D-3 they are strictly feature-gated scaffolding: the core build stays zero-dependency
+# and hermetic, and every piece of shell *logic* (pointer model, gesture recogniser, layout
+# computation, touch audit) lives in the dependency-free sparq-ui crate. egui is the drawing
+# half only — the Phase 6 custom shell replaces the drawing half and nothing else.
+egui = { version = "0.36" }
+egui-winit = { version = "0.36", default-features = false, features = ["clipboard", "links"] }
+# egui-wgpu with default features OFF: its defaults pull every wgpu backend (incl. Vulkan/ash,
+# which does not fit the 1 GB CI/dev sandbox and is dead weight on Windows). Backends are chosen
+# per-target in crates/sparq-app: dx12 on Windows (WARP covers RDP sessions), gles elsewhere.
+egui-wgpu = { version = "0.36", default-features = false }
+# Direct (per-target) dependency of sparq-app; default-features off, backend chosen by the
+# target section in crates/sparq-app/Cargo.toml. Version must match egui-wgpu 0.36's wgpu (30).
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
+winit = { version = "0.30" }
+pollster = { version = "0.4" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+debug = 1              # keep line numbers: a stage crash must produce a usable trace
+
+[profile.release-safe]
+inherits = "release"
+panic = "unwind"       # used by CI so a panic in a test harness is a failure, not an abort
+debug = 2
+overflow-checks = true
+
+[profile.bench]
+inherits = "release"
+
+# ---------------------------------------------------------------- workspace lints (ADR-000)
+# `unsafe` is forbidden by default. sparq-kernel lifts this to `deny` because it holds the
+# allowlisted modules (docs/unsafe-allowlist.md); every other crate inherits `forbid`.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# `pedantic`/`nursery` are deliberately NOT enabled workspace-wide: on DSP-heavy code they generate
+# cast/precision noise that hides real defects. The specific ones that matter are enabled instead.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "warn"
+todo = "deny"
+dbg_macro = "deny"
+print_stdout = "warn"
+# real-time discipline: the specific calls forbidden on the audio path are listed in clippy.toml
+disallowed_methods = "deny"
+disallowed_types = "deny"
+missing_docs_in_private_items = "allow"
+module_name_repetitions = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+similar_names = "allow"
+many_single_char_names = "allow"
+read_zero_byte_vec = "allow"

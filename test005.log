@@ -1,0 +1,255 @@
+
+===== test005 RUN 25/09/2026 11:17:23.57 on SATURN user bitseq =====
+ ================================================================
+ sparq test005 - the no-device chain: modules, exec, canvas bridge
+ at the end you send back ONE file: test005.log from the repo root
+ ================================================================
+ " "
+ [00] environment
+
+---- [RUN] os version ----
+
+Microsoft Windows [Version 10.0.19045.6216]
+---- [RC 0] os version ----
+ tree clean, no stray artefacts
+ " "
+ [01] build - incremental, seconds if nothing changed
+
+---- [RUN] build via scripts\build.bat - includes the stamp guard ----
+ building sparq.exe (release, hal-wasapi + bootstrap-audio + ui-window) ...
+ first build takes a few minutes (wgpu is big); later builds are incremental.
+
+   Compiling sparq-app v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-app)
+error[E0599]: no method named `resolve_master` found for reference `&CanvasState` in the current scope
+  --> crates\sparq-app\src\ui\canvas_ui.rs:46:28
+   |
+46 |     let master_id = canvas.resolve_master(graph);
+   |                            ^^^^^^^^^^^^^^ method not found in `&CanvasState`
+
+error[E0599]: no variant, associated function, or constant named `RenderWav` found for enum `MenuAction` in the current scope
+   --> crates\sparq-app\src\ui\headless.rs:549:77
+    |
+549 |         let row = m.rows.iter().position(|r| matches!(r.action, MenuAction::RenderWav))?;
+    |                                                                             ^^^^^^^^^ variant, associated function, or constant not found in `MenuAction`
+
+error[E0599]: no variant, associated function, or constant named `SetMaster` found for enum `MenuAction` in the current scope
+   --> crates\sparq-app\src\ui\headless.rs:590:77
+    |
+590 |         let row = m.rows.iter().position(|r| matches!(r.action, MenuAction::SetMaster))?;
+    |                                                                             ^^^^^^^^^ variant, associated function, or constant not found in `MenuAction`
+
+error[E0609]: no field `master` on type `CanvasState`
+   --> crates\sparq-app\src\ui\headless.rs:601:30
+    |
+601 |                 shell.canvas.master == Some(n1_id),
+    |                              ^^^^^^ unknown field
+    |
+    = note: available fields are: `camera`, `selection`, `interaction`, `menu`, `history`
+
+error[E0599]: no variant, associated function, or constant named `RenderWav` found for enum `CanvasEvent` in the current scope
+   --> crates\sparq-app\src\ui\shell_ui.rs:248:41
+    |
+248 |                     if let CanvasEvent::RenderWav = ev {
+    |                                         ^^^^^^^^^ variant, associated function, or constant not found in `CanvasEvent`
+
+error[E0599]: no method named `resolve_master` found for struct `CanvasState` in the current scope
+   --> crates\sparq-app\src\ui\shell_ui.rs:483:40
+    |
+483 |         let Some(master) = self.canvas.resolve_master(&self.graph) else {
+    |                                        ^^^^^^^^^^^^^^ method not found in `CanvasState`
+
+Some errors have detailed explanations: E0599, E0609.
+For more information about an error, try `rustc --explain E0599`.
+error: could not compile `sparq-app` (bin "sparq") due to 6 previous errors
+
+ ============================================
+  BUILD FAILED
+ ============================================
+  If the error mentions `link.exe` or `linker not found`:
+    the MSVC C++ Build Tools are missing. Run scripts\setup.bat, or install
+    "Build Tools for Visual Studio" with the "Desktop development with C++"
+    workload, then open a NEW terminal and re-run this script.
+
+  If the error mentions `d3d12`, `dxgi` or `wgpu`:
+    the UI shell needs the DX12 backend; make sure the sync included
+    crates\sparq-app\Cargo.toml (the per-target wgpu features live there).
+
+  If the error mentions `alsa` or `pkg-config`:
+    you are not on Windows. On Linux install libasound2-dev and pkg-config.
+
+  Anything else: copy the whole error into a message back to me.
+
+ log saved to Q:\morphosis\code\sparq\scripts\..\logs\build.log
+---- [RC 1] build via scripts\build.bat - includes the stamp guard ----
+ BUILD FAILED - send test005.log back now.
+ " "
+ ================================================================
+ SUMMARY - test005 - 25/09/2026 11:17:31.37
+ ================================================================
+ [01] build + stamp guard : FAIL rc=1
+ steps failing on rc: 1
+ " "
+ Next: the studio session - test004 runs the EXCLUSIVE acceptance,
+ real fingers touch-test the canvas, and the DPI matrix gets walked.
+ " "
+ SEND THIS ONE FILE BACK: Q:\morphosis\code\sparq\test005.log
+ ================================================================
+
+===== test005 RUN 25/09/2026 13:35:08.04 on SATURN user bitseq =====
+ ================================================================
+ sparq test005 - the no-device chain: modules, exec, canvas bridge
+ at the end you send back ONE file: test005.log from the repo root
+ ================================================================
+ " "
+ [00] environment
+
+---- [RUN] os version ----
+
+Microsoft Windows [Version 10.0.19045.6216]
+---- [RC 0] os version ----
+ tree clean, no stray artefacts
+ " "
+ [00b] sync stamp - every file that decides the binary, hashed against
+ SYNC-STAMP.txt. A FAIL here names files; it is never a rustc error.
+
+---- [RUN] sync check - tools\sync_check.py ----
+sync_check: OK - sync wo013-inc2b (sent 2026-09-25)
+  120 of 120 stamped files match byte-for-byte
+  src fingerprint 80f/1348971B - matches the stamp
+  no extras, no line-ending drift, nothing soft differing
+---- [RC 0] sync check - tools\sync_check.py ----
+ " "
+ [01] build - the five first-party crates always recompile now, so that a
+ zip-restored mtime can never serve the last increment's rlib; the
+ dependencies stay cached, so this costs a minute at most.
+
+---- [RUN] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+sync_check: OK - 120 files match sync wo013-inc2b, src 80f/1348971B
+ note: tree content changed since the last good build - the five first-party
+ fingerprints are cleared, so cargo cannot serve a crate from the last sync.
+ building sparq.exe (release, hal-wasapi + bootstrap-audio + ui-window) ...
+ first build takes a few minutes (wgpu is big); later builds are incremental.
+
+   Compiling sparq-kernel v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-kernel)
+   Compiling sparq-app v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-app)
+   Compiling sparq-module-api v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-module-api)
+   Compiling sparq-audio v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-audio)
+   Compiling sparq-ui v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-ui)
+    Finished `release` profile [optimized + debuginfo] target(s) in 22.43s
+ stamp guard: sources 80f/1348971B  -  binary 80f/1348971B
+
+sparq 0.0.0-phase0 · newest source 20721 d since epoch · src 80f/1348971B
+  module api v0 (unfrozen) · kernel 0.0.0-phase0
+
+  If that source stamp is older than your last sync, this binary is stale.
+  Fix: run scripts\build.bat, or delete target\release\sparq.exe.
+
+ built: Q:\morphosis\code\sparq\target\release\sparq.exe
+ size : 9599488 bytes
+
+ next:  scripts\devices.bat   then   scripts\run.bat
+
+ log saved to Q:\morphosis\code\sparq\scripts\..\logs\build.log
+---- [RC 0] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+
+---- [RUN] version stamp ----
+sparq 0.0.0-phase0 · newest source 20721 d since epoch · src 80f/1348971B
+  module api v0 (unfrozen) · kernel 0.0.0-phase0
+
+  If that source stamp is older than your last sync, this binary is stale.
+  Fix: run scripts\build.bat, or delete target\release\sparq.exe.
+---- [RC 0] version stamp ----
+ " "
+ [02] module registry - the three manifests, strict
+
+---- [RUN] modules --strict ----
+sparq modules: scanning `modules` — 3 manifest(s) found
+  loaded 3:
+    sparq/ana/rms                      v0.1.0      2 ports, 1 params
+    sparq/syn/sine                     v0.1.0      1 ports, 2 params
+    sparq/util/gain                    v0.1.0      2 ports, 1 params
+---- [RC 0] modules --strict ----
+ " "
+ [03] offline render - the exec demo chain, 5 s, no device
+
+---- [RUN] exec --out exec.wav --seconds 5 ----
+sparq exec · WO-008 executor render · patch `demo`
+  registry    3 built-in module(s) compiled in
+  discovery   3 manifest(s) scanned under `modules` · 3 shadowed by built-ins · 0 without a factory
+  patch       sine(440 Hz, 0.5) → gain(0.5) → master · rms analysis tap · 3 node(s), 2 edge(s)
+  budget      2048 bytes of audio buffers, all pre-allocated
+  meters      rms tap value Some(0.16621882) (0.25 amp sine, 0.59-cycle window → ≈ 0.16..0.19) · master peak Some(0.24996915) rms Some(0.16621882)
+  rendered    3750 blocks · 240000 frames · hash d46736fd9a1c48a1
+  wrote       exec.wav (1920000 bytes of sample data, f32 · 240000 frames × 2 ch)
+exec: PASS
+---- [RC 0] exec --out exec.wav --seconds 5 ----
+
+---- [RUN] exec.wav hash ----
+SHA256 hash of exec.wav:
+aa546a79ab2f10ea0f7558211ac59553deeda90e999515785555b5c7339e6485
+CertUtil: -hashfile command completed successfully.
+---- [RC 0] exec.wav hash ----
+ " "
+ [04] canvas bridge - the audit drives synthetic touch: double-tap,
+ long-press the empty canvas, tap the RENDER WAV row. It writes
+ canvas-render.wav in the repo root; the log gets the evidence line.
+
+---- [RUN] ui --audit - 16 smokes incl. the render chain ----
+sparq ui · layout audit (WO-012 gate)
+matrix: 5 viewports x 4 DPI scales x 2 modes; every interactive element measured against its touch class
+[PASS] display-wall 2560x1440 · Design — @1.00: 24 elements, 0 violations, 3 dense | @1.25: 24 elements, 0 violations, 3 dense | @1.50: 24 elements, 0 violations, 3 dense | @2.00: 24 elements, 0 violations, 3 dense
+[PASS] display-wall 2560x1440 · Perform — @1.00: 4 elements, 0 violations, 0 dense | @1.25: 4 elements, 0 violations, 0 dense | @1.50: 4 elements, 0 violations, 0 dense | @2.00: 4 elements, 0 violations, 0 dense
+[PASS] desktop 1920x1080 · Design — @1.00: 24 elements, 0 violations, 3 dense | @1.25: 24 elements, 0 violations, 3 dense | @1.50: 24 elements, 0 violations, 3 dense | @2.00: 24 elements, 0 violations, 3 dense
+[PASS] desktop 1920x1080 · Perform — @1.00: 4 elements, 0 violations, 0 dense | @1.25: 4 elements, 0 violations, 0 dense | @1.50: 4 elements, 0 violations, 0 dense | @2.00: 4 elements, 0 violations, 0 dense
+[PASS] laptop 1440x900 · Design — @1.00: 24 elements, 0 violations, 3 dense | @1.25: 24 elements, 0 violations, 3 dense | @1.50: 24 elements, 0 violations, 3 dense | @2.00: 24 elements, 0 violations, 3 dense
+[PASS] laptop 1440x900 · Perform — @1.00: 4 elements, 0 violations, 0 dense | @1.25: 4 elements, 0 violations, 0 dense | @1.50: 4 elements, 0 violations, 0 dense | @2.00: 4 elements, 0 violations, 0 dense
+[PASS] tablet-min 1280x800 · Design — @1.00: 24 elements, 0 violations, 3 dense | @1.25: 24 elements, 0 violations, 3 dense | @1.50: 24 elements, 0 violations, 3 dense | @2.00: 24 elements, 0 violations, 3 dense
+[PASS] tablet-min 1280x800 · Perform — @1.00: 4 elements, 0 violations, 0 dense | @1.25: 4 elements, 0 violations, 0 dense | @1.50: 4 elements, 0 violations, 0 dense | @2.00: 4 elements, 0 violations, 0 dense
+[PASS] below-breakpoint 1024x700 · Design — @1.00: 4 elements, 0 violations, 0 dense, REFUSED->PERFORM | @1.25: 4 elements, 0 violations, 0 dense, REFUSED->PERFORM | @1.50: 4 elements, 0 violations, 0 dense, REFUSED->PERFORM | @2.00: 4 elements, 0 violations, 0 dense, REFUSED->PERFORM
+[PASS] below-breakpoint 1024x700 · Perform — @1.00: 4 elements, 0 violations, 0 dense | @1.25: 4 elements, 0 violations, 0 dense | @1.50: 4 elements, 0 violations, 0 dense | @2.00: 4 elements, 0 violations, 0 dense
+[PASS] dpi-invariance — every viewport produced identical layout+audit at 100/125/150/200%
+[PASS] below-breakpoint — Design refused, Perform reflowed and rendered
+gesture smoke (synthetic pointers through the real recogniser + dispatch):
+[PASS] tap topbar/dock collapses the dock
+[PASS] tap again expands the dock
+[PASS] mode tap → Perform: chrome unhit-testable, XL pads audited clean
+[PASS] Perform mode tap → back to Design with chrome restored
+[PASS] long-press fires context on the element under the finger
+[PASS] movement after long-press is suppressed and explainable (never a drag)
+[PASS] drag a node: it moves, snaps to the 8 px grid, second finger reports fine (×10)
+[PASS] three-finger tap undoes the move (the node returns)
+[PASS] drag cv-out → audio-in is refused in words and adds no wire
+[PASS] drag stereo-out → free stereo-in connects (a wire is created)
+[PASS] two-finger spread zooms the canvas camera in
+[PASS] empty long-press → RENDER WAV: the bridge renders the patch and writes canvas-render.wav
+[PASS] node long-press → SET MASTER makes that node the render master
+ui audit: PASS (0 failure(s))
+---- [RC 0] ui --audit - 16 smokes incl. the render chain ----
+
+---- [RUN] canvas-render.wav hash ----
+SHA256 hash of canvas-render.wav:
+d7ad294ea0b5e6e960f8dbc7f231dcbd84edec327e6352e80dc2f6ed786ec0b7
+CertUtil: -hashfile command completed successfully.
+---- [RC 0] canvas-render.wav hash ----
+ " "
+ [05] OPTIONAL listen: if this RDP session redirects audio, play the two
+ wavs in the repo root - exec.wav and canvas-render.wav. Both carry a
+ steady 440 Hz sine, 5 s each; canvas-render.wav is the drawn demo
+ patch - sine into gain into rms - rendered by the bridge.
+ operator listen answer: y
+ " "
+ ================================================================
+ SUMMARY - test005 - 25/09/2026 13:37:01.90
+ ================================================================
+ [00b] tree matches SYNC-STAMP.txt : PASS rc=0
+ [01] build + stamp guard : PASS rc=0
+ [02] modules --strict : PASS rc=0
+ [03] exec offline render : PASS rc=0
+ [04] ui --audit incl. RENDER WAV smoke : PASS rc=0
+ steps failing on rc: 0
+ " "
+ Next: the studio session - test004 runs the EXCLUSIVE acceptance,
+ real fingers touch-test the canvas, and the DPI matrix gets walked.
+ " "
+ SEND THIS ONE FILE BACK: Q:\morphosis\code\sparq\test005.log
+ ================================================================

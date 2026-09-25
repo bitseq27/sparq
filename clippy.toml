@@ -1,0 +1,22 @@
+# Real-time discipline (plan §5.2 rule 1). These are denied workspace-wide via
+# `clippy::disallowed_methods` / `disallowed_types`; the audio path must not touch them at all.
+#
+# The null device harness (sparq-kernel/src/device/null.rs) is the ONE place `Instant::now` is
+# permitted, because it is the *test harness* measuring the code under audit, not the code itself.
+# It is allowed there with a targeted `#[allow]` and a comment.
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "wall-clock reads are forbidden on the audio path (ADR-006)" },
+    { path = "std::time::SystemTime::now", reason = "wall-clock reads are forbidden on the audio path (ADR-006)" },
+    { path = "std::thread::sleep", reason = "the audio thread must never block (plan §5.2)" },
+    { path = "std::fs::read", reason = "no file I/O on the audio path" },
+    { path = "std::fs::write", reason = "no file I/O on the audio path" },
+    { path = "std::process::Command::new", reason = "no subprocesses on the audio path" },
+]
+disallowed-types = [
+    { path = "std::sync::Mutex", reason = "no locks on the audio path; use sparq_kernel::sync::SpscRing or a param snapshot" },
+    { path = "std::sync::RwLock", reason = "no locks on the audio path" },
+    { path = "std::rc::Rc", reason = "not Send; the audio path must be shareable and non-owning" },
+    # NOTE: `Arc<Mutex<_>>` cannot be expressed as a disallowed *type* path (clippy resolves these
+    # to concrete items). The rule is enforced by review and by the bootstrap module's own comment;
+    # when WO-006 lands, the audio path must take `&mut` with no lock at all (ADR-009).
+]

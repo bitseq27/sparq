@@ -1,0 +1,31 @@
+# sparq golden reference · WO-005 signal path
+#
+# Subject:   syn/sine 220 Hz @ 0.5 -> util/gain -6.0 dB -> out/main (2 ch interleaved)
+# Render:    48000 Hz, block 64, 1.000 s = 48000 frames = 96000 samples
+# Generator: `cargo run -p sparq-app -- golden-values`
+# Test:      crates/sparq-audio/tests/golden.rs
+#
+# Regeneration is EXPLICIT and reviewed (ADR-007). Never regenerate to make a test pass; regenerate
+# because a DSP change was intentional, and say so in the commit message.
+#
+# Portability: `rms` and `peak` are portable to ~1e-9 and are checked everywhere.
+# `hash` is bit-exact and therefore platform-sensitive: it depends on the platform libm's `sin`
+# being correctly rounded. It is asserted only where `hash_platform` matches the host.
+
+id=wo005-sine-gain
+hash=ba577186c988db21
+hash_platform=x86_64-linux, rustc 1.98, debug and release verified identical
+rms=0.177196435432
+peak=0.250593603
+tolerance=1e-9
+frames=48000
+sample_rate=48000
+block=64
+channels=2
+freq=220.0
+amp=0.5
+gain_db=-6.0
+smooth_ms=5.0
+seed=0
+allocations=0
+underruns=0

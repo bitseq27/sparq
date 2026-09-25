@@ -1,0 +1,13 @@
+sparq play · HAL path (WO-006) · backend wasapi-exclusive
+  sparq       0.0.0-phase0 · newest source 20720 d since epoch · src 75f/1226586B
+
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  output devices:
+    [0] <endpoint 3> <- default
+    [1] <endpoint 1>
+    [2] <endpoint 2>
+    [3] <endpoint 0>
+    [4] <endpoint 4>
+  using       [0] <endpoint 3>
+  adjusted    rate 48000 Hz -> 96000 Hz (this device does not list 48000 Hz; `sparq devices --caps` shows what it does)
+sparq: open failed: device error: Initialize (exclusive): HRESULT 0x88890020

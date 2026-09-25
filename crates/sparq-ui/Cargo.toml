@@ -1,0 +1,18 @@
+[package]
+name = "sparq-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "sparq shell: design tokens (generated), the toolkit-independent gesture/layout core, and the graph canvas"
+
+[dependencies]
+# The canvas consumes the module contract's port vocabulary and its connection verdicts, because
+# the compatibility matrix must have exactly ONE copy (WO-007 refused to ship a mirror, and
+# port.rs's own `Verdict` doc says "the canvas renders this directly"). This is a first-party,
+# zero-third-party, `forbid(unsafe)` crate — not a toolkit dependency. The gesture/shell/audit
+# core still touches nothing outside `std`; only `canvas` reaches across, at this one boundary.
+sparq-module-api = { workspace = true }
+
+[lints]
+workspace = true

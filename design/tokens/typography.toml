@@ -1,0 +1,75 @@
+# sparq design tokens — typography
+# Version 0.1.0 · Numerals are the most important glyph set in this product.
+
+[meta]
+schema = "sparq.tokens.type"
+version = "0.1.0"
+
+# ---------------------------------------------------------------- families
+[family.mono]
+role = "primary"
+# Requirements (a candidate must satisfy ALL of these before it is chosen):
+#   - variable weight axis (Regular -> Bold)
+#   - true tabular numerals (tnum) and oldstyle-free digits
+#   - zero with dot or slash (0 distinguishable from O), 1 with base serif
+#   - glyphs: . , : ; - + = * / \\ ( ) [ ] { } < > | ~ ^ _ % # @ & ? ! ' "
+#   - scientific/mathematical: Greek (α β γ Δ φ θ λ μ π σ ω Σ Δ Ω), × ÷ ± ∓ ≈ ≠ ≤ ≥ ∞ ∂ ∫ √ ∑ ∏ ∈
+#   - units and symbols: ° µ Ω ‰ ′ ″ → ← ↑ ↓ ⇒ · • … † ‡ § ¶
+#   - superscripts/subscripts or a synthesised path that does not look broken
+#   - licence covers desktop app embedding + web (thin client) + screenshots in media
+candidates = ["IBM Plex Mono", "Martian Mono", "Departure Mono", "Iosevka (SS08)", "Space Mono"]
+chosen = ""                        # WO-002 fills this in
+fallback_stack = "ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace"
+features = ["tnum", "zero", "case", "ss01"]
+
+[family.grotesque]
+role = "secondary"                 # headings, long text, empty states, documentation surfaces
+candidates = ["Inter", "Space Grotesk", "Söhne-class", "Archivo"]
+chosen = ""
+fallback_stack = "system-ui, 'Segoe UI Variable', sans-serif"
+
+# ---------------------------------------------------------------- scale (px at 1x, 8px-grid aligned where possible)
+[scale]
+xs  = 10    # dense table data, axis ticks (never below this)
+s   = 11    # secondary labels, port names
+m   = 13    # DEFAULT: body, labels, parameters
+l   = 15    # panel titles, node titles
+xl  = 18    # section headings, transport readout (design mode)
+xxl = 24    # mode titles, dialogs
+stage      = 44   # Perform-mode primary numerals (tempo, bar:beat:tick, scene name)
+stage_xl   = 88   # Perform-mode hero numeral (countdown, take number) — legible at 3 m
+
+# ---------------------------------------------------------------- metrics
+[metrics]
+line_height_tight = 1.15           # numerals, readouts, tables
+line_height_body  = 1.45           # prose, docs, empty states
+tracking_labels   = 0.06           # em, for uppercase micro-labels (xs/s only)
+tracking_stage    = -0.01          # em, large numerals tighten slightly
+numerals          = "tabular-always"   # every numeric field is tnum; no exceptions
+case_labels       = "uppercase"    # micro-labels only; never whole sentences
+min_contrast_ratio = 4.5           # body text; 3.0 minimum for large/hairline structure
+
+# ---------------------------------------------------------------- numeric formatting (part of the identity)
+[format]
+hz          = { decimals_below_1k = 2, decimals_above_1k = 1, si_prefix_above = 10000, unit = "Hz" }
+ms          = { decimals = 2, unit = "ms", switch_to_s_above = 10000 }
+db          = { decimals = 1, unit = "dB", always_show_sign = true, ref_suffix = ["FS", "u", "SPL"] }
+percent     = { decimals = 1, unit = "%" }
+semitones   = { decimals = 2, unit = "st", always_show_sign = true }
+cents       = { decimals = 1, unit = "ct", always_show_sign = true }
+ratio       = { decimals = 3, unit = ":1", style = "n:1" }
+bpm         = { decimals = 2, unit = "bpm" }
+ticks       = { decimals = 0, unit = "tk" }
+samples     = { decimals = 0, unit = "sm" }
+bars        = { style = "bar.beat.tick", separator = "." }
+clock       = { style = "hh:mm:ss.mmm" }
+cpu         = { decimals = 1, unit = "%" }
+lufs        = { decimals = 1, unit = "LUFS", always_show_sign = false }
+# Rule: the unit is always rendered, in `text.tertiary`, immediately after the value, at 0.85em.
+# A number without a unit is a bug.
+
+# ---------------------------------------------------------------- zoom behaviour
+[zoom]
+user_scale_min = 1.0
+user_scale_max = 2.0               # accessibility requirement: 200% must remain usable
+stage_scale    = 1.5               # Perform-mode default on the stage device

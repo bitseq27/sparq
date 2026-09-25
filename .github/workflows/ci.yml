@@ -1,0 +1,221 @@
+# sparq CI — WO-000
+#
+# Three gate families, all of which must pass:
+#   1. design gates  — the visual identity is data, and the data is checked (token_gen, token_audit)
+#   2. safety gates  — `unsafe` only where the allowlist says, with a SAFETY comment (unsafe_audit)
+#   3. audio gates   — fmt, clippy -D warnings, tests, golden render, determinism, selftest
+#
+# Windows is the primary platform (ADR-004) and is the only runner that must pass before merge;
+# Linux and macOS are kept green from Phase 1 so the appliance path (D-9) stays open.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ---------------------------------------------------------------- design + safety gates
+  design-gates:
+    name: design & safety gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: tools use explicit UTF-8 and LF text I/O (Windows portability)
+        run: python3 tools/check_text_io.py
+
+      - name: tokens are up to date and self-consistent
+        run: python3 tools/token_gen.py --check
+
+      - name: mockups and source conform to the token rules (R1-R6)
+        run: python3 tools/token_audit.py
+
+      - name: unsafe is allowlisted, exempted and justified
+        run: python3 tools/unsafe_audit.py
+
+      # The sync gate proves itself rather than being trusted: 11 cases, including defect #78's
+      # exact shape (content changed while the mtime went backwards, which is what a zip does).
+      # The verify mode is deliberately NOT run here - it would require regenerating SYNC-STAMP.txt
+      # on every source edit; that belongs in the packing step instead (LATER.md).
+      - name: the sync-stamp gate fires on every class it claims to catch
+        run: python3 tools/sync_check.py --self-test
+
+      - name: generated Rust tokens are committed
+        run: |
+          test -f design/tokens/generated/tokens.rs
+          test -f design/tokens/generated/colormaps.json
+          echo "generated artefacts present"
+
+  # ---------------------------------------------------------------- rust gates
+  rust:
+    name: rust · ${{ matrix.os }}${{ matrix.name_suffix }}
+    needs: design-gates
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name_suffix: " (primary)"
+            primary: true
+          - os: ubuntu-latest
+            name_suffix: ""
+            primary: false
+          - os: macos-latest
+            name_suffix: ""
+            primary: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux audio headers (cpal/ALSA, only needed for the bootstrap feature)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy (default features) — zero warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test (default features — no audio device required)
+        run: cargo test --workspace
+
+      # WO-012: the shell. `ui` is the hermetic egui half (headless driver, audit); `ui-window`
+      # adds winit + wgpu — on the Windows runner that is a NATIVE dx12-backend compile (the
+      # closest thing to the SATURN build), on Linux the gles backend (the sandbox-fit cell),
+      # on macOS gles as well. The window host never RUNS here (no display); it must COMPILE
+      # everywhere and its logic is proven by the headless audit below.
+      - name: Clippy the UI shell (egui half + window host)
+        run: |
+          cargo clippy -p sparq-app --features ui --all-targets -- -D warnings
+          cargo clippy -p sparq-app --features ui-window --all-targets -- -D warnings
+
+      - name: UI layout audit (headless — breakpoint x DPI x mode matrix + gesture smoke)
+        run: |
+          cargo build --release -p sparq-app --features ui
+          ./target/release/sparq ui --audit
+          ./target/release/sparq ui --headless 60
+
+      # The bootstrap path is disposable (ADR-008) but must still compile and lint, otherwise it
+      # rots before its hardware-proven replacement deletes it. The HAL WASAPI feature rides
+      # along: on the Windows runner this is a NATIVE compile of the real backend (the strongest
+      # check it can get without audio hardware); on macOS it compiles to its cfg(windows) shell.
+      # Skipped on Linux: no ALSA daemon on the runner (the windows-crosscheck job below covers
+      # the HAL from Linux via the MSVC target).
+      - name: Clippy + build with the audio features (bootstrap + HAL)
+        if: runner.os != 'Linux'
+        run: |
+          cargo clippy -p sparq-app --features bootstrap-audio,hal-wasapi --all-targets -- -D warnings
+          cargo clippy -p sparq-kernel --features hal-wasapi --all-targets -- -D warnings
+          cargo build -p sparq-app --features bootstrap-audio,hal-wasapi
+
+      - name: HAL null paced soak (1 min; xrun-tolerant — shared runners spike)
+        run: ./target/release/sparq soak --backend null --minutes 1 --report-every 30 --no-realtime
+
+      - name: Release build
+        run: cargo build --release --workspace
+
+      - name: Golden reference matches (bit-exact on x86_64, rms/peak elsewhere)
+        run: cargo test --release -p sparq-audio --test golden -- --nocapture
+
+      - name: Determinism — the same render twice must hash identically
+        shell: bash
+        run: |
+          ./target/release/sparq render --out a.wav --seconds 3 > a.txt
+          ./target/release/sparq render --out b.wav --seconds 3 > b.txt
+          ha=$(grep '^  hash' a.txt | awk '{print $2}')
+          hb=$(grep '^  hash' b.txt | awk '{print $2}')
+          echo "render hash: $ha / $hb"
+          test "$ha" = "$hb" || { echo "NON-DETERMINISTIC RENDER"; exit 1; }
+          cmp a.wav b.wav || { echo "WAV bytes differ"; exit 1; }
+
+      - name: Selftest (Phase 0 gate table, measured)
+        run: ./target/release/sparq selftest --golden
+
+      - name: Allocation probe — 0 allocations over 5000 blocks
+        run: cargo run --release -p sparq-app --example probe_alloc
+
+      - name: Zero-dependency core build is hermetic
+        shell: bash
+        run: |
+          # The default build must not pull in any crates.io dependency: this is what keeps CI fast
+          # and lets the whole audio path be tested on a runner with no audio hardware.
+          if [ -f Cargo.lock ]; then
+            if grep -q '^name = "cpal"' Cargo.lock && ! grep -q 'bootstrap-audio' Cargo.toml; then
+              echo "cpal leaked into the default build"; exit 1
+            fi
+          fi
+          echo "core build has no mandatory third-party dependencies"
+
+  # ------------------------------------------------- WASAPI crosscheck (no Windows runner needed)
+  # The WASAPI backend is developed on a Linux sandbox and cannot be *run* here — but it must
+  # COMPILE and LINT from every commit, or blind development rots within days. `cargo clippy`
+  # for the MSVC target does not link, so no MSVC toolchain is needed on the runner. This job is
+  # the gate that makes "written blind, verified by the compiler" honest.
+  windows-crosscheck:
+    name: windows HAL crosscheck (ubuntu → msvc target)
+    needs: design-gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy the HAL WASAPI backend for x86_64-pc-windows-msvc
+        run: |
+          cargo clippy --target x86_64-pc-windows-msvc -p sparq-kernel --features hal-wasapi --all-targets -- -D warnings
+          cargo clippy --target x86_64-pc-windows-msvc -p sparq-app --features hal-wasapi --all-targets -- -D warnings
+
+      # Default features on the Windows target is its own combination — defect #36 was code
+      # gated on `cfg(windows)` whose dependency only exists under the feature, which no other
+      # cell of the matrix (Linux-default, Windows-features) can catch.
+      - name: Clippy default features for x86_64-pc-windows-msvc
+        run: |
+          cargo clippy --target x86_64-pc-windows-msvc -p sparq-module-api --all-targets -- -D warnings
+          cargo clippy --target x86_64-pc-windows-msvc -p sparq-kernel --all-targets -- -D warnings
+          cargo clippy --target x86_64-pc-windows-msvc -p sparq-app --all-targets -- -D warnings
+
+      # WO-012: the UI window stack for the MSVC target (wgpu dx12 backend, `windows` crate).
+      # This is the cell that protects the SATURN build from blind breakage: window.rs compiles
+      # against the same backend the stage machine will use. Heavy but worth it.
+      - name: Clippy the UI window host for x86_64-pc-windows-msvc
+        run: |
+          cargo clippy --target x86_64-pc-windows-msvc -p sparq-app --features ui-window --all-targets -- -D warnings
+
+  # ---------------------------------------------------------------- nightly: sanitizers + miri
+  sanitizers:
+    name: sanitizers & miri (nightly)
+    needs: rust
+    runs-on: ubuntu-latest
+    # The SPSC ring is the only `unsafe` concurrency in Phase 0; Miri over it is the highest-value
+    # check in the repo (docs/unsafe-allowlist.md entry 5).
+    continue-on-error: true   # nightly tooling moves; do not block merges on it, but do watch it
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      - name: Miri over the lock-free ring
+        run: cargo +nightly miri test -p sparq-kernel --lib sync::rings
+        env:
+          MIRIFLAGS: "-Zmiri-strict-provenance"

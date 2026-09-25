@@ -1,0 +1,600 @@
+# sparq — manifest field table, as data (WO-007 task 1)
+#
+# STATUS: DRAFT FOR REVIEW. Not yet consumed by code.
+#
+# This is docs/api/manifest-schema.md turned into a table a validator can be generated
+# from. The prose document stays authoritative for *explanation*; this file becomes
+# authoritative for *what is checked*. Every row carries the error code it produces, so
+# the catalogue in manifest-schema.md stops being a list someone remembers to extend and
+# becomes a projection of the schema. That is the whole argument for tables-first.
+#
+# Two gaps found by writing this table are registered in [validation.gaps]; both are
+# acceptance-criteria blockers for WO-007. See WO007-TASK1-REVIEW.md §6.
+
+[meta]
+schema = "sparq.manifest-fields"
+version = "0.1.0"
+source = "docs/api/manifest-schema.md (v0.1 draft)"
+companion = "docs/api/module-api-v1.md"
+manifest_file = "sparqmod.toml"
+also_embedded_in = ["wasm components", "T3 process packages"]
+unknown_keys = "validation error (typo protection), except inside tables marked extensible"
+stable_ids = "any field marked stable_id can never be renamed without an alias entry"
+
+# ------------------------------------------------------------------ 1. identity
+[[field]]
+path = "identity.id"
+type = "string"
+required = true
+stable_id = true
+format = "namespace/category/name, e.g. sparq/syn/wavetable"
+on_violation = ["E-ID-DUP", "E-ID-UNSTABLE-RENAME", "E-KEY-MISSING*"]
+
+[[field]]
+path = "identity.version"
+type = "semver"
+required = true
+on_violation = ["E-KEY-MISSING*", "E-VALUE-MALFORMED*"]
+
+[[field]]
+path = "identity.host_api"
+type = "{min, max}"
+required = true
+on_violation = ["E-HOST-API-INCOMPATIBLE", "E-KEY-MISSING*"]
+
+[[field]]
+path = "identity.display_name"
+type = "string"
+required = true
+on_violation = ["E-KEY-MISSING*"]
+
+[[field]]
+path = "identity.summary"
+type = "string"
+required = true
+max_chars = 120
+note = "one line; used in tooltips and search"
+on_violation = ["E-KEY-MISSING*", "E-VALUE-TOO-LONG*"]
+
+[[field]]
+path = "identity.description"
+type = "string (markdown)"
+required = false
+
+[[field]]
+path = "identity.authors"
+type = "[string]"
+required = true
+on_violation = ["E-KEY-MISSING*"]
+
+[[field]]
+path = "identity.license"
+type = "SPDX"
+required = true
+on_violation = ["E-KEY-MISSING*", "E-VALUE-MALFORMED*"]
+
+[[field]]
+path = "identity.repository"
+type = "url"
+required = false
+[[field]]
+path = "identity.docs_url"
+type = "url"
+required = false
+[[field]]
+path = "identity.issues_url"
+type = "url"
+required = false
+[[field]]
+path = "identity.tags"
+type = "[string]"
+required = false
+
+[[field]]
+path = "identity.signature"
+type = "object"
+required = "conditional"
+condition = "required for Perform mode and for registry publish"
+on_violation = ["E-SIGNATURE-MISSING", "E-SIGNATURE-INVALID"]
+
+# ------------------------------------------------------------------ 2. classification
+[[field]]
+path = "classification.category"
+type = "string"
+required = true
+format = "taxonomy path, e.g. synth/oscillator/wavetable"
+on_violation = ["E-KEY-MISSING*"]
+
+[[field]]
+path = "classification.top"
+type = "enum"
+required = true
+domain = ["syn","smp","flt","fx","dyn","ana","spa","seq","gen","harm","dat","io","dsp","util","ml","out"]
+on_violation = ["E-ENUM-UNKNOWN*", "E-KEY-MISSING*"]
+
+[[field]]
+path = "classification.kind"
+type = "enum"
+required = true
+domain = ["source","processor","utility","analysis","spatial","display","data","generative","io"]
+on_violation = ["E-ENUM-UNKNOWN*", "E-KEY-MISSING*"]
+
+[[field]]
+path = "classification.tier"
+type = "enum"
+required = true
+domain = ["t1","t2","t3"]
+on_violation = ["E-ENUM-UNKNOWN*", "E-KEY-MISSING*"]
+
+[[field]]
+path = "classification.stability"
+type = "enum"
+required = true
+domain = ["experimental","stable","deprecated"]
+on_violation = ["E-ENUM-UNKNOWN*", "E-KEY-MISSING*"]
+
+# ------------------------------------------------------------------ 3. ports[]
+[[field]]
+path = "ports[].id"
+type = "string"
+required = true
+stable_id = true
+on_violation = ["E-ID-DUP", "E-KEY-MISSING*"]
+
+[[field]]
+path = "ports[].name"
+type = "string"
+required = true
+on_violation = ["E-KEY-MISSING*"]
+
+[[field]]
+path = "ports[].direction"
+type = "enum"
+required = true
+domain = ["in","out"]
+on_violation = ["E-ENUM-UNKNOWN*", "E-KEY-MISSING*"]
+
+[[field]]
+path = "ports[].type"
+type = "enum"
+required = true
+domain = ["audio","cv","event","data","gpu","atom"]
+closed_set = "ADR-005 — adding a value requires a new ADR and a host major version"
+on_violation = ["E-PORT-TYPE-UNKNOWN"]
+
+[[field]]
+path = "ports[].required"
+type = "bool"
+required = false
+default = true
+note = "optional inputs get an explicit unconnected signal, never silence-by-accident"
+
+[[field]]
+path = "ports[].channel_set"
+type = "string | [string] | 'variable'"
+required = "if type == audio"
+domain = ["mono","stereo","quad","5.1","7.1.4","ambisonics:N (N=1..7, AmbiX)","objects:K","raw:M"]
+on_violation = ["E-CHANNELSET-UNKNOWN", "E-AMBI-ORDER-RANGE", "E-KEY-MISSING*"]
+note = "a port may declare 'variable' and be told the actual set at prepare"
+
+[[field]]
+path = "ports[].rate"
+type = "enum"
+required = "if type == cv"
+domain = ["audio","block"]
+on_violation = ["E-ENUM-UNKNOWN*", "E-KEY-MISSING*"]
+
+[[field]]
+path = "ports[].range"
+type = "enum"
+required = "if type == cv"
+domain = ["bipolar","unipolar"]
+on_violation = ["E-ENUM-UNKNOWN*", "E-KEY-MISSING*"]
+
+[[field]]
+path = "ports[].cv_reduce"
+type = "enum"
+required = "no (default last)"
+domain = ["last","first","mean","min","max","peak"]
+applies_when = "type == cv && rate == block, fed by an audio-rate cv source"
+added_by = "decision G3, 2026-09-22"
+why_in_the_manifest = "the receiving module chooses how a fast modulator collapses to one block value. It is declared HERE and not in code because first and last produce different audio: an undeclared choice would make a journal replay diverge from the original render (ADR-007)"
+on_violation = ["E-ENUM-UNKNOWN*"]
+
+[[field]]
+path = "ports[].cv_interp"
+type = "enum"
+required = "no (default hold)"
+domain = ["hold","linear","spline"]
+applies_when = "type == cv && rate == audio, fed by a block-rate cv source"
+added_by = "decision G4/Q3, 2026-09-22"
+note = "the host performs the interpolation; the module only declares which. Symmetric with cv_reduce - the receiving module owns both directions of a rate change"
+on_violation = ["E-ENUM-UNKNOWN*"]
+
+[[field]]
+path = "ports[].event_kinds"
+type = "[enum]"
+required = "if type == event"
+domain = ["ump","osc","trigger","gate","note","clock"]
+on_violation = ["E-ENUM-UNKNOWN*", "E-KEY-MISSING*"]
+
+[[field]]
+path = "ports[].data_schema"
+type = "{id, version}"
+required = "if type == data"
+on_violation = ["E-SCHEMA-UNREGISTERED", "E-KEY-MISSING*"]
+
+[[field]]
+path = "ports[].read_policy"
+type = "[enum]"
+required = "if type == data && direction == in"
+domain = ["latest","interpolated","window","accumulate","on_change"]
+on_violation = ["E-ENUM-UNKNOWN*"]
+
+[[field]]
+path = "ports[].stale_policy"
+type = "enum"
+required = "if type == data && direction == in"
+domain = ["hold","decay","zero","error"]
+extra_field = "decay_ms (required when decay)"
+on_violation = ["E-ENUM-UNKNOWN*", "E-KEY-MISSING*"]
+
+[[field]]
+path = "ports[].multiplicity"
+type = "enum"
+required = false
+domain = ["single","multi_in","multi_out"]
+note = "fan-in requires an explicit merge; fan-out is free"
+on_violation = ["E-ENUM-UNKNOWN*"]
+
+[[field]]
+path = "ports[].latency_contribution"
+type = "int (samples)"
+required = false
+[[field]]
+path = "ports[].default_connected"
+type = "bool"
+required = false
+note = "UI hint"
+
+# ------------------------------------------------------------------ 4. params[]
+[[field]]
+path = "params[].id"
+type = "string"
+required = true
+stable_id = true
+on_violation = ["E-ID-DUP", "E-KEY-MISSING*"]
+[[field]]
+path = "params[].name"
+type = "string"
+required = true
+on_violation = ["E-KEY-MISSING*"]
+
+[[field]]
+path = "params[].type"
+type = "enum"
+required = true
+domain = ["float","int","bool","enum","text","blob"]
+on_violation = ["E-ENUM-UNKNOWN*", "E-KEY-MISSING*"]
+
+[[field]]
+path = "params[].unit"
+type = "enum"
+required = "yes if numeric"
+domain = ["Hz","s","ms","samples","dB","%","st","cents","ratio","ch","LUFS","deg","m","bpm","ticks","x"]
+closed_set = "no invented units (module-api §5)"
+on_violation = ["E-UNIT-UNKNOWN"]
+
+[[field]]
+path = "params[].min"
+type = "number"
+required = "yes if numeric"
+on_violation = ["E-KEY-MISSING*"]
+[[field]]
+path = "params[].max"
+type = "number"
+required = "yes if numeric"
+on_violation = ["E-KEY-MISSING*"]
+[[field]]
+path = "params[].default"
+type = "number"
+required = "yes if numeric"
+constraint = "must be inside [min, max]"
+on_violation = ["E-PARAM-DEFAULT-OUT-OF-RANGE"]
+
+[[field]]
+path = "params[].steps"
+type = "int"
+required = "if type in {int, enum}"
+note = "enum additionally requires options[] of {value, label}"
+on_violation = ["E-KEY-MISSING*"]
+
+[[field]]
+path = "params[].curve"
+type = "string"
+required = false
+domain = ["lin","exp","bipolar","custom:<lut id>"]
+on_violation = ["E-ENUM-UNKNOWN*"]
+
+[[field]]
+path = "params[].smoothing"
+type = "string"
+required = false
+domain = ["none","one_pole:<ms>","lin:<ms>","lag:<ms>"]
+note = "applied in the audio thread by the host unless self_smoothed"
+on_violation = ["E-ENUM-UNKNOWN*"]
+
+[[field]]
+path = "params[].self_smoothed"
+type = "bool"
+required = false
+[[field]]
+path = "params[].mod_depth"
+type = "float"
+required = false
+[[field]]
+path = "params[].automatable"
+type = "bool"
+required = false
+[[field]]
+path = "params[].randomisable"
+type = "bool"
+required = false
+[[field]]
+path = "params[].lockable"
+type = "bool"
+required = false
+[[field]]
+path = "params[].hidden"
+type = "bool"
+required = false
+note = "not shown in the auto panel; still automatable"
+
+[[field]]
+path = "params[].per_voice"
+type = "bool"
+required = false
+cross_field = "requires voices.policy != none"
+on_violation = ["E-CROSS-FIELD*"]
+
+[[field]]
+path = "params[].morph"
+type = "enum"
+required = false
+default = "continuous"
+domain = ["continuous","discrete"]
+note = "discrete => host holds it constant during a morph instead of interpolating garbage"
+on_violation = ["E-ENUM-UNKNOWN*"]
+
+[[field]]
+path = "params[].group"
+type = "string"
+required = false
+note = "panel grouping"
+[[field]]
+path = "params[].aliases"
+type = "[string]"
+required = false
+note = "previous ids, for migration"
+
+# ------------------------------------------------------------------ 5-8. schemas, voices, state, resources
+[[field]]
+path = "data_schemas[]"
+type = "{id, version, rate_class, clock_domain, channels[]}"
+required = "if any data port"
+channels = "{id, dtype, unit, range, interpolation}"
+domain_dtype = ["f32","f64","i32","i64","bool","vecN","enum","str","blob"]
+domain_interpolation = ["none","step","linear","spline"]
+domain_rate_class = ["dc","slow (<=10 Hz)","mid (<=200 Hz)","fast (<=2 kHz)","bursty"]
+domain_clock_domain = ["wall","audio"]
+host_provided = ["sparq/imu9@1","sparq/optical-flow@1","sparq/loudness@1","sparq/pitch@1","sparq/onset@1","sparq/timeseries@1","sparq/pose2d@1","sparq/telemetry@1"]
+on_violation = ["E-SCHEMA-UNREGISTERED", "E-ENUM-UNKNOWN*"]
+
+[[field]]
+path = "voices.policy"
+type = "enum-ish"
+required = false
+domain = ["none","mono","poly:<n>","mpe","multitimbral:<n>"]
+on_violation = ["E-ENUM-UNKNOWN*"]
+[[field]]
+path = "voices.per_voice_params"
+type = "[string]"
+required = false
+[[field]]
+path = "voices.allocation"
+type = "hints"
+required = false
+[[field]]
+path = "voices.unison"
+type = "{count, detune_curve, spread}"
+required = false
+[[field]]
+path = "voices.note_events"
+type = "[enum]"
+required = false
+note = "paper test: granular cloud uses policy poly with note_events: none"
+
+[[field]]
+path = "state.schema_id"
+type = "string"
+required = true
+on_violation = ["E-STATE-SCHEMA-MISSING"]
+[[field]]
+path = "state.schema_version"
+type = "int"
+required = true
+note = "serialisation is mandatory for every module, no exceptions"
+on_violation = ["E-STATE-SCHEMA-MISSING"]
+[[field]]
+path = "state.migrations"
+type = "[{from, to}]"
+required = false
+constraint = "ordered chain, no gaps"
+on_violation = ["E-MIGRATION-CHAIN-GAP"]
+[[field]]
+path = "state.size_class"
+type = "enum"
+required = false
+domain = ["tiny","small","medium","large"]
+note = "drives save/autosave strategy"
+on_violation = ["E-ENUM-UNKNOWN*"]
+[[field]]
+path = "state.assets[]"
+type = "{role, hash, size, format, required}"
+required = false
+constraint = "referenced by hash only, never by path"
+on_violation = ["E-ASSET-HASH-MISMATCH"]
+
+[[field]]
+path = "resources.latency"
+type = "int | 'param:<id>'"
+required = true
+note = "may be a function of parameters; the executor recomputes on change"
+on_violation = ["E-LATENCY-UNDECLARED", "E-KEY-MISSING*"]
+[[field]]
+path = "resources.tail_samples"
+type = "int"
+required = false
+[[field]]
+path = "resources.cpu_class"
+type = "enum"
+required = false
+domain = ["trivial","light","medium","heavy","very_heavy"]
+note = "used for budgeting and the degradation ladder; a module that lies shows up in diagnostics"
+on_violation = ["E-ENUM-UNKNOWN*"]
+[[field]]
+path = "resources.mem_class"
+type = "enum"
+required = false
+[[field]]
+path = "resources.gpu_class"
+type = "enum"
+required = false
+[[field]]
+path = "resources.oversampling"
+type = "enum"
+required = false
+domain = ["none","x2","x4","x8"]
+note = "per-module, host-provided (module-api §16 Q4)"
+on_violation = ["E-ENUM-UNKNOWN*"]
+[[field]]
+path = "resources.requires"
+type = "[enum]"
+required = false
+domain = ["fft","midi2","spatial","ml","gpu_compute","network"]
+on_violation = ["E-REQUIRES-UNSUPPORTED"]
+[[field]]
+path = "resources.internal_rate"
+type = "int (sub-block rate)"
+required = false
+status = "REMOVED — decision 2026-09-22"
+flag = "RESOLVED (was G10, which this row mis-numbered as G8). Sub-block processing is FORBIDDEN in v0, so this field is deleted from manifest-schema.md §8. A module needing finer time resolution uses a smaller host block instead: BlockContext.frames is a runtime field, and 100 modules at 16 frames costs ~0.52% of a core vs ~0.13% at 64 frames (measured, tools/dispatch-bench)."
+
+# ------------------------------------------------------------------ 9-13. ui, lifecycle, capabilities, distribution, signature
+[[field]]
+path = "ui.panel.widgets[]"
+type = "{kind, param|port|display, x, y, w, h, touch_class, visible_if}"
+required = false
+note = "absent => the shell auto-generates a panel from params"
+domain_kind = ["slider","knob","xy_pad","matrix","enum_select","toggle","numeric_entry","label","meter_attach","display_slot","button","waveview","grid_pad"]
+domain_touch_class = ["S","M","L","XL"]
+layout = "positions on the 8 px grid, sizes in grid units"
+on_violation = ["E-WIDGET-KIND-UNKNOWN", "E-TOUCH-CLASS-TOO-SMALL"]
+cross_check = "the >=44 px audit is sparq-ui's audit.rs, already implemented and gated (WO-012 inc 1)"
+
+[[field]]
+path = "ui.display_slots[]"
+type = "{source_port, display_module, colormap, mode}"
+required = false
+[[field]]
+path = "ui.custom_draw"
+type = "bool + entry symbol"
+required = false
+cross_field = "t1 only"
+on_violation = ["E-CROSS-FIELD*"]
+[[field]]
+path = "ui.colour_class"
+type = "string"
+required = false
+default = "from classification.top"
+
+[[field]]
+path = "lifecycle"
+type = "{thread_affinity, init_cost, supports_hot_reload, reset_semantics, suspendable}"
+required = false
+
+[[field]]
+path = "capabilities"
+type = "object"
+required = false
+enforcement = "enforced for T2/T3, advisory for T1"
+keys = ["fs_read[]","fs_write[]","network (none|local|internet)","device[] (midi|camera|serial|hid|ble)","gpu (none|compute|draw)","process_spawn (T3 only)","max_fuel","max_memory_mb","max_cpu_ms_per_block"]
+cross_field = "process_spawn requires tier == t3; gpu draw/compute interacts with §16 Q5"
+on_violation = ["E-CROSS-FIELD*"]
+
+[[field]]
+path = "distribution"
+type = "object"
+required = false
+keys = ["package_format (native|wasm|process)","entrypoint","platforms[]","arch[]","min_host_version","registry_namespace","channel (stable|beta)"]
+on_violation = ["E-ENUM-UNKNOWN*"]
+
+[[field]]
+path = "signature"
+type = "{key_id, algorithm, value, signed_at, attestation_url}"
+required = "conditional"
+condition = "registry publish, and loading in Perform mode"
+note = "unsigned modules are badged in the UI and disabled by default in Perform mode (plan §15)"
+on_violation = ["E-SIGNATURE-MISSING", "E-SIGNATURE-INVALID"]
+
+# ------------------------------------------------------------------ validation
+[validation]
+runs_at = "discovery, before instantiation"
+cached_by = "(id, version, file hash)"
+surfaced = "verbatim in the module browser, so an author sees exactly why their module didn't load"
+existing_codes = [
+  "E-ID-DUP","E-ID-UNSTABLE-RENAME","E-PORT-TYPE-UNKNOWN","E-UNIT-UNKNOWN",
+  "E-PARAM-DEFAULT-OUT-OF-RANGE","E-CHANNELSET-UNKNOWN","E-AMBI-ORDER-RANGE",
+  "E-SCHEMA-UNREGISTERED","E-ASSET-HASH-MISMATCH","E-REQUIRES-UNSUPPORTED",
+  "E-HOST-API-INCOMPATIBLE","E-STATE-SCHEMA-MISSING","E-MIGRATION-CHAIN-GAP",
+  "E-SIGNATURE-MISSING","E-SIGNATURE-INVALID","E-TOUCH-CLASS-TOO-SMALL",
+  "E-WIDGET-KIND-UNKNOWN","E-LATENCY-UNDECLARED","E-UNKNOWN-KEY",
+]
+existing_count = 19
+
+# Codes marked with * above do not exist yet. Rather than hand-adding them one at a time
+# as bugs appear — which is how the current 19 were arrived at — derive them from this
+# table, so a new field brings its own error codes with it.
+[validation.derivation]
+required_field_absent = "E-KEY-MISSING:<path>"
+enum_value_not_in_domain = "E-ENUM-UNKNOWN:<path>"
+cross_field_constraint = "E-CROSS-FIELD:<rule id>"
+string_over_max_chars = "E-VALUE-TOO-LONG:<path>"
+malformed_scalar = "E-VALUE-MALFORMED:<path>"
+unknown_key = "E-UNKNOWN-KEY (already exists)"
+message_shape = "names the field, the value found, the values allowed, and the fix (manifest-schema.md: 'every failure produces an actionable message naming the field and the fix')"
+
+[validation.required_list]
+ratified = "2026-09-22"
+count = 22
+note = "The prose marks 20 rows 'Req: yes'. Ratified at 22: the two extras are state.schema_id and state.schema_version (prose §7 has no Req column but says 'required; serialisation is mandatory for every module') and resources.latency (implied by module-api-v1 §8 and by the existence of E-LATENCY-UNDECLARED). Required-ness determines which E-KEY-MISSING codes exist, so the list is now explicit rather than inferred."
+
+[validation.gaps.G8]
+severity = "ACCEPTED 2026-09-22 — adopt the derivation rule below; no code starts without it"
+finding = "No code exists for a missing required field."
+evidence = "20 fields are marked required across the schema tables; the only two *-MISSING codes are E-STATE-SCHEMA-MISSING and E-SIGNATURE-MISSING, both field-specific. E-UNKNOWN-KEY catches extras; nothing catches omissions."
+why_it_blocks = "WO-007 acceptance requires validation to reject 'missing required ports' with an actionable message. As the catalogue stands that criterion is unmeetable."
+proposal = "adopt the derivation rule above, or at minimum add E-KEY-MISSING:<path> before any validator code is written."
+
+[validation.gaps.G9]
+severity = "ACCEPTED 2026-09-22 — adopt the derivation rule below; no code starts without it"
+finding = "No code exists for an invalid enum value in general."
+evidence = "Five specific unknown-value codes exist (port type, unit, channel set, ambi order, widget kind). Roughly 20 further enum fields — classification.top/kind/tier/stability, direction, cv rate/range, event_kinds, read/stale policy, multiplicity, param type, curve, smoothing, morph, dtype, interpolation, rate_class, clock_domain, voices.policy, size_class, cpu_class, oversampling, touch_class, package_format, channel — have none. A manifest declaring tier = 't9' has no error code to produce."
+why_it_blocks = "The acceptance criterion says validation rejects unknown port types 'each with an actionable error message'; the spirit of the criterion (and the closed-set rule of ADR-005) covers every closed vocabulary, not one of them."
+proposal = "E-ENUM-UNKNOWN:<path> from the derivation rule."
+
+[validation.gaps.G10]
+severity = "RESOLVED 2026-09-22 — decision: sub-block processing is forbidden in v0"
+finding = "manifest-schema.md §8 already declares resources.internal_rate ('optional sub-block rate') while module-api-v1.md §16 Q2 lists sub-block processing as an open question ('allowed via an internal rate declaration, or forbidden in v1?')."
+why_it_matters = "The schema pre-committed to the answer the contract doc says is undecided. The granular-cloud row of the §14 paper test is a checkmark that rests on Q2. One of the two documents is wrong and they must be reconciled before code, or the validator will accept a field whose semantics nobody has agreed on."
+resolution = "Q2 answered: forbidden in v0. internal_rate is REMOVED from the schema. Grain onsets stay sample-accurate regardless (§9 pre-sorts events by sample offset and the module renders into the block buffer), so the granular paper-test verdict stands; what v0 gives up is parameter movement inside a block, and the remedy for that is a smaller host block, not a contract change. See WO007-TASK1-REVIEW.md §0."

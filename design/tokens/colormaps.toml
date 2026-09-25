@@ -1,0 +1,129 @@
+# sparq design tokens — colour maps (scientific visualisation)
+# Version 0.1.0 · used by spectrograms, sonograms, heat maps, vector fields, density plots
+#
+# Rules:
+#   1. Every map is perceptually ordered (monotonic lightness) unless explicitly diverging.
+#   2. Every default map has a colour-blind-safe alternative with the same name + ".cb".
+#   3. Maps are defined as ordered stops in oklch where possible; the generator bakes a 256-entry LUT.
+#   4. A map is chosen by DATA MEANING, not by taste: magnitude -> sequential, signed -> diverging,
+#      category -> qualitative. The UI offers only the maps valid for the data kind.
+
+[meta]
+schema = "sparq.tokens.colormap"
+version = "0.1.0"
+default_magnitude = "phosphor"
+default_signed = "bipolar"
+default_category = "categorical-6"
+
+# ---------------------------------------------------------------- sequential (magnitude / density)
+[phosphor]                      # default: matches the identity, reads as an oscilloscope plate
+kind = "sequential"
+space = "oklch"
+stops = [
+  # `rgb` is the canonical value (hand-tuned phosphor identity); `l/c/h` are oklch derived from it,
+  # published so authors can reason about lightness ramps and so the generator can interpolate in oklab.
+  { at = 0.00, rgb = "#05070A", l = 0.127, c = 0.009, h = 253.7 },
+  { at = 0.25, rgb = "#4A3410", l = 0.343, c = 0.059, h = 76.4  },
+  { at = 0.50, rgb = "#B57A22", l = 0.626, c = 0.122, h = 71.7  },
+  { at = 0.75, rgb = "#FFB347", l = 0.821, c = 0.149, h = 72.1  },
+  { at = 0.95, rgb = "#FFE9C4", l = 0.943, c = 0.054, h = 80.7  },
+  { at = 1.00, rgb = "#FFFBF4", l = 0.989, c = 0.010, h = 81.8  },
+]
+gamma = 1.0
+note = "Use with log magnitude scaling for audio spectra."
+
+[phosphor.cb]
+kind = "sequential"
+note = "deuteranopia/protanopia-safe: identical lightness ramp, hue restricted to blue->green->yellow"
+stops = [
+  { at = 0.00, rgb = "#05070A", l = 0.127, c = 0.009, h = 253.7 },
+  { at = 0.30, rgb = "#2A3A52", l = 0.346, c = 0.047, h = 258.3 },
+  { at = 0.60, rgb = "#7E8C6A", l = 0.619, c = 0.052, h = 126.1 },
+  { at = 0.85, rgb = "#E8D08A", l = 0.862, c = 0.093, h = 91.3  },
+  { at = 1.00, rgb = "#FFFBEF", l = 0.988, c = 0.016, h = 91.5  },
+]
+
+[greyscale]
+kind = "sequential"
+stops = [ { at = 0.0, rgb = "#05070A" }, { at = 1.0, rgb = "#F2F6FA" } ]
+note = "for printing, documentation, and when colour would mislead"
+
+[thermal]
+kind = "sequential"
+note = "non-default; permitted for density/heat displays where the audience expects it"
+stops = [
+  { at = 0.00, rgb = "#05070A" },
+  { at = 0.35, rgb = "#5C1A2A" },
+  { at = 0.65, rgb = "#C64A22" },
+  { at = 0.88, rgb = "#F2B347" },
+  { at = 1.00, rgb = "#FFF3D6" },
+]
+
+[inferno-class]
+kind = "sequential"
+note = "perceptually uniform reference map (viridis family); used for analysis where accuracy beats identity"
+stops = [
+  { at = 0.00, rgb = "#000004" },
+  { at = 0.25, rgb = "#57106E" },
+  { at = 0.50, rgb = "#BC375A" },
+  { at = 0.75, rgb = "#F98E09" },
+  { at = 1.00, rgb = "#FCFFA4" },
+]
+
+# ---------------------------------------------------------------- diverging (signed values: CV, correlation, pitch deviation)
+[bipolar]
+kind = "diverging"
+mid = 0.5
+stops = [
+  { at = 0.00, rgb = "#4FD8E8", l = 0.815, c = 0.118, h = 206.1 },   # negative extreme = cv cyan
+  { at = 0.50, rgb = "#0C1015", l = 0.171, c = 0.012, h = 254.2 },   # zero = panel ground
+  { at = 1.00, rgb = "#FFB347", l = 0.821, c = 0.149, h = 72.1  },   # positive extreme = audio amber
+]
+note = "Zero always maps to the ground colour, so silence and neutrality look like the background."
+
+[bipolar.cb]
+kind = "diverging"
+stops = [
+  { at = 0.00, rgb = "#6FB3D9" },
+  { at = 0.50, rgb = "#0C1015" },
+  { at = 1.00, rgb = "#E0A458" },
+]
+
+# ---------------------------------------------------------------- qualitative (categories: streams, tracks, scene groups)
+[categorical-6]
+kind = "qualitative"
+values = ["#FFB347", "#4FD8E8", "#FF5FA2", "#8BE36A", "#A98CFF", "#FFCC4D"]
+note = """
+Order matters: the first five ARE the signal classes, so a category colour never contradicts a signal
+colour. The sixth (warning yellow) is reserved. A seventh category is a design error - merge or facet.
+"""
+
+[categorical-6.cb]
+kind = "qualitative"
+values = ["#E8C170", "#7FD4E0", "#E08AB0", "#A8D48F", "#B4A3E8", "#E8D88A"]
+note = "lightness-separated so it survives greyscale printing; pair with the label/dash encoding always"
+
+# ---------------------------------------------------------------- domain-specific
+[spectrum.magnitude]
+map = "phosphor"
+scale = "log"
+range_db = [-120, 0]
+
+[spectrum.sonogram]
+map = "phosphor"
+scale = "log"
+time_axis = "left-to-right, newest at right"
+freq_axis = "bottom-to-top, log by default, linear optional"
+
+[scope.trace]
+colour = "signal.audio"
+background = "ground.inset"
+grid = "hairline.faint"
+
+[rig_map.heat]
+map = "thermal"
+note = "per-speaker level heat on the overhead rig map"
+
+[dna_tree.depth]
+map = "greyscale"
+note = "lineage depth encoded by lightness, never by hue - the tree must read in monochrome"

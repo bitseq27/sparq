@@ -1,0 +1,52 @@
+# sparq design tokens — motion & glow
+# Version 0.1.0
+
+[meta]
+schema = "sparq.tokens.motion"
+version = "0.1.0"
+
+# ---------------------------------------------------------------- durations
+[duration]
+instant = 60     # state flips: bypass, mute, latch
+fast    = 120    # default UI transition
+base    = 180    # panel open/close, selection morph
+slow    = 320    # scene crossfade visual, dialog
+morph_min = 120  # scene/preset morph range (musical, user-set)
+morph_max = 2000
+
+# ---------------------------------------------------------------- curves
+[curve]
+default          = "critically-damped"   # no overshoot, ever. settle within duration
+exp_out          = "cubic-bezier(0.16, 1, 0.3, 1)"
+exp_in_out        = "cubic-bezier(0.65, 0, 0.35, 1)"
+linear           = "linear"              # meters, traces, transport-driven motion only
+# forbidden: bounce, elastic, back, any overshoot > 0%
+
+# ---------------------------------------------------------------- frame budget
+[frame]
+ui_min_fps           = 60
+ui_target_fps        = 120      # where the panel supports it
+visual_full_bleed_fps = 60
+max_frame_time_ms    = 16.6
+audio_thread_cost_ms = 0        # visual work must never touch the audio thread (hard rule)
+hud_visible_in_debug = true     # frame-time histogram is a first-class diagnostic
+
+# ---------------------------------------------------------------- trace & phosphor behaviour
+[trace]
+redraw              = "per-frame"
+persistence_mode    = ["off", "short", "long"]
+persistence_half_life_ms = 300     # short = 120, long = 900
+glow_pass           = true
+glow_radius_px_max  = 12
+glow_intensity_law  = "amplitude^1.5, clamped"   # glow is data: it encodes level, never decoration
+glow_min_level_db   = -60          # below this, no glow (keeps silence visually silent)
+bloom_threshold     = 0.7
+
+# ---------------------------------------------------------------- reduce-motion / accessibility
+[accessibility]
+reduce_motion      = true    # disables non-essential transitions; traces and meters always animate
+reduce_glow        = true    # disables the bloom pass
+high_contrast      = true    # see colors.toml [theme.contrast-high]
+type_scale_max     = 2.0
+focus_ring         = { width = 2, colour = "text.primary", style = "solid" }   # keyboard navigation must be visible
+non_colour_encoding_required = true   # every state that uses colour also uses shape, dash pattern or label

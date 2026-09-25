@@ -1,0 +1,53 @@
+# sparq module manifest — syn/sine (WO-014 increment 1).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+# This file is THE manifest: it is discovered from disk by `sparq modules` and compiled into the
+# binary by `sparq-audio::modules` (include_str!) — one copy, two consumers, no drift.
+
+[identity]
+id = "sparq/syn/sine"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Sine"
+summary = "Exact-frequency sine oscillator"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "synth/oscillator/sine"
+top = "syn"
+kind = "source"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "out"
+name = "Output"
+direction = "out"
+type = "audio"
+channel_set = "mono"
+
+[[params]]
+id = "freq"
+name = "Frequency"
+type = "float"
+unit = "Hz"
+min = 0.0
+max = 24000.0
+default = 440.0
+
+[[params]]
+id = "amp"
+name = "Amplitude"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 1.0
+default = 0.5
+
+[state]
+schema_id = "sparq/syn/sine/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "trivial"

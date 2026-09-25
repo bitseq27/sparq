@@ -1,0 +1,67 @@
+[package]
+name = "sparq-kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "sparq real-time kernel: block context, RT discipline, lock-free rings, null device, HAL, clocks"
+
+[dependencies]
+
+[features]
+default = []
+# WO-006: the real Windows audio backends (WASAPI exclusive event-driven + shared). Off by
+# default so the core build stays zero-dependency and CI on Linux/macOS runners stays hermetic.
+# The `windows` crate is a target-specific dependency: it only ever compiles on Windows, so
+# enabling this feature elsewhere is a harmless no-op (the module is cfg(windows) as well).
+hal-wasapi = ["dep:windows-sys"]
+
+# Target-specific: raw Microsoft bindings (`windows-sys`) are the lightest sanctioned way to
+# talk COM from Rust (ADR-001: no C++ shims we do not own; ADR-008: cpal stays disposable and
+# bootstrap-only). `optional = true` keeps it out of every default build; the feature above is
+# the only door. `windows-sys` rather than `windows` because the high-level crate's generated
+# wrappers exceed our 1 GB CI/sandbox memory budget; the typed COM wrappers in hal/wasapi.rs
+# carry the ergonomics instead, with every unsafe explicit and allowlisted.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_System_Threading",
+] }
+
+# NOTE: no `[lints] workspace = true` here. Cargo forbids combining inheritance with overrides, and
+# this crate must relax `unsafe_code` (ADR-000): it is the only crate permitted to contain `unsafe`,
+# and only inside the modules listed in docs/unsafe-allowlist.md.
+#
+# Why `warn` and not `deny`: rustc treats `deny(unsafe_code)` as a hard error that cannot be
+# lifted by an inner `#[allow]`, which is exactly what the allowlisted modules need. So the level
+# here is `warn`, each allowlisted module carries an explicit `#![allow(unsafe_code)]` naming the
+# ADR entry, and tools/unsafe_audit.py is the real gate (CI fails on any `unsafe` outside the list,
+# and on any allowlisted `unsafe` block without a `SAFETY:` comment).
+[lints.rust]
+unsafe_code = "warn"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "warn"
+todo = "deny"
+dbg_macro = "deny"
+print_stdout = "warn"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+missing_docs_in_private_items = "allow"
+module_name_repetitions = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+similar_names = "allow"
+many_single_char_names = "allow"
+read_zero_byte_vec = "allow"

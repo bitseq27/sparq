@@ -1,0 +1,30 @@
+EXTRACT AT THE REPO ROOT:  Q:\morphosis\code\sparq
+=====================================================
+
+This zip is sync-wo013-inc2b. Extract it over the existing tree and choose
+"Replace the files in the destination" for every prompt. Do not extract into a
+subfolder, and do not git clone onto this machine (defect #71: an extraction here
+once produced a stray `decode (2).rs` instead of overwriting, and the stray
+poisoned the build stamp).
+
+THEN, BEFORE ANYTHING ELSE - ten seconds, no build:
+
+    scripts\synccheck.bat
+
+It hashes every file that decides what the binary is against SYNC-STAMP.txt and
+names anything that differs. Expected: "sync_check: OK - sync wo013-inc2b".
+That single line is the difference between this run and the last one, which
+failed with six rustc errors about methods that were sitting in the file on disk
+(defect #78).
+
+THEN the acceptance run:
+
+    scripts\test005.bat
+
+and send back ONE file:  Q:\morphosis\code\sparq\test005.log
+
+Full instructions, expected output for every step, and what to do if a step
+fails: WO013-INC2B-RUN-SHEET.md in this zip.
+
+No product code moved in this increment. The build stamp is unchanged:
+src 80f/1348971B.

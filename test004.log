@@ -1,0 +1,149 @@
+
+===== test004 RUN 24/09/2026 21:36:27.62 on SATURN user bitseq =====
+ ================================================================
+ sparq test004 - WO-006 EXCLUSIVE acceptance run
+ increment 1.2: the exclusive ladder now speaks 24-in-32 - defect #77
+ at the end you send back ONE file: test004.log from the repo root
+ ================================================================
+ " "
+ [00] environment
+
+---- [RUN] os version ----
+
+Microsoft Windows [Version 10.0.19045.6216]
+---- [RC 0] os version ----
+ tree clean, no stray artefacts
+ " "
+ [01] PREP - same discipline as the last rounds:
+ 1. UMC 204HD plugged, powered, and the DEFAULT playback device - OUT 1-2.
+ 2. Its Properties, Advanced tab: BOTH exclusive-control boxes ticked.
+ 3. Every other audio app closed - an app holding the device turns
+ exclusive into a Busy refusal.
+ 4. Power plan HIGH PERFORMANCE, sleep NEVER, no downloads/updates queued.
+ 5. Monitors DOWN - every play step and the soak make sound.
+ Press any key when ready.
+ operator confirmed prep complete
+ " "
+ [02] build - the sync must have landed: the stamp's BYTE COUNT changes
+ from 75f/1218171B because wasapi.rs grew the ladder. If the guard
+ says stale and rebuilds, that is the zip-sync freshness trap - normal.
+
+---- [RUN] build via scripts\build.bat - includes the stamp guard ----
+ building sparq.exe (release, hal-wasapi + bootstrap-audio + ui-window) ...
+ first build takes a few minutes (wgpu is big); later builds are incremental.
+
+   Compiling sparq-kernel v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-kernel)
+   Compiling sparq-app v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-app)
+   Compiling sparq-module-api v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-module-api)
+   Compiling sparq-audio v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-audio)
+   Compiling sparq-ui v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-ui)
+    Finished `release` profile [optimized + debuginfo] target(s) in 21.21s
+ stamp guard: sources 75f/1226586B  -  binary 75f/1226586B
+
+sparq 0.0.0-phase0 · newest source 20720 d since epoch · src 75f/1226586B
+  module api v0 (unfrozen) · kernel 0.0.0-phase0
+
+  If that source stamp is older than your last sync, this binary is stale.
+  Fix: run scripts\build.bat, or delete target\release\sparq.exe.
+
+ built: Q:\morphosis\code\sparq\target\release\sparq.exe
+ size : 9470464 bytes
+
+ next:  scripts\devices.bat   then   scripts\run.bat
+
+ log saved to Q:\morphosis\code\sparq\scripts\..\logs\build.log
+---- [RC 0] build via scripts\build.bat - includes the stamp guard ----
+
+---- [RUN] version stamp ----
+sparq 0.0.0-phase0 · newest source 20720 d since epoch · src 75f/1226586B
+  module api v0 (unfrozen) · kernel 0.0.0-phase0
+
+  If that source stamp is older than your last sync, this binary is stale.
+  Fix: run scripts\build.bat, or delete target\release\sparq.exe.
+---- [RC 0] version stamp ----
+ " "
+ [03] capabilities - CHECKPOINT: the Behringer endpoints should now list
+ exclusive rates instead of "exclusive none". If they still say none,
+ the four-rung ladder found no format the driver accepts - the [04]
+ probe table will say exactly which HRESULT each rung got.
+
+---- [RUN] devices --caps ----
+sparq devices — HAL backends in this build: null, wasapi-exclusive, wasapi-shared
+  (asio: not compiled in — WO-006 increment 2; requesting it will say so, not fake it)
+
+[null] null (virtual device)
+  out [0] sparq Null Device (deterministic, 64 ch)  <- default
+        rates 8000..384000 · exclusive 44100,48000,88200,96000,176400,192000,384000 · out 1..64 ch · in 0..64 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex true · f32 native true · hw period 1.000 ms
+
+[wasapi-exclusive] WASAPI exclusive (event-driven)
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  out [0] <endpoint 3>  <- default
+        id: {0.0.0.00000000}.{d8db3e5b-5bef-49f3-97cf-1dde49343f42}
+        rates 96000 · exclusive 96000 · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [1] <endpoint 1>
+        id: {0.0.0.00000000}.{1e9f6bf9-a4b9-4df4-971b-4a8231f24af4}
+        rates 96000 · exclusive 96000 · out 4..4 ch · in 0..0 ch · default 96000 Hz/4 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [2] <endpoint 2>
+        id: {0.0.0.00000000}.{593c4844-1f18-4eda-8318-5b50490b2b57}
+        rates 96000 · exclusive 96000 · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [3] <endpoint 0>
+        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+        rates 48000 · exclusive 48000 · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [4] <endpoint 4>
+        id: {0.0.0.00000000}.{fed48ab8-f7ab-4474-80a0-b368fd74b809}
+        rates 48000 · exclusive 48000 · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+
+[wasapi-shared] WASAPI shared (event-driven)
+  out [0] <endpoint 3>  <- default
+        id: {0.0.0.00000000}.{d8db3e5b-5bef-49f3-97cf-1dde49343f42}
+        rates 96000 · exclusive none · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [1] <endpoint 1>
+        id: {0.0.0.00000000}.{1e9f6bf9-a4b9-4df4-971b-4a8231f24af4}
+        rates 96000 · exclusive none · out 4..4 ch · in 0..0 ch · default 96000 Hz/4 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [2] <endpoint 2>
+        id: {0.0.0.00000000}.{593c4844-1f18-4eda-8318-5b50490b2b57}
+        rates 96000 · exclusive none · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [3] <endpoint 0>
+        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [4] <endpoint 4>
+        id: {0.0.0.00000000}.{fed48ab8-f7ab-4474-80a0-b368fd74b809}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+
+---- [RC 0] devices --caps ----
+ " "
+ [04] WASAPI EXCLUSIVE playback - a 10 s 220 Hz tone at -12 dB.
+ The open line names the rung: f32, i24-in-32, i32 or i16.
+ For the UMC 204HD the expectation is i24-in-32 with conversion.
+ Press any key when ready.
+
+---- [RUN] play wasapi-exclusive 10s ----
+sparq play · HAL path (WO-006) · backend wasapi-exclusive
+  sparq       0.0.0-phase0 · newest source 20720 d since epoch · src 75f/1226586B
+
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  output devices:
+    [0] <endpoint 3> <- default
+    [1] <endpoint 1>
+    [2] <endpoint 2>
+    [3] <endpoint 0>
+    [4] <endpoint 4>
+  using       [0] <endpoint 3>
+  adjusted    rate 48000 Hz -> 96000 Hz (this device does not list 48000 Hz; `sparq devices --caps` shows what it does)
+sparq: open failed: device error: Initialize (exclusive): HRESULT 0x88890020
+---- [RC 2] play wasapi-exclusive 10s ----
+ HINT: the probe table in the error names each rung's HRESULT.
+ Busy means another app holds the device; Format means no rung fits.
+ Send the log back either way - the table IS the diagnosis.
+ did you hear a clean 10-second tone [y/n]
