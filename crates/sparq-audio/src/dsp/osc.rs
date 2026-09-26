@@ -177,6 +177,14 @@ impl PolyBlepOsc {
         self.phase
     }
 
+    /// Set the phase directly, wrapped into `[0, 1)` — the state-restore counterpart of
+    /// [`PolyBlepOsc::phase`], so a project save/restore lands phase-continuous (the same
+    /// promise `syn/sine`'s 8-byte state makes). The partial table is a function of freq/shape,
+    /// not phase, so nothing rebuilds here.
+    pub fn set_phase(&mut self, phase: f64) {
+        self.phase = phase.rem_euclid(1.0);
+    }
+
     /// Number of partials currently in use. Exposed so the CPU cost is visible rather than hidden.
     #[must_use]
     pub fn partial_count(&self) -> usize {
@@ -666,5 +674,17 @@ mod tests {
             }
         }
         assert!(peak < 1.5, "frequency sweep produced a peak of {peak}");
+    }
+
+    #[test]
+    fn set_phase_wraps_into_range_and_round_trips() {
+        let mut o = PolyBlepOsc::new(440.0, 1.0);
+        o.prepare(48_000);
+        o.set_phase(0.25);
+        assert_eq!(o.phase(), 0.25);
+        o.set_phase(1.25);
+        assert!((o.phase() - 0.25).abs() < 1e-12, "wraps down into [0, 1)");
+        o.set_phase(-0.25);
+        assert!((o.phase() - 0.75).abs() < 1e-12, "negative wraps up");
     }
 }

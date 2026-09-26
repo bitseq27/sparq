@@ -1,0 +1,232 @@
+@echo off
+REM ===========================================================================
+REM  sparq test006 - WO-013 inc3: browser, inspector, wire re-patch on SATURN.
+REM
+REM  THE CONTRACT: one file from Qwen - this script. Run it, answer the prompts,
+REM  send back ONE file: test006.log from the repo root - plus logs\ui.log if
+REM  the window session ran.
+REM
+REM  WHY. Increment 3 is sandbox-green - 518 tests, audit PASS with 19 smokes,
+REM  goldens unchanged. What the sandbox CANNOT prove: real fingers on the
+REM  browser sheet, the slider following a real drag, the wire-end rings under
+REM  a real touch, and - the one mechanical claim this script makes - that an
+REM  INSPECTOR EDIT REACHES THE RENDER. For that: step [04] leaves a baseline
+REM  canvas-render.wav rendered at manifest defaults; step [06] asks you to
+REM  edit a param in the window and render again; step [07] hashes both. Same
+REM  hash = the slider is a lie, and this script says so in words.
+REM
+REM  SAFE TO RE-RUN: the log appends with a dated banner per run.
+REM
+REM  Rules honoured - tools/check_text_io.py: pure ASCII - rule 3, defect
+REM  #42 - and no unescaped parens in echo text inside blocks - rule 4,
+REM  defect #69.
+REM ===========================================================================
+setlocal EnableDelayedExpansion
+set "TVER=006"
+title sparq test%TVER%
+chcp 65001 >nul 2>&1
+cd /d "%~dp0.."
+
+if not exist "scripts\build.bat" (
+    echo  test%TVER%.bat must sit in the scripts folder of the sparq repo.
+    echo  Move it there and run it again.
+    pause
+    exit /b 1
+)
+
+set "LOG=%CD%\test%TVER%.log"
+set "TMPF=%CD%\_test%TVER%.tmp"
+set "FAILED=0"
+del "%TMPF%" >nul 2>&1
+del canvas-render.wav >nul 2>&1
+del canvas-render-baseline.wav >nul 2>&1
+del exec.wav >nul 2>&1
+
+>>"%LOG%" echo.
+>>"%LOG%" echo ===== test%TVER% RUN %DATE% %TIME% on %COMPUTERNAME% user %USERNAME% =====
+
+call :say ================================================================
+call :say  sparq test%TVER% - WO-013 increment 3: browser, inspector, re-patch
+call :say  at the end you send back ONE file: test%TVER%.log from the repo root
+call :say ================================================================
+
+REM ---- [00] environment ----------------------------------------------------
+call :say " "
+call :say [00] environment
+set "CMD=ver"
+call :run "os version"
+if exist "crates\sparq-module-api\src\decode (2).rs" (
+    call :say WARNING: stray decode copy artefact present - delete when convenient.
+) else (
+    call :say tree clean, no stray artefacts
+)
+
+REM ---- [00b] the sync stamp --------------------------------------------------
+call :say " "
+call :say [00b] sync stamp - every file that decides the binary, hashed against
+call :say       SYNC-STAMP.txt. A FAIL here names files; it is never a rustc error.
+set "PY="
+where python >nul 2>&1 && set "PY=python"
+if not defined PY where py >nul 2>&1 && set "PY=py"
+if defined PY (
+    set "CMD=!PY! tools\sync_check.py"
+    call :run "sync check - tools\sync_check.py"
+    set "RC00=!RC!"
+) else (
+    set "RC00=SKIP"
+    call :say sync check SKIPPED - no `python` or `py` on PATH. That is a cannot-run,
+    call :say not a pass: the tree stays unverified. build.bat will say the same.
+)
+
+REM ---- [01] build + stamp ---------------------------------------------------
+call :say " "
+call :say [01] build - the five first-party crates always recompile now, so that a
+call :say      zip-restored mtime can never serve the last increment's rlib.
+set "CMD=call scripts\build.bat"
+call :run "build via scripts\build.bat - sync check, fingerprint purge, stamp guard"
+set "RC01=!RC!"
+if not "!RC01!"=="0" (
+    call :say BUILD FAILED - send test%TVER%.log back now.
+    goto summary
+)
+set "CMD=target\release\sparq.exe version"
+call :run "version stamp"
+
+REM ---- [02] modules --strict -------------------------------------------------
+call :say " "
+call :say [02] module registry - the three manifests, strict
+set "CMD=target\release\sparq.exe modules --strict"
+call :run "modules --strict"
+set "RC02=!RC!"
+
+REM ---- [03] offline exec render -----------------------------------------------
+call :say " "
+call :say [03] offline render - the exec demo chain, 5 s, no device
+set "CMD=target\release\sparq.exe exec --out exec.wav --seconds 5"
+call :run "exec --out exec.wav --seconds 5"
+set "RC03=!RC!"
+
+REM ---- [04] the canvas bridge via the audit --------------------------------------
+call :say " "
+call :say [04] canvas bridge - the audit drives synthetic touch through 19 smokes,
+call :say      including the three new ones: browser spawn, inspector slider with
+call :say      undo, wire-end re-patch with undo. Its RENDER WAV smoke writes
+call :say      canvas-render.wav at MANIFEST DEFAULTS - the baseline for step [07].
+set "CMD=target\release\sparq.exe ui --audit"
+call :run "ui --audit - 19 smokes incl. browser, inspector, re-patch, render chain"
+set "RC04=!RC!"
+
+REM ---- [05] baseline hash --------------------------------------------------------
+call :say " "
+call :say [05] baseline - hash the default-param render and keep a copy to A/B listen
+set "H1=missing"
+if exist canvas-render.wav (
+    copy /y canvas-render.wav canvas-render-baseline.wav >nul
+)
+if exist canvas-render.wav set "CMD=certutil -hashfile canvas-render.wav SHA256"
+if exist canvas-render.wav call :run "baseline canvas-render.wav hash"
+if not exist canvas-render.wav call :say canvas-render.wav MISSING - step 04 did not write; step 07 will say CANNOT-CHECK.
+if exist canvas-render.wav for /f "usebackq skip=1 delims=" %%h in (`certutil -hashfile canvas-render.wav SHA256`) do set "H1=%%h"
+
+REM ---- [06] the window session - real fingers --------------------------------------
+call :say " "
+call :say [06] WINDOW SESSION - the window opens when you press a key. In it:
+call :say      A. long-press the EMPTY canvas - tap ADD MODULE - type sine on the
+call :say         keyboard - tap the Sine row. A Sine node appears where you pressed.
+call :say      B. tap the new Sine node - the INSPECTOR shows Frequency and
+call :say         Amplitude - drag the Frequency slider. The value follows your
+call :say         finger; the log band reports Frequency = ... Hz when you lift.
+call :say      C. long-press the empty canvas - tap RENDER WAV. This overwrites
+call :say         canvas-render.wav WITH YOUR EDIT - step [07] hashes it.
+call :say      D. drag the small ring near a wire END onto another port - the wire
+call :say         moves. Three-finger tap - it returns, same wire.
+call :say      E. three-finger tap again - the slider drag undoes, value returns.
+call :say      Then close the window; the script continues by itself.
+call :say      Over RDP the rasteriser is WARP - slow but functional; the 60 fps
+call :say      claim waits for the physical screen, as always.
+set /p "GO=      press Enter to open the window: "
+call :say operator opened the window session
+call scripts\ui.bat
+call :say window closed - ui.log saved by ui.bat
+
+set "A=n"
+set "B=n"
+set "C=n"
+set "D=n"
+set "E=n"
+set /p "A=      A: browser search spawned the Sine node where you pressed, y/n? "
+set /p "B=      B: the slider followed your finger and the log named the value, y/n? "
+set /p "C=      C: you tapped RENDER WAV after the edit, y/n? "
+set /p "D=      D: the wire end moved and one three-finger tap restored it, y/n? "
+set /p "E=      E: a second three-finger tap undid the slider edit, y/n? "
+call :say operator answers: A=!A! B=!B! C=!C! D=!D! E=!E!
+
+REM ---- [07] the mechanical claim: the edit reached the render ----------------------
+call :say " "
+call :say [07] evidence - hash canvas-render.wav again; it MUST differ from the
+call :say      baseline if step C ran and the inspector is wired to the bridge.
+set "H2=missing"
+set "CHG=CANNOT-CHECK"
+if exist canvas-render.wav set "CMD=certutil -hashfile canvas-render.wav SHA256"
+if exist canvas-render.wav call :run "edited canvas-render.wav hash"
+if exist canvas-render.wav for /f "usebackq skip=1 delims=" %%h in (`certutil -hashfile canvas-render.wav SHA256`) do set "H2=%%h"
+if not "!H1!"=="missing" if not "!H2!"=="missing" if not "!H1!"=="!H2!" set "CHG=CHANGED"
+if not "!H1!"=="missing" if not "!H2!"=="missing" if "!H1!"=="!H2!" set "CHG=UNCHANGED"
+call :say baseline hash: !H1!
+call :say edited   hash: !H2!
+call :say render hash verdict: !CHG!
+if "!CHG!"=="UNCHANGED" call :say  - you answered C=!C!. If C=y this is a DEFECT: the slider did not
+if "!CHG!"=="UNCHANGED" call :say    reach the render. Send the log back; the bridge is lying.
+
+REM ---- [08] summary --------------------------------------------------------------
+:summary
+call :say " "
+call :say ================================================================
+call :say  SUMMARY - test%TVER% - %DATE% %TIME%
+call :say ================================================================
+if defined RC00 call :verdict "[00b] tree matches SYNC-STAMP.txt" "!RC00!"
+if defined RC01 call :verdict "[01] build + stamp guard" "!RC01!"
+if defined RC02 call :verdict "[02] modules --strict" "!RC02!"
+if defined RC03 call :verdict "[03] exec offline render" "!RC03!"
+if defined RC04 call :verdict "[04] ui --audit, 19 smokes" "!RC04!"
+call :say [07] param edit reached the render : !CHG!
+call :say operator answers: A=!A! B=!B! C=!C! D=!D! E=!E!
+call :say steps failing on rc: !FAILED!
+call :say " "
+call :say SEND BACK: %LOG%  and  logs\ui.log
+call :say ================================================================
+echo.
+echo  done - you can close this window.
+del "%TMPF%" >nul 2>&1
+pause
+exit /b 0
+
+REM ============================== subroutines ==============================
+
+:say
+echo  %*
+>>"%LOG%" echo  %*
+exit /b 0
+
+:run
+REM CMD = the command line to execute; %1 = label for the log banners.
+echo.
+echo  ---- [RUN] %~1 ----
+>>"%LOG%" echo.
+>>"%LOG%" echo ---- [RUN] %~1 ----
+%CMD% > "%TMPF%" 2>&1
+set "RC=!ERRORLEVEL!"
+type "%TMPF%"
+type "%TMPF%" >> "%LOG%"
+echo  ---- [RC !RC!] %~1 ----
+>>"%LOG%" echo ---- [RC !RC!] %~1 ----
+exit /b 0
+
+:verdict
+set "V=FAIL"
+if "%~2"=="0" set "V=PASS"
+if "%~2"=="" set "V=NOT-RUN"
+if "%~2"=="SKIP" set "V=SKIP"
+call :say %~1 : !V! rc=%~2
+if "!V!"=="FAIL" set /a FAILED+=1
+exit /b 0

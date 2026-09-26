@@ -82,6 +82,7 @@ if "!HAVE_PY!"=="1" (
     call :run "tokens up to date"   "!PY! tools\token_gen.py --check --quiet"
     call :run "design conformance"  "!PY! tools\token_audit.py"
     call :run "unsafe allowlist"    "!PY! tools\unsafe_audit.py"
+    call :run "module docs generated" "!PY! tools\module_docs.py --check"
 ) else (
     echo.
     echo  [SKIP] python gates: no `python` or `py` on PATH ^(install Python 3.11+^)

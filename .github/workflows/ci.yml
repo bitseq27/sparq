@@ -43,6 +43,11 @@ jobs:
       - name: unsafe is allowlisted, exempted and justified
         run: python3 tools/unsafe_audit.py
 
+      # WO-014 acceptance: module docs are generated from the manifests, never hand-written
+      # duplicates. Python 3.11's tomllib reads the same bytes discovery and include_str! read.
+      - name: module docs match their manifests
+        run: python3 tools/module_docs.py --check
+
       # The sync gate proves itself rather than being trusted: 11 cases, including defect #78's
       # exact shape (content changed while the mtime went backwards, which is what a zip does).
       # The verify mode is deliberately NOT run here - it would require regenerating SYNC-STAMP.txt

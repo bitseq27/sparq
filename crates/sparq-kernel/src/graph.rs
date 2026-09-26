@@ -220,6 +220,25 @@ pub struct Graph {
     /// How many times the sort actually ran — the observable proof that the cache works
     /// (ADR-009 decision 1: "recomputed only when the version changes").
     order_computes: u64,
+    /// The per-path latency map (task 5), cached on the same discipline as the order — with one
+    /// extra key: `set_latency` is a DATA edit that deliberately does not bump the version, so
+    /// the cache also keys on a private edit counter, or it would serve numbers it just watched
+    /// change. `block_frames` is a key because `BlockDelay` contributions are measured in it.
+    latency_cache: Option<LatencyCache>,
+    /// Bumped by every successful `set_latency` (the cache key above).
+    latency_edits: u64,
+    /// How many times the latency map actually recomputed — the order cache's observable proof,
+    /// applied to the second cached computation.
+    latency_computes: u64,
+}
+
+/// One latency-cache entry: the keys it was computed under and the map itself.
+#[derive(Clone, Debug)]
+struct LatencyCache {
+    version: u64,
+    edits: u64,
+    block_frames: u32,
+    map: Vec<(NodeId, u32)>,
 }
 
 impl Default for Graph {
@@ -240,6 +259,9 @@ impl Graph {
             next_edge: 0,
             order_cache: None,
             order_computes: 0,
+            latency_cache: None,
+            latency_edits: 0,
+            latency_computes: 0,
         }
     }
 
@@ -325,6 +347,10 @@ impl Graph {
         match self.nodes.iter_mut().find(|n| n.id == id) {
             Some(n) => {
                 n.latency_samples = latency_samples;
+                // Data edit: the version stays (the order cannot change), but the LATENCY cache
+                // keys on this counter, so the next read recomputes rather than serving the
+                // number it just watched change.
+                self.latency_edits = self.latency_edits.wrapping_add(1);
                 Ok(())
             },
             None => Err(GraphError::NoSuchNode(id)),
@@ -455,6 +481,97 @@ impl Graph {
             Some((_, o)) => Ok(o.as_slice()),
             None => Err(GraphError::OrderInvariantViolated),
         }
+    }
+
+    // ------------------------------------------------------------ per-path latency (task 5)
+
+    /// The per-path latency map, cached: for every node, the samples a signal arriving at its
+    /// OUTPUT has travelled — the node's own declared latency plus the maximum over its incoming
+    /// edges of (the source's path latency + the edge's delay). Computed in topological order, so
+    /// a node's number exists only once its sources' do; returned in execution order, matching
+    /// [`Self::order`].
+    ///
+    /// Two declared rules (ADR-006.6, plan §5.4):
+    /// * a `UnitDelay` edge contributes **1 sample**; a `BlockDelay` edge contributes
+    ///   `block_frames` — but `BlockDelay` edges are FEEDBACK edges, outside the topological
+    ///   order, so they do not contribute to the static path latency. A signal circling a
+    ///   feedback loop travels the delay once per circulation; that is the loop's sound, not a
+    ///   static readout, and pretending otherwise would be a number that cannot be true.
+    /// * sums saturate at `u32::MAX` — an honest ceiling beats a wrapped-around lie.
+    ///
+    /// The cache keys on (version, latency edits, block_frames): unlike the order, the latency
+    /// map watches a DATA field (`set_latency` deliberately does not bump the version), so it
+    /// needs its own edit counter or it would serve the number it just watched change.
+    ///
+    /// # Errors
+    /// Whatever [`Self::order`] reports (a cycle that slipped past `connect` — unreachable
+    /// through the checked API).
+    pub fn latency_map(&mut self, block_frames: u32) -> Result<&[(NodeId, u32)], GraphError> {
+        let stale = match &self.latency_cache {
+            Some(c) => {
+                c.version != self.version
+                    || c.edits != self.latency_edits
+                    || c.block_frames != block_frames
+            },
+            None => true,
+        };
+        if stale {
+            let order = self.order()?.to_vec();
+            let mut map: Vec<(NodeId, u32)> = Vec::with_capacity(order.len());
+            for id in &order {
+                let own =
+                    self.nodes.iter().find(|n| n.id == *id).map(|n| n.latency_samples).unwrap_or(0);
+                let mut incoming = 0u32;
+                for e in
+                    self.edges.iter().filter(|e| e.to.node == *id && e.kind != EdgeKind::BlockDelay)
+                {
+                    let edge_delay = if e.kind == EdgeKind::UnitDelay { 1 } else { 0 };
+                    // Sources precede this node in the order, so their numbers already exist.
+                    let src_lat =
+                        map.iter().find(|(n, _)| *n == e.from.node).map(|(_, l)| *l).unwrap_or(0);
+                    incoming = incoming.max(src_lat.saturating_add(edge_delay));
+                }
+                map.push((*id, own.saturating_add(incoming)));
+            }
+            self.latency_computes += 1;
+            self.latency_cache = Some(LatencyCache {
+                version: self.version,
+                edits: self.latency_edits,
+                block_frames,
+                map,
+            });
+        }
+        match self.latency_cache.as_ref() {
+            Some(c) => Ok(c.map.as_slice()),
+            None => Err(GraphError::OrderInvariantViolated),
+        }
+    }
+
+    /// One node's path latency in samples (see [`Self::latency_map`]).
+    ///
+    /// # Errors
+    /// [`GraphError::NoSuchNode`] when the node is gone; whatever `order` reports otherwise.
+    pub fn path_latency(&mut self, node: NodeId, block_frames: u32) -> Result<u32, GraphError> {
+        let found =
+            self.latency_map(block_frames)?.iter().find(|(id, _)| *id == node).map(|(_, l)| *l);
+        found.ok_or(GraphError::NoSuchNode(node))
+    }
+
+    /// The maximum path latency over all nodes, in samples — the alignment target the executor's
+    /// compensated mode delays every node up to, and the shell's "total latency" readout. Zero
+    /// for an empty graph.
+    ///
+    /// # Errors
+    /// Whatever [`Self::latency_map`] reports.
+    pub fn max_path_latency(&mut self, block_frames: u32) -> Result<u32, GraphError> {
+        Ok(self.latency_map(block_frames)?.iter().map(|(_, l)| *l).max().unwrap_or(0))
+    }
+
+    /// How many times the latency map actually recomputed — `order_computes`' twin for the
+    /// second cached computation.
+    #[must_use]
+    pub fn latency_computes(&self) -> u64 {
+        self.latency_computes
     }
 
     /// Kahn's algorithm over the plain-edge subgraph with a min-id frontier (`BTreeSet`), which
@@ -769,5 +886,101 @@ mod tests {
         assert!(msg.contains("cycle") && msg.contains("0 → 1 → 2"), "{msg}");
         let sl = GraphError::SelfLoop { node: NodeId(7) }.to_string();
         assert!(sl.contains("delay"), "the self-loop message names the remedy: {sl}");
+    }
+
+    // ------------------------------------------------------- task 5: per-path latency
+
+    #[test]
+    fn latency_reference_1_a_linear_chain_sums_the_declarations() {
+        // a(0) → b(128 declared) → c(7) — hand-computed: lat(a)=0, lat(b)=128, lat(c)=135.
+        let mut g = Graph::new();
+        let a = g.add_node(0);
+        let b = g.add_node(128);
+        let c = g.add_node(7);
+        ab(&mut g, a, b).unwrap();
+        ab(&mut g, b, c).unwrap();
+        assert_eq!(g.path_latency(a, 64).unwrap(), 0);
+        assert_eq!(g.path_latency(b, 64).unwrap(), 128);
+        assert_eq!(g.path_latency(c, 64).unwrap(), 135);
+        assert_eq!(g.max_path_latency(64).unwrap(), 135);
+    }
+
+    #[test]
+    fn latency_reference_2_a_diamond_takes_the_slow_arm() {
+        // s(0) → x(64) → m(10) and s → y(0) → m — hand-computed: lat(m) = 10 + max(64, 0) = 74.
+        let mut g = Graph::new();
+        let s = g.add_node(0);
+        let x = g.add_node(64);
+        let y = g.add_node(0);
+        let m = g.add_node(10);
+        ab(&mut g, s, x).unwrap();
+        ab(&mut g, s, y).unwrap();
+        ab(&mut g, x, m).unwrap();
+        ab(&mut g, y, m).unwrap();
+        assert_eq!(g.path_latency(m, 64).unwrap(), 74);
+        assert_eq!(g.max_path_latency(64).unwrap(), 74);
+    }
+
+    #[test]
+    fn latency_reference_3_a_unit_delay_edge_contributes_exactly_one_sample() {
+        // s(0) -unit_delay-> u(5) — hand-computed: lat(u) = 5 + (0 + 1) = 6, at ANY block size.
+        let mut g = Graph::new();
+        let s = g.add_node(0);
+        let u = g.add_node(5);
+        g.connect(PortRef::new(s, 1), PortRef::new(u, 0), EdgeKind::UnitDelay).unwrap();
+        assert_eq!(g.path_latency(u, 64).unwrap(), 6);
+        assert_eq!(g.path_latency(u, 512).unwrap(), 6, "a unit delay is a sample, not a block");
+    }
+
+    #[test]
+    fn a_feedback_edge_does_not_contribute_to_static_latency() {
+        // s → n plain, n → s block_delay (the legal feedback idiom): s's incoming edge is the
+        // feedback one, and a loop has no static path latency — s stays at its own declaration.
+        let mut g = Graph::new();
+        let s = g.add_node(3);
+        let n = g.add_node(11);
+        ab(&mut g, s, n).unwrap();
+        g.connect(PortRef::new(n, 1), PortRef::new(s, 0), EdgeKind::BlockDelay).unwrap();
+        assert_eq!(g.path_latency(s, 64).unwrap(), 3);
+        assert_eq!(g.path_latency(n, 64).unwrap(), 14);
+    }
+
+    #[test]
+    fn the_latency_cache_recomputes_only_on_a_real_change() {
+        let mut g = Graph::new();
+        let a = g.add_node(0);
+        let b = g.add_node(10);
+        ab(&mut g, a, b).unwrap();
+        assert_eq!(g.latency_computes(), 0);
+        assert_eq!(g.path_latency(b, 64).unwrap(), 10);
+        assert_eq!(g.latency_computes(), 1);
+        // reads at the same state are cache hits
+        for _ in 0..5 {
+            assert_eq!(g.path_latency(b, 64).unwrap(), 10);
+        }
+        assert_eq!(g.latency_computes(), 1, "no recompute without a change");
+        // a DATA edit (no version bump) must still invalidate — the map cannot serve the number
+        // it just watched change
+        let v_before = g.version();
+        g.set_latency(b, 200).unwrap();
+        assert_eq!(g.version(), v_before, "latency edits stay data, not topology");
+        assert_eq!(g.path_latency(b, 64).unwrap(), 200);
+        assert_eq!(g.latency_computes(), 2);
+        // a different block size is a different question
+        let _ = g.max_path_latency(128).unwrap();
+        assert_eq!(g.latency_computes(), 3);
+        // a topology edit invalidates too
+        let c = g.add_node(1);
+        ab(&mut g, b, c).unwrap();
+        assert_eq!(g.path_latency(c, 128).unwrap(), 201);
+        assert_eq!(g.latency_computes(), 4);
+    }
+
+    #[test]
+    fn latency_of_a_missing_node_is_an_error_not_a_zero() {
+        let mut g = Graph::new();
+        let a = g.add_node(0);
+        g.remove_node(a).unwrap();
+        assert!(matches!(g.path_latency(a, 64), Err(GraphError::NoSuchNode(_))));
     }
 }

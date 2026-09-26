@@ -1,0 +1,67 @@
+# sparq module manifest — flt/svf (WO-014 increment 2).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+
+[identity]
+id = "sparq/flt/svf"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "SVF"
+summary = "State-variable filter, ZDF trapezoidal, five modes"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "filter/svf"
+top = "flt"
+kind = "processor"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "in"
+name = "Input"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+
+[[ports]]
+id = "out"
+name = "Output"
+direction = "out"
+type = "audio"
+channel_set = "stereo"
+
+[[params]]
+id = "cutoff"
+name = "Cutoff"
+type = "float"
+unit = "Hz"
+min = 10.0
+max = 20000.0
+default = 1000.0
+
+[[params]]
+id = "resonance"
+name = "Resonance"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 1.0
+default = 0.2
+
+[[params]]
+id = "mode"
+name = "Mode (0 lp 1 hp 2 bp 3 notch 4 peak)"
+type = "int"
+unit = "x"
+min = 0.0
+max = 4.0
+default = 0.0
+
+[state]
+schema_id = "sparq/flt/svf/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "light"

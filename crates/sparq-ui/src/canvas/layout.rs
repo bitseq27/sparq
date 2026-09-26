@@ -13,7 +13,7 @@ use crate::canvas::model::{Graph, Node, NodeSpec, PortRef, WireId};
 use crate::geom::{Rect, Vec2};
 use crate::tokens::{
     LAYOUT_CANVAS_NODE_HEADER_HEIGHT, LAYOUT_CANVAS_NODE_PORT_ROW,
-    LAYOUT_CANVAS_NODE_WIDTH_DEFAULT, LAYOUT_TOUCH_PORT_CAPTURE_RADIUS,
+    LAYOUT_CANVAS_NODE_WIDTH_DEFAULT, LAYOUT_SPACE_2, LAYOUT_TOUCH_PORT_CAPTURE_RADIUS,
     LAYOUT_TOUCH_WIRE_HIT_WIDTH,
 };
 use sparq_module_api::manifest::Port;
@@ -98,6 +98,21 @@ pub struct WireLayout {
     pub points: Vec<Vec2>,
     /// True when the matrix required a conversion (multi→mono): draw a warning hairline.
     pub conversion: bool,
+    /// The re-patch grab point of the SOURCE end: a fixed screen distance along the wire from the
+    /// port, clear of the port's own 24 px capture, so "grab the wire end" and "draw a new wire
+    /// from the port" are two distinguishable touches (increment 3).
+    pub grab_from: Vec2,
+    /// The re-patch grab point of the DESTINATION end (same rule, walked from the far end).
+    pub grab_to: Vec2,
+}
+
+/// Which end of a wire a hit or a re-patch drag names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WireEndSide {
+    /// The source (output-port) end.
+    From,
+    /// The destination (input-port) end.
+    To,
 }
 
 /// The whole canvas, laid out for one frame.
@@ -114,6 +129,12 @@ pub struct CanvasLayout {
 /// How many segments a wire bézier is sampled into. A geometric fidelity constant (not a visual
 /// size): enough that the 20 px hit test never misses a curve, cheap enough for 200 nodes.
 const WIRE_SEGMENTS: usize = 24;
+
+/// How far along a wire (screen px) its re-patch grab points sit: clear of the port's capture
+/// circle (24 px) by one space step, so the two gestures never fight over the same pixel. On a
+/// wire shorter than twice this, both grabs converge to the midpoint and the SOURCE end wins the
+/// hit — a degenerate case, documented rather than special-cased.
+const WIRE_END_GRAB_OFFSET: f32 = (LAYOUT_TOUCH_PORT_CAPTURE_RADIUS + LAYOUT_SPACE_2) as f32;
 
 /// The world size of a node from its spec: fixed token width, height from the busier edge.
 ///
@@ -157,10 +178,11 @@ pub fn compute(graph: &Graph, camera: &Camera, view: Rect) -> CanvasLayout {
             let f_screen = camera.to_screen(f_world, view);
             let t_screen = camera.to_screen(t_world, view);
             let points = sample_bezier(f_screen, t_screen);
+            let (grab_from, grab_to) = grab_points(&points);
             // A conversion (multi→mono) is a property of the two channel sets; recompute it from
             // the source/dest ports so the painter can draw the warning hairline.
             let conversion = is_conversion(graph, w.from, w.to);
-            Some(WireLayout { id: w.id, class: f_class, points, conversion })
+            Some(WireLayout { id: w.id, class: f_class, points, conversion, grab_from, grab_to })
         })
         .collect();
 
@@ -250,12 +272,65 @@ fn cubic(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t: f32) -> Vec2 {
     Vec2::new(a * p0.x + b * p1.x + c * p2.x + d * p3.x, a * p0.y + b * p1.y + c * p2.y + d * p3.y)
 }
 
-/// What a screen point lands on. Ports beat node bodies beat wires, so a finger near an edge port
-/// wires rather than selects the node.
+/// The two re-patch grab points of a sampled wire: [`WIRE_END_GRAB_OFFSET`] screen px along the
+/// polyline from each end (clamped to the midpoint on short wires, so the grabs never cross).
+fn grab_points(points: &[Vec2]) -> (Vec2, Vec2) {
+    let total = polyline_len(points);
+    let off = WIRE_END_GRAB_OFFSET.min(total * 0.5);
+    (walk_along(points, off, true), walk_along(points, off, false))
+}
+
+/// Total polyline length, screen px.
+fn polyline_len(points: &[Vec2]) -> f32 {
+    let mut acc = 0.0;
+    for w in points.windows(2) {
+        acc += w[0].distance(w[1]);
+    }
+    acc
+}
+
+/// The point `offset` px along the polyline, walked from the start (`from_start`) or the end.
+/// Degenerate inputs (empty / single point / offset past the end) return the nearest real point
+/// rather than a fabricated one.
+fn walk_along(points: &[Vec2], offset: f32, from_start: bool) -> Vec2 {
+    let n = points.len();
+    if n == 0 {
+        return Vec2::ZERO;
+    }
+    if n == 1 {
+        return points[0];
+    }
+    let mut acc = 0.0;
+    for i in 0..n - 1 {
+        let (a, b) = if from_start {
+            (points[i], points[i + 1])
+        } else {
+            (points[n - 1 - i], points[n - 2 - i])
+        };
+        let seg = a.distance(b);
+        let last = i == n - 2;
+        if acc + seg >= offset || last {
+            let t = if last && acc + seg < offset {
+                1.0
+            } else {
+                ((offset - acc) / seg.max(f32::EPSILON)).clamp(0.0, 1.0)
+            };
+            return Vec2::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+        }
+        acc += seg;
+    }
+    points[0]
+}
+
+/// What a screen point lands on. Ports beat wire ends beat node bodies beat wires, so a finger
+/// near an edge port wires rather than selects the node — and a finger on a wire's grab point
+/// re-patches rather than moves whatever is behind it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
     /// A port (with its direction), within the capture radius.
     Port(PortRef, Direction),
+    /// A wire's re-patch grab point (which wire, which end), within the capture radius.
+    WireEnd(WireId, WireEndSide),
     /// A node body.
     Node(crate::canvas::model::NodeId),
     /// A wire.
@@ -264,9 +339,9 @@ pub enum Hit {
     Empty,
 }
 
-/// Hit-test a screen point against a computed layout. `lod` gates port hits: at [`Lod::Dot`] the
-/// ports are not drawn, so they are not targetable (a 24 px capture around an invisible dot would
-/// only cause mis-wires).
+/// Hit-test a screen point against a computed layout. `lod` gates port and wire-end hits: at
+/// [`Lod::Dot`] neither is drawn at scale, so neither is targetable (a 24 px capture around an
+/// invisible handle would only cause mis-wires).
 #[must_use]
 pub fn hit_test(layout: &CanvasLayout, pos_screen: Vec2, lod: Lod) -> Hit {
     let capture = LAYOUT_TOUCH_PORT_CAPTURE_RADIUS as f32;
@@ -276,6 +351,18 @@ pub fn hit_test(layout: &CanvasLayout, pos_screen: Vec2, lod: Lod) -> Hit {
                 if p.screen.distance(pos_screen) <= capture {
                     return Hit::Port(p.pref, p.dir);
                 }
+            }
+        }
+        // Wire ends: the grab points sit clear of the ports (see WIRE_END_GRAB_OFFSET), so this
+        // ring never overlaps a port capture — but it is checked first among the wire hits, and
+        // before node bodies, so a dense patch keeps its ends grabbable. From wins To on the
+        // degenerate short-wire midpoint (documented at the constant).
+        for w in &layout.wires {
+            if w.grab_from.distance(pos_screen) <= capture {
+                return Hit::WireEnd(w.id, WireEndSide::From);
+            }
+            if w.grab_to.distance(pos_screen) <= capture {
+                return Hit::WireEnd(w.id, WireEndSide::To);
             }
         }
     }
@@ -420,6 +507,81 @@ mod tests {
         assert_eq!(signal_class(&p), SignalClass::Spatial);
         let mono = audio("m", Direction::Out, ChannelSet::Mono);
         assert_eq!(signal_class(&mono), SignalClass::Audio);
+    }
+
+    // ------------------------------------------------- increment 3: wire-end re-patch geometry
+
+    fn wired_layout(g: &Graph) -> CanvasLayout {
+        compute(g, &Camera::new(), view())
+    }
+
+    #[test]
+    fn grab_points_sit_clear_of_the_ports_and_on_the_wire() {
+        let mut g = Graph::new();
+        let a = g.op_add_node(gain_spec(), Vec2::ZERO);
+        let b = g.op_add_node(gain_spec(), Vec2::new(400.0, 0.0));
+        let _ = g.op_add_wire(PortRef::new(nid(&a), 1), PortRef::new(nid(&b), 0));
+        let l = wired_layout(&g);
+        let w = &l.wires[0];
+        let src = w.points[0];
+        let dst = w.points[w.points.len() - 1];
+        let d_from = w.grab_from.distance(src);
+        let d_to = w.grab_to.distance(dst);
+        assert!(
+            (d_from - super::WIRE_END_GRAB_OFFSET).abs() < 2.0,
+            "grab_from {d_from} px from the source port"
+        );
+        assert!(
+            (d_to - super::WIRE_END_GRAB_OFFSET).abs() < 2.0,
+            "grab_to {d_to} px from the destination port"
+        );
+        // both grabs are ON the wire (within the polyline hit width)
+        assert!(polyline_distance(&w.points, w.grab_from) < 1.0);
+        assert!(polyline_distance(&w.points, w.grab_to) < 1.0);
+        // and clear of the port capture circles
+        assert!(d_from > LAYOUT_TOUCH_PORT_CAPTURE_RADIUS as f32);
+    }
+
+    #[test]
+    fn a_short_wires_grabs_converge_to_the_midpoint_without_crossing() {
+        let mut g = Graph::new();
+        let a = g.op_add_node(gain_spec(), Vec2::ZERO);
+        let b = g.op_add_node(gain_spec(), Vec2::new(240.0, 0.0)); // nodes touch: a very short wire
+        let _ = g.op_add_wire(PortRef::new(nid(&a), 1), PortRef::new(nid(&b), 0));
+        let l = wired_layout(&g);
+        let w = &l.wires[0];
+        let total = polyline_len(&w.points);
+        if total < 2.0 * super::WIRE_END_GRAB_OFFSET {
+            let mid = walk_along(&w.points, total * 0.5, true);
+            assert!(w.grab_from.distance(mid) < 2.0, "from-grab clamped to the midpoint");
+            assert!(w.grab_to.distance(mid) < 2.0, "to-grab clamped to the midpoint");
+        }
+    }
+
+    #[test]
+    fn hit_test_ranks_port_over_wire_end_over_body_over_wire() {
+        let mut g = Graph::new();
+        let a = g.op_add_node(gain_spec(), Vec2::ZERO);
+        let b = g.op_add_node(gain_spec(), Vec2::new(400.0, 0.0));
+        let _ = g.op_add_wire(PortRef::new(nid(&a), 1), PortRef::new(nid(&b), 0));
+        let l = wired_layout(&g);
+        let w = &l.wires[0];
+        // exactly on the port → Port wins (a new wire is drawn, not a re-patch)
+        assert_eq!(
+            hit_test(&l, w.points[0], Lod::Full),
+            Hit::Port(PortRef::new(nid(&a), 1), Direction::Out)
+        );
+        // on the grab point → WireEnd
+        assert_eq!(hit_test(&l, w.grab_from, Lod::Full), Hit::WireEnd(w.id, WireEndSide::From));
+        assert_eq!(hit_test(&l, w.grab_to, Lod::Full), Hit::WireEnd(w.id, WireEndSide::To));
+        // wire midpoint → the body of the wire
+        let mid = w.points[w.points.len() / 2];
+        assert_eq!(hit_test(&l, mid, Lod::Full), Hit::Wire(w.id));
+        // …and at Dot LOD the ends are not targetable (the handles are not drawn)
+        assert!(
+            !matches!(hit_test(&l, w.grab_from, Lod::Dot), Hit::WireEnd(..)),
+            "wire ends are gated by LOD like ports"
+        );
     }
 
     fn nid(op: &crate::canvas::model::Op) -> crate::canvas::model::NodeId {

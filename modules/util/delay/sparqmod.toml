@@ -1,0 +1,80 @@
+# sparq module manifest — util/delay (WO-014 increment 2).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+# The latency declaration is PARAMETRIC ("param:time"): the wet path delays by `time`, the dry
+# path by zero, and a mixed delay has no single static number — so the manifest promises the
+# parameter it follows instead of a constant, which is exactly what the parametric form exists
+# for (ValidatedManifest::latency_is_parametric; check_declared_latency respects it).
+
+[identity]
+id = "sparq/util/delay"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Delay"
+summary = "Tempo-syncable feedback delay with damping and dry/wet mix"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "utility/delay"
+top = "util"
+kind = "processor"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "in"
+name = "Input"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+
+[[ports]]
+id = "out"
+name = "Output"
+direction = "out"
+type = "audio"
+channel_set = "stereo"
+
+[[params]]
+id = "time"
+name = "Time"
+type = "float"
+unit = "ms"
+min = 1.0
+max = 2000.0
+default = 250.0
+
+[[params]]
+id = "feedback"
+name = "Feedback"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 0.95
+default = 0.3
+
+[[params]]
+id = "damp"
+name = "Damping"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 1.0
+default = 0.5
+
+[[params]]
+id = "mix"
+name = "Mix"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 1.0
+default = 0.5
+
+[state]
+schema_id = "sparq/util/delay/state"
+schema_version = 1
+
+[resources]
+latency = "param:time"
+cpu_class = "light"

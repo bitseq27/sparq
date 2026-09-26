@@ -14,8 +14,10 @@
     clippy::cast_sign_loss
 )]
 
+pub mod determinism;
 pub mod dna;
 pub mod dsp;
+pub mod engine;
 pub mod executor;
 pub mod graph;
 pub mod hash;

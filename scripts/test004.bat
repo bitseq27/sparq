@@ -2,15 +2,18 @@
 REM ===========================================================================
 REM  sparq test004 - WO-006 EXCLUSIVE acceptance: the run that closes the WO.
 REM
-REM  THE CONTRACT: one file from Qwen - this script, plus the increment-1.2
+REM  THE CONTRACT: one file from Qwen - this script, plus the increment-1.3
 REM  sync zip applied first - see below. Run it, answer its prompts, send back
 REM  ONE file: test004.log from the repo root.
 REM
-REM  PREREQUISITE: sync-wo006-inc12.zip must be extracted at the repo root
-REM  BEFORE this run. It carries the fixed wasapi.rs - the four-rung exclusive
-REM  ladder - f32, i24-in-32, i32, i16 - that answers defect #77: your
-REM  Behringer driver refuses float in exclusive and speaks 24-in-32, and the
-REM  old ladder never asked. The build step verifies the new stamp.
+REM  PREREQUISITE: sync-wo006-inc13.zip must be extracted at the repo root
+REM  BEFORE this run - on top of sync-wo013-inc3.zip if that has not landed
+REM  yet. It carries the fixed wasapi.rs: the four-rung exclusive FORMAT
+REM  ladder - f32, i24-in-32, i32, i16 - that answers defect #77, AND the
+REM  device-PERIOD ladder that answers defect #79: your 2026-09-24 run was
+REM  refused at every rung because the open asked for a 666 us period that a
+REM  10 ms engine cannot run. The open now asks GetDevicePeriod first. The
+REM  build step verifies the new stamp.
 REM
 REM  WHAT PASSES THE WO: [03] caps must now list EXCLUSIVE RATES for the
 REM  Behringer endpoints - [04] the exclusive tone must be audible, and its
@@ -112,7 +115,9 @@ REM ---- [04] exclusive tone - the moment of truth -----------------------------
 call :say " "
 call :say [04] WASAPI EXCLUSIVE playback - a 10 s 220 Hz tone at -12 dB.
 call :say      The open line names the rung: f32, i24-in-32, i32 or i16.
-call :say      For the UMC 204HD the expectation is i24-in-32 with conversion.
+call :say      For the UMC 204HD the expectation is i24-in-32 with conversion,
+call :say      and a device period of 10.00 ms with the 64-frame sparq block
+call :say      riding the FIFO beneath it - that pair is the defect 79 fix.
 call :say Press any key when ready.
 pause >nul
 set "CMD=target\release\sparq.exe play --backend wasapi-exclusive --seconds 10 --gain -12"
@@ -123,6 +128,7 @@ if "!RC04!"=="0" (
 ) else (
     call :say HINT: the probe table in the error names each rung's HRESULT.
     call :say Busy means another app holds the device; Format means no rung fits.
+    call :say A device-period table means no period fit - defect 79, increment 1.3.
     call :say Send the log back either way - the table IS the diagnosis.
 )
 call :askyn "did you hear a clean 10-second tone"

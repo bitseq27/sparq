@@ -604,4 +604,178 @@ fn run_gesture_smoke(failures: &mut Vec<String>) {
         },
         None => failures.push("the node menu did not offer SET MASTER".to_string()),
     }
+
+    // ---- increment 3 smokes: module browser, inspector sliders, wire re-patch ---------------
+
+    // 11. long-press empty → ADD MODULE → the browser opens; query "gain" → one match; tap the
+    //     row → a Gain node spawns at the press, selected, browser closed. The catalogue is the
+    //     registry, so the row that spawns is a module that exists (#58, end to end).
+    let nodes_before = shell.graph.node_count();
+    let cam = shell.canvas.camera;
+    let empty_pt2 = SpVec2::new(
+        rect.min.x + (440.0 - cam.origin.x) * cam.zoom,
+        rect.min.y + (330.0 - cam.origin.y) * cam.zoom,
+    );
+    now += 400;
+    frame!([finger(21, empty_pt2.x, empty_pt2.y, PointerPhase::Down, now)]);
+    now += 400;
+    frame!([]); // long-press fires → empty-canvas menu
+    now += 16;
+    frame!([finger(21, empty_pt2.x, empty_pt2.y, PointerPhase::Up, now)]);
+    let add_tap = shell.canvas.menu.clone().and_then(|m| {
+        let r = shell.last_layout.as_ref().map(|l| l.canvas)?;
+        let origin = shell.canvas.menu_origin(r)?;
+        let row = m.rows.iter().position(|x| matches!(x.action, MenuAction::OpenBrowser))?;
+        Some(m.row_rect(origin, row).center())
+    });
+    let mut browser_ok = false;
+    if let Some(tap) = add_tap {
+        now += 400;
+        frame!([finger(22, tap.x, tap.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(22, tap.x, tap.y, PointerPhase::Up, now)]);
+        browser_ok = shell.canvas.browser().is_some();
+    }
+    // The query goes through the documented headless path (the window shell pipes keystrokes).
+    let mut spawn_ok = false;
+    if browser_ok {
+        shell.canvas.browser_set_query("gain");
+        let row_tap = shell.canvas.browser().and_then(|b| {
+            let r = shell.last_layout.as_ref().map(|l| l.canvas)?;
+            let (max_w, max_h) = sparq_ui::canvas::browser::caps(r);
+            let one_match = b.visible_len() == 1
+                && b.selected_item().is_some_and(|i| i.spec.module_id == "sparq/util/gain");
+            if !one_match {
+                return None;
+            }
+            let origin = b.sheet_origin(r, max_w, max_h);
+            Some(b.row_rect(origin, 0, r, max_w).center())
+        });
+        if let Some(tap) = row_tap {
+            frame!([]); // repaint with the query applied
+            now += 400;
+            frame!([finger(23, tap.x, tap.y, PointerPhase::Down, now)]);
+            now += 80;
+            frame!([finger(23, tap.x, tap.y, PointerPhase::Up, now)]);
+            spawn_ok = shell.graph.node_count() == nodes_before + 1
+                && shell.canvas.browser().is_none()
+                && shell
+                    .graph
+                    .nodes()
+                    .last()
+                    .is_some_and(|n| n.spec.module_id == "sparq/util/gain");
+        }
+    }
+    check(
+        "empty long-press → ADD MODULE → fuzzy search → row tap spawns the module",
+        browser_ok && spawn_ok,
+        failures,
+    );
+
+    // 12. tap the sine node → the inspector computes; drag its Frequency slider → the param
+    //     follows the finger; ONE three-finger tap undoes the whole drag (param state rides the
+    //     graph history — the acceptance criterion's "graph AND param state").
+    let Some(n0b) = node_center(shell.canvas_layout(), 0) else {
+        failures.push("node 0 was not laid out for the inspector smoke".to_string());
+        return;
+    };
+    let n0b_id = node_id(shell.canvas_layout(), 0).unwrap_or(0);
+    now += 400;
+    frame!([finger(24, n0b.x, n0b.y, PointerPhase::Down, now)]);
+    now += 80;
+    frame!([finger(24, n0b.x, n0b.y, PointerPhase::Up, now)]);
+    now += 100;
+    frame!([]); // the frame that computes the inspector for the new selection
+    let slider = shell.canvas.inspector().and_then(|il| {
+        il.rows.first().map(|r| {
+            (
+                r.track.min.x + r.track.width() * 0.25,
+                r.track.center().y,
+                r.track.min.x + r.track.width() * 0.75,
+            )
+        })
+    });
+    let mut param_ok = false;
+    if let Some((x0, y, x1)) = slider {
+        let freq0 = shell.graph.node(n0b_id).and_then(|n| n.param_value(0));
+        now += 400;
+        frame!([finger(25, x0, y, PointerPhase::Down, now)]);
+        now += 16;
+        frame!([finger(25, (x0 + x1) / 2.0, y, PointerPhase::Moved, now)]);
+        now += 16;
+        frame!([finger(25, x1, y, PointerPhase::Moved, now)]);
+        now += 16;
+        frame!([finger(25, x1, y, PointerPhase::Up, now)]);
+        let freq1 = shell.graph.node(n0b_id).and_then(|n| n.param_value(0));
+        let dragged = freq1.is_some_and(|v| (v - 18_000.0).abs() < 600.0);
+        let logged = shell.log().iter().any(|l| l.contains("Frequency ="));
+        // undo: three-finger tap → the drag's single history entry reverses
+        now += 400;
+        frame!([
+            finger(26, canvas_c.x - 40.0, canvas_c.y + 260.0, PointerPhase::Down, now),
+            finger(27, canvas_c.x, canvas_c.y + 260.0, PointerPhase::Down, now + 5),
+            finger(28, canvas_c.x + 40.0, canvas_c.y + 260.0, PointerPhase::Down, now + 10),
+        ]);
+        now += 60;
+        frame!([
+            finger(26, canvas_c.x - 40.0, canvas_c.y + 260.0, PointerPhase::Up, now),
+            finger(27, canvas_c.x, canvas_c.y + 260.0, PointerPhase::Up, now + 5),
+            finger(28, canvas_c.x + 40.0, canvas_c.y + 260.0, PointerPhase::Up, now + 10),
+        ]);
+        let freq2 = shell.graph.node(n0b_id).and_then(|n| n.param_value(0));
+        param_ok = dragged && logged && freq0 == freq2;
+    }
+    check(
+        "inspector slider drag edits the param; one undo restores it (graph AND param state)",
+        param_ok,
+        failures,
+    );
+
+    // 13. drag a wire's TO end (the grab handle the layout computed) onto the spawned node's
+    //     free input → the wire moves; ONE undo restores the original wire, same id.
+    let wires_before: Vec<_> = shell.graph.wires().to_vec();
+    let repatch = shell.canvas_layout().wires.first().and_then(|w| {
+        let target = port_screen(shell.canvas_layout(), 4, PDir::In)?; // the spawned Gain's input
+        Some((w.id, w.grab_to, target))
+    });
+    let mut repatch_ok = false;
+    if let Some((wid, grab, target)) = repatch {
+        now += 400;
+        frame!([finger(29, grab.x, grab.y, PointerPhase::Down, now)]);
+        now += 16;
+        frame!([finger(
+            29,
+            (grab.x + target.x) / 2.0,
+            (grab.y + target.y) / 2.0,
+            PointerPhase::Moved,
+            now
+        )]);
+        now += 16;
+        frame!([finger(29, target.x, target.y, PointerPhase::Moved, now)]);
+        now += 16;
+        frame!([finger(29, target.x, target.y, PointerPhase::Up, now)]);
+        let moved =
+            shell.graph.wires().iter().any(|w| w.to.node == 4 && w.from == wires_before[0].from)
+                && !shell.graph.wires().iter().any(|w| w.id == wid && w.to == wires_before[0].to);
+        // undo: three-finger tap → the original wire returns, same id and ends
+        now += 400;
+        frame!([
+            finger(30, canvas_c.x - 40.0, canvas_c.y + 240.0, PointerPhase::Down, now),
+            finger(31, canvas_c.x, canvas_c.y + 240.0, PointerPhase::Down, now + 5),
+            finger(32, canvas_c.x + 40.0, canvas_c.y + 240.0, PointerPhase::Down, now + 10),
+        ]);
+        now += 60;
+        frame!([
+            finger(30, canvas_c.x - 40.0, canvas_c.y + 240.0, PointerPhase::Up, now),
+            finger(31, canvas_c.x, canvas_c.y + 240.0, PointerPhase::Up, now + 5),
+            finger(32, canvas_c.x + 40.0, canvas_c.y + 240.0, PointerPhase::Up, now + 10),
+        ]);
+        let restored = shell.graph.wires().iter().any(|w| *w == wires_before[0]);
+        repatch_ok = moved && restored;
+    }
+    check(
+        "drag a wire end → it re-patches to the new port; one undo restores the original",
+        repatch_ok,
+        failures,
+    );
 }

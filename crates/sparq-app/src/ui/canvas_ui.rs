@@ -15,10 +15,11 @@
 
 use egui::{Align2, Color32, Painter, Pos2, Stroke, StrokeKind};
 use sparq_ui::audit::{InteractiveElement, TouchClass};
+use sparq_ui::canvas::browser;
 use sparq_ui::canvas::camera::Lod;
 use sparq_ui::canvas::connect::{self, ConnectContext, Preview};
-use sparq_ui::canvas::interact::CanvasState;
-use sparq_ui::canvas::layout::{CanvasLayout, NodeLayout, SignalClass};
+use sparq_ui::canvas::interact::{CanvasState, Interaction};
+use sparq_ui::canvas::layout::{CanvasLayout, NodeLayout, SignalClass, WireEndSide};
 use sparq_ui::canvas::model::{Graph, Node, NodeId};
 use sparq_ui::geom::{Rect, Vec2};
 use sparq_ui::tokens::*;
@@ -41,12 +42,14 @@ pub fn draw(
     draw_grid(p, pal, canvas, view);
     draw_wires(p, pal, canvas, layout);
     draw_pending_wire(p, pal, graph, canvas, layout, ctx);
+    draw_repatch(p, pal, graph, canvas, layout, ctx);
     // The resolved master (explicit or the documented default rule) wears a MASTER badge: the
     // user must be able to see which node the render will carry, in words, before asking.
     let master_id = canvas.resolve_master(graph);
     draw_nodes(p, pal, graph, canvas, layout, master_id, audit);
     draw_marquee(p, pal, canvas);
     draw_menu(p, pal, canvas, view, audit);
+    draw_browser(p, pal, canvas, view, audit);
 }
 
 // --------------------------------------------------------------------- colour helpers
@@ -193,6 +196,16 @@ fn draw_wires(p: &Painter, pal: &Palette, canvas: &CanvasState, layout: &CanvasL
             if let Some(mid) = midpoint(&pts) {
                 p.text(mid, Align2::CENTER_CENTER, "SUM", font_xs(), pal.warning);
             }
+        }
+
+        // Re-patch handles: wherever the layout says a wire end is grabbable
+        // (`layout::hit_test`'s WireEnd zones are exactly these points), draw it — what you can
+        // touch is what you see, at every LOD where the ends are targetable.
+        if layout.lod != Lod::Dot {
+            let r = LAYOUT_SPACE_1 as f32;
+            let tick = pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32);
+            p.circle_stroke(pos(w.grab_from), r, tick);
+            p.circle_stroke(pos(w.grab_to), r, tick);
         }
     }
 }
@@ -517,5 +530,184 @@ fn draw_menu(
                 dense_allowed: false,
             });
         }
+    }
+}
+
+// --------------------------------------------------------------------- re-patch drag
+
+/// An in-flight wire-end re-patch (increment 3): the detached end follows the finger, the fixed
+/// end stays home, and every other port glows or dims by its verdict against the MOVING end —
+/// the same affordance language as a fresh wire, so the two drags feel like one gesture family.
+fn draw_repatch(
+    p: &Painter,
+    pal: &Palette,
+    graph: &Graph,
+    canvas: &CanvasState,
+    layout: &CanvasLayout,
+    ctx: &ConnectContext<'_>,
+) {
+    let Interaction::Repatch { side, orig, cursor_screen, hovered, .. } = &canvas.interaction
+    else {
+        return;
+    };
+    let find_port = |pref: sparq_ui::canvas::model::PortRef| -> Option<(Vec2, SignalClass)> {
+        layout
+            .nodes
+            .iter()
+            .find_map(|n| n.ports.iter().find(|pl| pl.pref == pref))
+            .map(|pl| (pl.screen, pl.class))
+    };
+    // The detached end is the moving one: re-patching the FROM end means a new SOURCE is being
+    // chosen (the destination stays), and vice versa.
+    let (fixed, moving_is_source) = match side {
+        WireEndSide::From => (orig.to, true),
+        WireEndSide::To => (orig.from, false),
+    };
+
+    let glow_r = LAYOUT_TOUCH_PORT_RADIUS as f32 + LAYOUT_SPACE_1 as f32;
+    let dim_r = LAYOUT_TOUCH_PORT_RADIUS as f32;
+    for n in &layout.nodes {
+        for pl in &n.ports {
+            if pl.pref == orig.from || pl.pref == orig.to {
+                continue; // the re-patched wire's own ends take no part in the glow/dim
+            }
+            let pv = if moving_is_source {
+                connect::preview(graph, pl.pref, fixed, ctx)
+            } else {
+                connect::preview(graph, fixed, pl.pref, ctx)
+            };
+            let (col, r) = match pv {
+                Preview::Compatible | Preview::Conversion | Preview::Adapter(true) => {
+                    (class_glow(pl.class, pal), glow_r)
+                },
+                Preview::Adapter(false) | Preview::Dim => (class_dim(pl.class, pal), dim_r),
+            };
+            p.circle_filled(pos(pl.screen), r, col);
+        }
+    }
+
+    if let Some((fixed_screen, _)) = find_port(fixed) {
+        let end = hovered.and_then(find_port).map(|(s, _)| s).unwrap_or(*cursor_screen);
+        let stroke = Stroke::new(LAYOUT_STROKE_SIGNAL as f32, pal.text_secondary);
+        p.line_segment([pos(fixed_screen), pos(end)], stroke);
+        // The detached end wears an open warning ring at the cursor: "unconnected right now".
+        p.circle_stroke(
+            pos(*cursor_screen),
+            glow_r,
+            Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, pal.warning),
+        );
+    }
+}
+
+// --------------------------------------------------------------------- module browser
+
+/// The module browser sheet: query header, ranked rows (name + id, summary · category dim), the
+/// selection worn as a filled band + accent bar. Geometry comes from `browser::caps` and the
+/// `BrowserState` rects — the same numbers `BrowserState::hit` uses, so the row you see is the
+/// row you touch.
+fn draw_browser(
+    p: &Painter,
+    pal: &Palette,
+    canvas: &CanvasState,
+    view: Rect,
+    audit: &mut Vec<InteractiveElement>,
+) {
+    let Some(b) = canvas.browser() else { return };
+    let (max_w, max_h) = browser::caps(view);
+    let origin = b.sheet_origin(view, max_w, max_h);
+    let page = browser::BrowserState::page_rows(max_h);
+    let sheet = Rect::from_min_size(origin, Vec2::new(b.width(max_w), b.height(page).min(max_h)));
+    let eg = egui_rect(sheet);
+    p.rect_filled(eg, LAYOUT_CORNER_PANEL as u8, pal.ground_overlay);
+    p.rect_stroke(
+        eg,
+        LAYOUT_CORNER_PANEL as u8,
+        pal.hairline(pal.hairline_strong, LAYOUT_STROKE_HAIRLINE as f32),
+        StrokeKind::Middle,
+    );
+
+    // Header: the query (with a caret — this is the sheet's text-entry target) and the match
+    // count, in words.
+    let hr = b.header_rect(origin, view, max_w);
+    p.rect_filled(egui_rect(hr), LAYOUT_CORNER_NONE as u8, pal.ground_inset);
+    let q = b.query();
+    p.text(
+        pos(hr.min) + egui::vec2(LAYOUT_SPACE_3 as f32, hr.height() / 2.0),
+        Align2::LEFT_CENTER,
+        if q.is_empty() { "SEARCH\u{2026}_".to_string() } else { format!("SEARCH {q}_") },
+        font_s(),
+        if q.is_empty() { pal.text_disabled } else { pal.text_primary },
+    );
+    p.text(
+        pos(hr.max) - egui::vec2(LAYOUT_SPACE_3 as f32, hr.height() / 2.0),
+        Align2::RIGHT_CENTER,
+        format!("{} MATCH", b.visible_len()),
+        font_xs(),
+        pal.text_tertiary,
+    );
+    audit.push(InteractiveElement {
+        id: "canvas/browser/query".to_string(),
+        class: TouchClass::M,
+        rect: hr,
+        dense_allowed: false,
+    });
+
+    if b.visible_len() == 0 {
+        // The empty ranking is an ANSWER, said in words — not a blank sheet.
+        let r0 = b.row_rect(origin, 0, view, max_w);
+        p.text(
+            pos(r0.center()),
+            Align2::CENTER_CENTER,
+            "NO MATCH — CLEAR THE SEARCH",
+            font_s(),
+            pal.text_disabled,
+        );
+    }
+    let rows = page.min(b.visible_len());
+    for (page_i, item) in b.visible().skip(b.scroll()).take(rows).enumerate() {
+        let rr = b.row_rect(origin, page_i, view, max_w);
+        let rank = b.scroll() + page_i;
+        let selected = rank == b.selected();
+        if selected {
+            p.rect_filled(
+                egui_rect(rr),
+                LAYOUT_CORNER_NONE as u8,
+                pal.selected.gamma_multiply(0.18),
+            );
+            let bar = Rect::new(rr.min, Vec2::new(rr.min.x + LAYOUT_SPACE_1 as f32, rr.max.y));
+            p.rect_filled(egui_rect(bar), LAYOUT_CORNER_NONE as u8, pal.selected);
+        }
+        if page_i > 0 {
+            p.line_segment(
+                [pos(rr.min), pos(Vec2::new(rr.max.x, rr.min.y))],
+                pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
+            );
+        }
+        let pad = LAYOUT_SPACE_3 as f32 + LAYOUT_SPACE_1 as f32;
+        p.text(
+            pos(rr.min) + egui::vec2(pad, rr.height() * 0.32),
+            Align2::LEFT_CENTER,
+            item.row_text(),
+            font_s(),
+            if selected { pal.text_primary } else { pal.text_secondary },
+        );
+        let sub = if item.category.is_empty() {
+            item.summary.clone()
+        } else {
+            format!("{} · {}", item.summary, item.category)
+        };
+        p.text(
+            pos(rr.min) + egui::vec2(pad, rr.height() * 0.72),
+            Align2::LEFT_CENTER,
+            sub,
+            font_xs(),
+            pal.text_tertiary,
+        );
+        audit.push(InteractiveElement {
+            id: format!("canvas/browser/{rank}"),
+            class: TouchClass::M,
+            rect: rr,
+            dense_allowed: false,
+        });
     }
 }

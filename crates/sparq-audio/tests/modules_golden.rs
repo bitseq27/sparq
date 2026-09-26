@@ -12,7 +12,6 @@ use sparq_audio::executor::ExecConfig;
 use sparq_audio::hash::{fnv1a64_f32, hex64};
 use sparq_audio::modules::{
     builtin_sources, create_gain, create_rms, create_sine, demo_patch, register_builtins,
-    GAIN_MANIFEST, RMS_MANIFEST, SINE_MANIFEST,
 };
 use sparq_kernel::alloc::{allocation_count, start_counting, stop_counting, CountingAllocator};
 use sparq_kernel::block::BlockContext;
@@ -50,7 +49,7 @@ fn res() -> Resources {
 fn render_demo(blocks: usize) -> (Vec<f32>, f32, f32) {
     let mut reg = Registry::new();
     register_builtins(&mut reg).unwrap();
-    let cfg = ExecConfig { sample_rate: RATE, block_frames: FRAMES, device_channels: CH };
+    let cfg = ExecConfig::new(RATE, FRAMES, CH);
     let mut demo = demo_patch(&reg, cfg).unwrap();
     let mut out = vec![0.0f32; FRAMES * CH];
     let mut samples: Vec<f32> = Vec::with_capacity(blocks * FRAMES * CH);
@@ -69,17 +68,17 @@ fn render_demo(blocks: usize) -> (Vec<f32>, f32, f32) {
 #[test]
 fn the_builtin_registry_is_complete_and_consistent() {
     let mut reg = Registry::new();
-    assert_eq!(register_builtins(&mut reg).unwrap(), 3);
-    for id in ["sparq/syn/sine", "sparq/util/gain", "sparq/ana/rms"] {
+    assert_eq!(register_builtins(&mut reg).unwrap(), sparq_audio::modules::BUILTINS.len());
+    for (id, _, _) in sparq_audio::modules::BUILTINS {
         let r = reg.get(id).unwrap_or_else(|| panic!("{id} missing from the registry"));
         let m = r.create();
         assert_eq!(m.id(), id);
         assert_eq!(r.manifest().id(), id);
     }
-    // Discovery over the built-in sources: three load, zero fail — the compiled-in manifests
-    // are the same bytes `sparq modules` reads from disk.
+    // Discovery over the built-in sources: every built-in loads, zero fail — the compiled-in
+    // manifests are the same bytes `sparq modules` reads from disk.
     let report = sparq_module_api::discover(builtin_sources());
-    assert_eq!(report.loaded.len(), 3);
+    assert_eq!(report.loaded.len(), sparq_audio::modules::BUILTINS.len());
     assert!(
         report.failed.is_empty(),
         "a built-in manifest failed its own discovery: {:?}",
@@ -92,14 +91,14 @@ fn manifests_on_disk_equal_the_compiled_in_bytes() {
     // The single-source claim, tested: include_str! and the file must be the same file. (If this
     // ever fails, someone edited modules/**/sparqmod.toml without rebuilding — cargo would do
     // it, but the message here names the actual drift.)
-    for (path, text) in [
-        ("modules/syn/sine/sparqmod.toml", SINE_MANIFEST),
-        ("modules/util/gain/sparqmod.toml", GAIN_MANIFEST),
-        ("modules/ana/rms/sparqmod.toml", RMS_MANIFEST),
-    ] {
+    // Generic over BUILTINS on purpose: a hardcoded list is the drift this test exists to catch,
+    // one meta-level up. The path convention IS the contract: `sparq/<top>/<name>` lives at
+    // `modules/<top>/<name>/sparqmod.toml`.
+    for (id, text, _) in sparq_audio::modules::BUILTINS {
+        let path = format!("modules/{}/sparqmod.toml", id.trim_start_matches("sparq/"));
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let on_disk =
-            std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("{path}: {e}"));
+            std::fs::read_to_string(root.join(&path)).unwrap_or_else(|e| panic!("{path}: {e}"));
         assert_eq!(on_disk, text, "{path} drifted from the compiled-in manifest");
     }
 }
@@ -137,7 +136,7 @@ fn all_three_modules_make_zero_allocations_in_process() {
 fn the_demo_patch_renders_allocation_free() {
     let mut reg = Registry::new();
     register_builtins(&mut reg).unwrap();
-    let cfg = ExecConfig { sample_rate: RATE, block_frames: FRAMES, device_channels: CH };
+    let cfg = ExecConfig::new(RATE, FRAMES, CH);
     let mut demo = demo_patch(&reg, cfg).unwrap();
     let mut out = vec![0.0f32; FRAMES * CH];
     let made = measure(|| {

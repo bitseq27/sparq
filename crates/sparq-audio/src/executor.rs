@@ -59,7 +59,8 @@ use sparq_module_api::module::{
 use sparq_module_api::params::ParamSet;
 use sparq_module_api::port::{ChannelSet, Direction, PortType};
 
-/// Executor configuration: the device shape the patch renders into.
+/// Executor configuration: the device shape the patch renders into, plus the two policy knobs
+/// tasks 5 and 6 added — both defaulted so an untouched config renders exactly as before.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExecConfig {
     /// Device sample rate in Hz.
@@ -68,6 +69,89 @@ pub struct ExecConfig {
     pub block_frames: usize,
     /// Device output channels — the master render target and the variable-set fallback.
     pub device_channels: usize,
+    /// The latency policy (task 5, ADR-009 decision 5 / ADR-006.6): report only, or align.
+    pub latency: LatencyMode,
+    /// The per-module watchdog (task 6, ADR-009 decision 6).
+    pub watchdog: Watchdog,
+}
+
+/// The global raw/compensated switch (task 5; ADR-006.6 makes compensation opt-in).
+///
+/// * [`LatencyMode::Raw`] renders what the modules render: each path arrives when it arrives,
+///   and the per-path numbers are the kernel graph's [`latency_map`] readout.
+/// * [`LatencyMode::Compensated`] aligns every FAN-IN: each incoming edge of a summed input is
+///   delayed by `slowest_arm − this_arm` (from the kernel's per-path latency map), so parallel
+///   paths arrive at their merge together instead of flamming/comb-filtering. Single-input
+///   nodes and chains are untouched — end-to-end latency stays exactly what the map reports,
+///   and no global pipeline offset is invented. The delay lines are integer-sample circular
+///   buffers allocated (and pre-touched) at build; the audio path only copies.
+///
+/// [`latency_map`]: sparq_kernel::graph::Graph::latency_map
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LatencyMode {
+    /// Report latency; do not touch the signal.
+    #[default]
+    Raw,
+    /// Align every path to the slowest one.
+    Compensated,
+}
+
+/// The watchdog's one knob (task 6): how many CONSECUTIVE `Overrun` blocks a module may return
+/// before it is auto-bypassed. `0` disables the watchdog (overruns stay counted, nothing acts).
+///
+/// Timing-based detection belongs to the HAL pump, which owns the clock (the executor's audio
+/// path may not read one — clippy's RT denials, ADR-006); the executor acts on the status the
+/// infrastructure reports. The two halves are the same watchdog: the pump measures and flags,
+/// the executor isolates so the rest of the graph keeps playing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Watchdog {
+    /// Consecutive overruns that trigger auto-bypass; 0 = disabled.
+    pub consecutive_overruns: u32,
+}
+
+impl Default for Watchdog {
+    fn default() -> Self {
+        // N = 3: one bad block is the OS, two is a pattern, three is the module.
+        Self { consecutive_overruns: 3 }
+    }
+}
+
+impl Watchdog {
+    /// A watchdog that counts but never acts.
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self { consecutive_overruns: 0 }
+    }
+}
+
+/// One watchdog action, journaled executor-side (the project journal itself is WO-011).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WatchdogEvent {
+    /// The node that was auto-bypassed.
+    pub node: NodeId,
+    /// The block index at which the bypass engaged.
+    pub block: u64,
+}
+
+/// How many watchdog events the bounded log holds. Pre-reserved at build, so logging on the
+/// audio path never allocates; beyond the cap, events are COUNTED as dropped, never grown —
+/// a log that reallocates inside render_block would be worse than no log.
+pub const WATCHDOG_EVENT_CAP: usize = 64;
+
+impl ExecConfig {
+    /// The usual shape: a device form with the default policies — raw latency (report, do not
+    /// touch) and the watchdog armed at its default N. Policy knobs are set explicitly by the
+    /// callers that mean to (tests, the compensated render path).
+    #[must_use]
+    pub const fn new(sample_rate: u32, block_frames: usize, device_channels: usize) -> Self {
+        Self {
+            sample_rate,
+            block_frames,
+            device_channels,
+            latency: LatencyMode::Raw,
+            watchdog: Watchdog { consecutive_overruns: 3 },
+        }
+    }
 }
 
 /// Everything needed to instantiate one node.
@@ -208,6 +292,14 @@ struct ExecNode {
     status: BlockStatus,
     failed_blocks: u64,
     overrun_blocks: u64,
+    /// Consecutive `Overrun` blocks — the watchdog's trigger counter (task 6). Any other status
+    /// resets it: the criterion is *consecutive*, one good block earns a fresh slate.
+    overrun_streak: u32,
+    /// Set by the watchdog: the module is no longer called; its output is passthrough (shapes
+    /// match) or silence. Cleared only from the control thread ([`Executor::clear_auto_bypass`]).
+    auto_bypassed: bool,
+    /// Blocks rendered while auto-bypassed (evidence the isolation is holding, not hiding).
+    bypassed_blocks: u64,
 }
 
 impl Drop for ExecNode {
@@ -230,6 +322,45 @@ struct InputPlan {
     /// First edge into the input writes; later edges add (deterministic fan-in sum, edge-id
     /// order — the matrix's stable tie-break).
     add: bool,
+    /// Fan-in compensation (task 5, `LatencyMode::Compensated`): the edge's delay line and the
+    /// scratch the source block is copied into before the line transforms it. `None` in Raw
+    /// mode and for zero-delay arms — the common case pays one `is_some` branch per edge.
+    comp: Option<(CompLine, Vec<f32>)>,
+}
+
+/// One EDGE's latency-compensation line (task 5, `LatencyMode::Compensated`): an integer-sample
+/// circular delay of `delay` interleaved floats over a ring of `delay + block` floats, so the
+/// signal this edge contributes is the source's output `delay` samples earlier — the fan-in
+/// alignment that makes parallel arms arrive together. Allocated and pre-touched at build; the
+/// audio path reads one slot, writes one slot, advances `pos` — no allocation, no branches per
+/// sample beyond the wrap.
+struct CompLine {
+    ring: Vec<f32>,
+    /// Write cursor, in interleaved floats.
+    pos: usize,
+    /// The delay, in interleaved floats (samples × channels).
+    delay: usize,
+}
+
+impl CompLine {
+    fn new(delay_samples: usize, frames: usize, ch: usize) -> Self {
+        let delay = delay_samples * ch;
+        let len = frames * ch;
+        Self { ring: vec![0.0; delay + len], pos: 0, delay }
+    }
+
+    /// Delay `out` in place: every sample is replaced by the one written `delay` floats ago,
+    /// and the fresh value takes its slot in the ring.
+    fn apply(&mut self, out: &mut [f32]) {
+        let r = self.ring.len();
+        for (i, s) in out.iter_mut().enumerate() {
+            let read = (self.pos + i + r - self.delay) % r;
+            let fresh = *s;
+            *s = self.ring[read];
+            self.ring[(self.pos + i) % r] = fresh;
+        }
+        self.pos = (self.pos + out.len()) % r;
+    }
 }
 
 /// Executor-owned storage for one delay edge: the previous-block (or previous-sample) memory
@@ -301,6 +432,10 @@ pub struct Executor {
     ctx: BlockContext,
     budget_bytes: usize,
     blocks_rendered: u64,
+    /// The bounded watchdog journal (pre-reserved; audio-path pushes never allocate).
+    wd_events: Vec<WatchdogEvent>,
+    /// Events not logged because the journal was full — counted, never silently dropped.
+    wd_dropped: u64,
 }
 
 impl std::fmt::Debug for Executor {
@@ -313,6 +448,7 @@ impl std::fmt::Debug for Executor {
             .field("delay_edges", &self.delays.len())
             .field("budget_bytes", &self.budget_bytes)
             .field("blocks_rendered", &self.blocks_rendered)
+            .field("auto_bypassed", &self.nodes.iter().filter(|n| n.auto_bypassed).count())
             .finish_non_exhaustive()
     }
 }
@@ -501,10 +637,53 @@ impl Executor {
             }
         }
 
+        // ---- fan-in compensation plan (task 5, `LatencyMode::Compensated`): per EDGE, from
+        // the kernel's own latency map — delay_e = slowest arm into e's destination − e's own
+        // arm latency (source path latency + the edge's own delay contribution). Single-input
+        // destinations get 0 on every arm and cost nothing. Raw — the default — plans no lines
+        // at all and renders byte-identical to increment 2, which the goldens pin.
+        let mut edge_comp: Vec<usize> = vec![0; graph.edges().len()];
+        if cfg.latency == LatencyMode::Compensated {
+            let bf = u32::try_from(frames).unwrap_or(u32::MAX);
+            // Copied out: `latency_map` borrows the graph mutably (it may recompute), and the
+            // plan below needs immutable edge access while consulting the numbers.
+            let map: Vec<(NodeId, u32)> = graph.latency_map(bf)?.to_vec();
+            let lat_of =
+                |id: NodeId| map.iter().find(|(n, _)| *n == id).map(|(_, l)| *l).unwrap_or(0);
+            // v0 aligns the PLAIN arms of a fan-in. Delay-edge arms are excluded on both sides
+            // of the computation (they neither set nor receive compensation): a feedback arm is
+            // deliberately offset — that offset IS the sound — and block-granular processing
+            // cannot place a 1-sample unit arm inside a summed block anyway (sub-block
+            // processing is out of the WO's scope). Declared, not hidden.
+            let arms: Vec<(NodeId, NodeId)> = graph
+                .edges()
+                .iter()
+                .filter(|e| e.kind == EdgeKind::Plain)
+                .map(|e| (e.from.node, e.to.node))
+                .collect();
+            // per destination: the slowest plain arm
+            let mut max_in: HashMap<NodeId, u32> = HashMap::new();
+            for (src, dst) in &arms {
+                let slot = max_in.entry(*dst).or_insert(0);
+                *slot = (*slot).max(lat_of(*src));
+            }
+            for (ei, e) in graph.edges().iter().enumerate() {
+                if e.kind != EdgeKind::Plain {
+                    continue;
+                }
+                edge_comp[ei] = max_in
+                    .get(&e.to.node)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_sub(lat_of(e.from.node)) as usize;
+            }
+        }
+
         // ---- delay storage + wiring plans
         let mut delays: Vec<DelayState> = Vec::new();
         let mut wiring: Vec<Vec<InputPlan>> = (0..slots.len()).map(|_| Vec::new()).collect();
-        for e in graph.edges() {
+        let mut budget_comp: usize = 0;
+        for (ei, e) in graph.edges().iter().enumerate() {
             let src_slot = slot_of[&e.from.node];
             let dst_slot = slot_of[&e.to.node];
             let src_ch = out_ch[src_slot];
@@ -524,7 +703,18 @@ impl Executor {
                 None
             };
             let add = !wiring[dst_slot].is_empty();
-            wiring[dst_slot].push(InputPlan { kind: e.kind, src_slot, src_ch, delay, add });
+            let comp = if edge_comp[ei] > 0 && src_ch > 0 {
+                let mut cl = CompLine::new(edge_comp[ei], frames, src_ch);
+                let mut scratch = vec![0.0f32; frames * src_ch];
+                for b in cl.ring.iter_mut().chain(scratch.iter_mut()) {
+                    *b = std::hint::black_box(0.0); // pre-touch: page faults belong to build
+                }
+                budget_comp += (cl.ring.len() + scratch.len()) * std::mem::size_of::<f32>();
+                Some((cl, scratch))
+            } else {
+                None
+            };
+            wiring[dst_slot].push(InputPlan { kind: e.kind, src_slot, src_ch, delay, add, comp });
         }
 
         // ---- buffers, allocated and touched now, never on the audio path (decision 4)
@@ -548,11 +738,15 @@ impl Executor {
                 status: BlockStatus::Ok,
                 failed_blocks: 0,
                 overrun_blocks: 0,
+                overrun_streak: 0,
+                auto_bypassed: false,
+                bypassed_blocks: 0,
             });
         }
         for d in &delays {
             budget += d.hist.len() * std::mem::size_of::<f32>();
         }
+        budget += budget_comp;
 
         // ---- prepare + activate in execution order (module-api §2 cascade rule)
         for n in nodes.iter_mut() {
@@ -588,6 +782,10 @@ impl Executor {
             ctx: BlockContext::offline(cfg.sample_rate, frames, cfg.device_channels),
             budget_bytes: budget,
             blocks_rendered: 0,
+            // Reserved, not filled: the audio path may push into this, and a push inside
+            // capacity never allocates. Beyond the cap events are counted as dropped.
+            wd_events: Vec::with_capacity(WATCHDOG_EVENT_CAP),
+            wd_dropped: 0,
         })
     }
 
@@ -619,6 +817,7 @@ impl Executor {
             });
         }
 
+        let wd_limit = self.cfg.watchdog.consecutive_overruns;
         for slot in 0..self.order.len() {
             // -- wire: fill this node's input buffer from its incoming edges.
             let in_ch = self.nodes[slot].in_ch;
@@ -627,7 +826,7 @@ impl Executor {
                 for s in in_local.iter_mut() {
                     *s = 0.0;
                 }
-                for plan in &self.wiring[slot] {
+                for plan in &mut self.wiring[slot] {
                     match (plan.kind, plan.delay) {
                         (EdgeKind::BlockDelay, Some(d)) => {
                             let (hist, add) = (&self.delays[d].hist, plan.add);
@@ -649,15 +848,49 @@ impl Executor {
                             );
                         },
                         _ => {
-                            let src = &self.nodes[plan.src_slot].out_buf;
-                            write_edge(&mut in_local, in_ch, src, plan.src_ch, plan.add, None);
+                            if let Some((line, scratch)) = plan.comp.as_mut() {
+                                // Fan-in compensation (task 5): copy the source block into the
+                                // pre-allocated scratch, transform it in place through the edge's
+                                // delay line, and wire FROM the delayed signal. Scratch and ring
+                                // were sized at build; the audio path allocates nothing.
+                                let src = &self.nodes[plan.src_slot].out_buf;
+                                let n = scratch.len().min(src.len());
+                                scratch[..n].copy_from_slice(&src[..n]);
+                                line.apply(&mut scratch[..n]);
+                                write_edge(
+                                    &mut in_local,
+                                    in_ch,
+                                    &scratch[..n],
+                                    plan.src_ch,
+                                    plan.add,
+                                    None,
+                                );
+                            } else {
+                                let src = &self.nodes[plan.src_slot].out_buf;
+                                write_edge(&mut in_local, in_ch, src, plan.src_ch, plan.add, None);
+                            }
                         },
                     }
                 }
             }
 
-            // -- process: one trait-object dispatch per node per block (ADR-009 decision 7).
-            let status = {
+            // -- process: one trait-object dispatch per node per block (ADR-009 decision 7) —
+            //    unless the watchdog isolated this node (task 6). A bypassed module is NEVER
+            //    CALLED — the staller cannot stall the block — and its output becomes
+            //    passthrough when the shapes match, silence otherwise; the flag, the meter and
+            //    the journal all say so, so the isolation is visible, never mysterious.
+            let status = if self.nodes[slot].auto_bypassed {
+                let n = &mut self.nodes[slot];
+                if n.in_ch > 0 && n.in_ch == n.out_ch && n.out_buf.len() == in_local.len() {
+                    n.out_buf.copy_from_slice(&in_local);
+                } else {
+                    for s in n.out_buf.iter_mut() {
+                        *s = 0.0;
+                    }
+                }
+                n.bypassed_blocks += 1;
+                BlockStatus::Ok
+            } else {
                 let n = &mut self.nodes[slot];
                 let input: &[f32] = if n.in_ch > 0 { &in_local } else { &[] };
                 let mut ctx =
@@ -666,6 +899,10 @@ impl Executor {
             };
 
             // -- status handling: Failed is silenced and flagged, never unwound (contract §9).
+            //    Overruns feed the watchdog: N consecutive (task 6, ADR-009 d6) auto-bypass the
+            //    module so the rest of the graph keeps playing; any other status resets the
+            //    streak, because the criterion is *consecutive*.
+            let mut just_bypassed = false;
             {
                 let n = &mut self.nodes[slot];
                 match status {
@@ -674,16 +911,36 @@ impl Executor {
                             *s = 0.0;
                         }
                         n.failed_blocks += 1;
+                        n.overrun_streak = 0;
                     },
-                    BlockStatus::Overrun => n.overrun_blocks += 1,
-                    BlockStatus::Ok | BlockStatus::Silenced => {},
+                    BlockStatus::Overrun => {
+                        n.overrun_blocks += 1;
+                        n.overrun_streak += 1;
+                        if wd_limit > 0 && !n.auto_bypassed && n.overrun_streak >= wd_limit {
+                            n.auto_bypassed = true;
+                            just_bypassed = true;
+                        }
+                    },
+                    BlockStatus::Ok | BlockStatus::Silenced => n.overrun_streak = 0,
                 }
                 n.status = status;
-                // -- meters (decision 8, same-thread for now).
+                // -- meters (decision 8, same-thread for now). The meters read the node's own
+                //    output; edge compensation lives in the WIRING pass (task 5), so a meter
+                //    shows what the module made, and the aligned sum is what destinations get.
                 let (peak, rms) = peak_rms(&n.out_buf);
                 self.meters[slot].peak.store(peak.to_bits(), Ordering::Relaxed);
                 self.meters[slot].rms.store(rms.to_bits(), Ordering::Relaxed);
                 self.meters[slot].status.store(status_to_u8(status), Ordering::Relaxed);
+            }
+            if just_bypassed {
+                // The journal push is outside the node borrow and inside capacity — bounded,
+                // pre-reserved, never an audio-path allocation.
+                let (node, block) = (self.nodes[slot].id, self.ctx.block.0);
+                if self.wd_events.len() < WATCHDOG_EVENT_CAP {
+                    self.wd_events.push(WatchdogEvent { node, block });
+                } else {
+                    self.wd_dropped += 1;
+                }
             }
 
             self.nodes[slot].in_buf = in_local;
@@ -761,10 +1018,86 @@ impl Executor {
         self.slot_of.get(&node).map(|&s| self.nodes[s].failed_blocks)
     }
 
-    /// How many blocks a node returned `Overrun` (the task-6 watchdog will act on these).
+    /// How many blocks a node returned `Overrun` — the task-6 watchdog's input; see
+    /// [`Executor::auto_bypassed`] for its verdict.
     #[must_use]
     pub fn overrun_blocks(&self, node: NodeId) -> Option<u64> {
         self.slot_of.get(&node).map(|&s| self.nodes[s].overrun_blocks)
+    }
+
+    /// Whether the watchdog has auto-bypassed this node (task 6). A bypassed module is not
+    /// called; its output is passthrough (matching shapes) or silence, and the rest of the
+    /// graph keeps playing — the ADR-009 decision-6 isolation, executor-side.
+    #[must_use]
+    pub fn auto_bypassed(&self, node: NodeId) -> Option<bool> {
+        self.slot_of.get(&node).map(|&s| self.nodes[s].auto_bypassed)
+    }
+
+    /// Blocks rendered while this node was auto-bypassed.
+    #[must_use]
+    pub fn bypassed_blocks(&self, node: NodeId) -> Option<u64> {
+        self.slot_of.get(&node).map(|&s| self.nodes[s].bypassed_blocks)
+    }
+
+    /// Clear a node's auto-bypass (control thread, between blocks): the module is called again
+    /// from the next block, with a fresh overrun streak. Returns `false` when the node is
+    /// unknown or was not bypassed — the caller can tell "restored" from "nothing to do".
+    pub fn clear_auto_bypass(&mut self, node: NodeId) -> bool {
+        match self.slot_of.get(&node).map(|&s| &mut self.nodes[s]) {
+            Some(n) if n.auto_bypassed => {
+                n.auto_bypassed = false;
+                n.overrun_streak = 0;
+                true
+            },
+            _ => false,
+        }
+    }
+
+    /// The bounded watchdog journal: one entry per auto-bypass, in the order they happened
+    /// (the executor-side half of ADR-009 d6's "journal entry"; the project journal is WO-011).
+    #[must_use]
+    pub fn watchdog_events(&self) -> &[WatchdogEvent] {
+        &self.wd_events
+    }
+
+    /// Watchdog actions that happened but were not journaled because the bounded log was full —
+    /// counted, never silently dropped.
+    #[must_use]
+    pub fn watchdog_events_dropped(&self) -> u64 {
+        self.wd_dropped
+    }
+
+    /// The per-path latency map (task 5), from the kernel graph's own cached computation —
+    /// `(node, samples a signal reaching its output has travelled)`, in execution order.
+    ///
+    /// # Errors
+    /// Whatever the kernel's order reports (unreachable through the checked API).
+    pub fn latency_map(&mut self) -> Result<&[(NodeId, u32)], ExecError> {
+        let bf = u32::try_from(self.cfg.block_frames).unwrap_or(u32::MAX);
+        Ok(self.graph.latency_map(bf)?)
+    }
+
+    /// The slowest path's latency in samples — the alignment target [`LatencyMode::Compensated`]
+    /// delays every node up to, and the shell's "total latency" readout (raw mode reports it
+    /// too: the switch changes the SIGNAL, never the honesty of the number).
+    ///
+    /// # Errors
+    /// Whatever [`Executor::latency_map`] reports.
+    pub fn max_path_latency(&mut self) -> Result<u32, ExecError> {
+        Ok(self.latency_map()?.iter().map(|(_, l)| *l).max().unwrap_or(0))
+    }
+
+    /// Adopt the runtime clock and block count of the executor this one replaces (task 4's
+    /// boundary swap): the sample clock is the TRANSPORT's, not the patch's — a graph change
+    /// must not reset it, or every mutation would stutter the timeline.
+    ///
+    /// Module STATE is deliberately not adopted: a swapped-in module starts from its `prepare`
+    /// /`activate` state, because carrying state across a patch change is the state protocol's
+    /// job (schema'd, journaled — WO-011), not the swap's. Declared, not hidden: a mutation is
+    /// an audible event at exactly one block boundary, and nothing else about the timeline moves.
+    pub fn inherit_runtime(&mut self, from: &Executor) {
+        self.ctx = from.ctx;
+        self.blocks_rendered = from.blocks_rendered;
     }
 
     /// Blocks rendered since build.

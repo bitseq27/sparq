@@ -9,7 +9,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use sparq_audio::executor::{ExecConfig, ExecError, Executor, NodeBuild};
+use sparq_audio::executor::{ExecConfig, ExecError, Executor, LatencyMode, NodeBuild, Watchdog};
 use sparq_audio::hash::fnv1a64_f32;
 use sparq_kernel::alloc::{allocation_count, start_counting, stop_counting, CountingAllocator};
 use sparq_kernel::graph::{EdgeKind, Graph, NodeId, PortRef};
@@ -26,7 +26,13 @@ const RATE: u32 = 48_000;
 const FRAMES: usize = 64;
 
 fn cfg(ch: usize) -> ExecConfig {
-    ExecConfig { sample_rate: RATE, block_frames: FRAMES, device_channels: ch }
+    ExecConfig {
+        sample_rate: RATE,
+        block_frames: FRAMES,
+        device_channels: ch,
+        latency: LatencyMode::default(),
+        watchdog: Watchdog::default(),
+    }
 }
 
 // ------------------------------------------------------------------ test modules
@@ -646,4 +652,393 @@ fn the_buffer_budget_is_reported_and_matches_the_buffers() {
     let ex = Executor::build(graph, builds, cfg(2)).unwrap();
     let expected = (1 + 2 + 2) * FRAMES * std::mem::size_of::<f32>();
     assert_eq!(ex.memory_budget_bytes(), expected, "budget must equal the allocated buffers");
+}
+
+// ------------------------------------------------------------------ task 5+6 modules
+
+/// Returns `Overrun` on every block and writes zeros — the deterministic stand-in for a module
+/// that blew its budget. (Real timing detection belongs to the HAL pump, which owns the clock;
+/// the executor watchdog acts on the status the infrastructure reports — the two halves are the
+/// same watchdog, and the selftest's HAL gate proves the measuring half.)
+struct Stall;
+impl Module for Stall {
+    fn id(&self) -> &str {
+        "sparq/test/stall"
+    }
+    fn configure(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Ok(())
+    }
+    fn prepare(&mut self, _: &Resources) -> Result<(), ModuleError> {
+        Ok(())
+    }
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        for s in ctx.output.iter_mut() {
+            *s = 0.0;
+        }
+        BlockStatus::Overrun
+    }
+    fn message(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("stall takes no messages"))
+    }
+}
+
+/// One impulse: 1.0 at sample 0 of the first block, silence forever after — the reference
+/// signal for the latency-alignment arithmetic.
+struct Impulse {
+    fired: bool,
+}
+impl Module for Impulse {
+    fn id(&self) -> &str {
+        "sparq/test/impulse"
+    }
+    fn configure(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Ok(())
+    }
+    fn prepare(&mut self, _: &Resources) -> Result<(), ModuleError> {
+        self.fired = false;
+        Ok(())
+    }
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        for (i, s) in ctx.output.iter_mut().enumerate() {
+            *s = if !self.fired && i == 0 { 1.0 } else { 0.0 };
+        }
+        self.fired = true;
+        BlockStatus::Ok
+    }
+    fn message(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("impulse takes no messages"))
+    }
+}
+
+/// A true 128-sample delay (mono) — the module whose DECLARED latency matches what it does, so
+/// the compensation arithmetic can be checked against physical reality, not just the claim.
+struct Delay128 {
+    hist: Vec<f32>,
+    pos: usize,
+}
+impl Module for Delay128 {
+    fn id(&self) -> &str {
+        "sparq/test/delay128"
+    }
+    fn configure(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Ok(())
+    }
+    fn prepare(&mut self, _: &Resources) -> Result<(), ModuleError> {
+        self.hist = vec![0.0; 128]; // build-time allocation, per decision 4
+        self.pos = 0;
+        Ok(())
+    }
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        if !ctx.has_input() {
+            for s in ctx.output.iter_mut() {
+                *s = 0.0;
+            }
+            return BlockStatus::Silenced;
+        }
+        for (o, &i) in ctx.output.iter_mut().zip(ctx.input.iter()) {
+            *o = self.hist[self.pos];
+            self.hist[self.pos] = i;
+            self.pos = (self.pos + 1) % 128;
+        }
+        BlockStatus::Ok
+    }
+    fn message(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("delay128 takes no messages"))
+    }
+}
+
+fn stall_manifest() -> Manifest {
+    base("stall", vec![audio_port("in", "in", "mono"), audio_port("out", "out", "mono")], vec![])
+}
+fn impulse_manifest() -> Manifest {
+    base("impulse", vec![audio_port("out", "out", "mono")], vec![])
+}
+fn delay128_manifest() -> Manifest {
+    base("delay128", vec![audio_port("in", "in", "mono"), audio_port("out", "out", "mono")], vec![])
+}
+
+// ------------------------------------------------------------------ task 6: the watchdog
+
+#[test]
+fn the_watchdog_bypasses_a_stalling_module_and_the_graph_keeps_playing() {
+    // dc(1.0) → stall → thru(master): while the stall stalls, the master hears silence; after
+    // N=3 consecutive overruns the watchdog isolates it — the module is never called again, its
+    // output becomes passthrough, and the master hears the dc again. The rest plays on.
+    let mut graph = Graph::new();
+    let dc = graph.add_node(0);
+    let st = graph.add_node(0);
+    let th = graph.add_node(0);
+    graph.connect(PortRef::new(dc, 0), PortRef::new(st, 0), EdgeKind::Plain).unwrap();
+    graph.connect(PortRef::new(st, 1), PortRef::new(th, 0), EdgeKind::Plain).unwrap();
+    let builds = vec![
+        (
+            dc,
+            NodeBuild {
+                module: Box::new(Dc),
+                manifest: validated(dc_manifest()),
+                params: params(&[1.0]),
+            },
+        ),
+        (
+            st,
+            NodeBuild {
+                module: Box::new(Stall),
+                manifest: validated(stall_manifest()),
+                params: params(&[]),
+            },
+        ),
+        (
+            th,
+            NodeBuild {
+                module: Box::new(Thru),
+                manifest: validated(thru_manifest("mono")),
+                params: params(&[]),
+            },
+        ),
+    ];
+    let mut ex = Executor::build(graph, builds, cfg(1)).unwrap();
+    let mut out = vec![0.0f32; FRAMES];
+    let peak = |o: &[f32]| o.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+
+    for b in 0..2 {
+        ex.render_block(th, &mut out).unwrap();
+        assert_eq!(peak(&out), 0.0, "block {b}: the stall silences the chain");
+        assert_eq!(ex.auto_bypassed(st), Some(false));
+    }
+    ex.render_block(th, &mut out).unwrap(); // block 2: the third consecutive overrun
+    assert_eq!(ex.auto_bypassed(st), Some(true), "bypassed within N blocks (N=3)");
+    assert_eq!(ex.watchdog_events().len(), 1);
+    assert_eq!(ex.watchdog_events()[0].node, st);
+    assert_eq!(ex.watchdog_events()[0].block, 2, "journaled at the block it engaged");
+
+    ex.render_block(th, &mut out).unwrap();
+    assert_eq!(peak(&out), 1.0, "bypass is passthrough: the rest of the graph keeps playing");
+    // The engaging block is still processed by the module (the verdict comes from ITS status);
+    // the bypass takes effect from the NEXT block — so one rendered block has been bypassed.
+    assert_eq!(ex.bypassed_blocks(st), Some(1));
+
+    // clearing the bypass hands the module its stall back — and the watchdog re-arms
+    assert!(ex.clear_auto_bypass(st));
+    for _ in 0..3 {
+        ex.render_block(th, &mut out).unwrap();
+    }
+    assert_eq!(ex.auto_bypassed(st), Some(true), "re-bypassed after N fresh consecutive overruns");
+    assert_eq!(ex.watchdog_events().len(), 2, "both actions journaled");
+    assert_eq!(ex.overrun_blocks(st), Some(6));
+}
+
+#[test]
+fn a_disabled_watchdog_counts_but_never_acts() {
+    let mut graph = Graph::new();
+    let st = graph.add_node(0);
+    let builds = vec![(
+        st,
+        NodeBuild {
+            module: Box::new(Stall),
+            manifest: validated(stall_manifest()),
+            params: params(&[]),
+        },
+    )];
+    let mut cfg_off = cfg(1);
+    cfg_off.watchdog = Watchdog::disabled();
+    let mut ex = Executor::build(graph, builds, cfg_off).unwrap();
+    let mut out = vec![0.0f32; FRAMES];
+    for _ in 0..10 {
+        ex.render_block(st, &mut out).unwrap();
+    }
+    assert_eq!(ex.overrun_blocks(st), Some(10), "counted…");
+    assert_eq!(ex.auto_bypassed(st), Some(false), "…but never acted");
+    assert!(ex.watchdog_events().is_empty());
+}
+
+#[test]
+fn an_overrun_streak_resets_on_a_good_block() {
+    // The criterion is CONSECUTIVE: Overrun, Overrun, Ok, Overrun, Overrun must not bypass at
+    // N=3. Flaky is not stalled.
+    struct Flaky(u32);
+    impl Module for Flaky {
+        fn id(&self) -> &str {
+            // rides the stall manifest: the contract's id invariant means module and manifest
+            // must agree, and this module IS the staller with one good block in it
+            "sparq/test/stall"
+        }
+        fn configure(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+            Ok(())
+        }
+        fn prepare(&mut self, _: &Resources) -> Result<(), ModuleError> {
+            Ok(())
+        }
+        fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+            self.0 += 1;
+            for s in ctx.output.iter_mut() {
+                *s = 0.0;
+            }
+            // blocks 1,2 over; 3 ok (streak resets); 4..8 over → bypass engages at 8
+            if self.0 == 3 {
+                BlockStatus::Ok
+            } else {
+                BlockStatus::Overrun
+            }
+        }
+        fn message(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+            Err(ModuleError::Message("flaky takes no messages"))
+        }
+    }
+    let mut graph = Graph::new();
+    let f = graph.add_node(0);
+    let builds = vec![(
+        f,
+        NodeBuild {
+            module: Box::new(Flaky(0)),
+            manifest: validated(stall_manifest()),
+            params: params(&[]),
+        },
+    )];
+    let mut ex = Executor::build(graph, builds, cfg(1)).unwrap();
+    let mut out = vec![0.0f32; FRAMES];
+    for b in 1..=5 {
+        ex.render_block(f, &mut out).unwrap();
+        assert_eq!(ex.auto_bypassed(f), Some(false), "block {b}: streak never reached 3");
+    }
+    for _ in 6..=8 {
+        ex.render_block(f, &mut out).unwrap();
+    }
+    assert_eq!(ex.auto_bypassed(f), Some(true), "three CONSECUTIVE overruns engaged at block 8");
+}
+
+// ------------------------------------------------------------------ task 5: compensation
+
+/// impulse → {Delay128 (declared 128) | Thru (declared 0)} → Thru(master), all mono.
+/// Hand-computed: raw renders the impulse at the master in block 0 (fast arm) and block 2
+/// (slow arm, 128 samples = exactly 2 blocks); compensated delays the FAST ARM's edge by 128,
+/// so both contributions arrive in block 2 and SUM to 2.0 — the fan-in alignment, arithmetic
+/// checked against a module that physically does what it declares.
+fn compensation_graph(mode: LatencyMode) -> (Executor, NodeId) {
+    let mut graph = Graph::new();
+    let imp = graph.add_node(0);
+    let slow = graph.add_node(128); // declares what Delay128 physically does
+    let fast = graph.add_node(0);
+    let m = graph.add_node(0);
+    graph.connect(PortRef::new(imp, 0), PortRef::new(slow, 0), EdgeKind::Plain).unwrap();
+    graph.connect(PortRef::new(imp, 0), PortRef::new(fast, 0), EdgeKind::Plain).unwrap();
+    graph.connect(PortRef::new(slow, 1), PortRef::new(m, 0), EdgeKind::Plain).unwrap();
+    graph.connect(PortRef::new(fast, 1), PortRef::new(m, 0), EdgeKind::Plain).unwrap();
+    let builds = vec![
+        (
+            imp,
+            NodeBuild {
+                module: Box::new(Impulse { fired: false }),
+                manifest: validated(impulse_manifest()),
+                params: params(&[]),
+            },
+        ),
+        (
+            slow,
+            NodeBuild {
+                module: Box::new(Delay128 { hist: Vec::new(), pos: 0 }),
+                manifest: validated(delay128_manifest()),
+                params: params(&[]),
+            },
+        ),
+        (
+            fast,
+            NodeBuild {
+                module: Box::new(Thru),
+                manifest: validated(thru_manifest("mono")),
+                params: params(&[]),
+            },
+        ),
+        (
+            m,
+            NodeBuild {
+                module: Box::new(Thru),
+                manifest: validated(thru_manifest("mono")),
+                params: params(&[]),
+            },
+        ),
+    ];
+    let mut c = cfg(1);
+    c.latency = mode;
+    (Executor::build(graph, builds, c).unwrap(), m)
+}
+
+fn block_peaks(ex: &mut Executor, m: NodeId, n: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; FRAMES];
+    let mut peaks = Vec::with_capacity(n);
+    for _ in 0..n {
+        ex.render_block(m, &mut out).unwrap();
+        peaks.push(out.iter().fold(0.0f32, |a, &s| a.max(s.abs())));
+    }
+    peaks
+}
+
+#[test]
+fn raw_mode_renders_the_arms_when_they_arrive() {
+    let (mut ex, m) = compensation_graph(LatencyMode::Raw);
+    let peaks = block_peaks(&mut ex, m, 5);
+    assert!((peaks[0] - 1.0).abs() < 1e-6, "fast arm, block 0: {peaks:?}");
+    assert_eq!(peaks[1], 0.0);
+    assert!((peaks[2] - 1.0).abs() < 1e-6, "slow arm, block 2 (128 = 2 blocks): {peaks:?}");
+    assert_eq!(peaks[3], 0.0);
+    // the readout is honest in raw mode too: the switch moves the signal, never the numbers
+    assert_eq!(ex.max_path_latency().unwrap(), 128);
+}
+
+#[test]
+fn compensated_mode_aligns_the_fan_in_exactly_as_hand_computed() {
+    let (mut ex, m) = compensation_graph(LatencyMode::Compensated);
+    let peaks = block_peaks(&mut ex, m, 5);
+    assert_eq!(peaks[0], 0.0, "the fast arm is held back: {peaks:?}");
+    assert_eq!(peaks[1], 0.0);
+    assert!((peaks[2] - 2.0).abs() < 1e-6, "both arms land in block 2 and SUM: {peaks:?}");
+    assert_eq!(peaks[3], 0.0);
+    assert_eq!(ex.max_path_latency().unwrap(), 128);
+    // the compensation budget is in the printed memory budget (decision 4)
+    let (raw, _) = compensation_graph(LatencyMode::Raw);
+    assert!(
+        ex.memory_budget_bytes() > raw.memory_budget_bytes(),
+        "the delay lines cost memory, and the budget says so"
+    );
+}
+
+#[test]
+fn compensation_of_an_untouched_chain_changes_nothing() {
+    // Single-input nodes and chains get zero on every arm: compensated mode on a chain renders
+    // byte-identical to raw — the switch aligns fan-ins, it does not re-time the world.
+    let (mut raw_ex, raw_m) = dc_gain_chain(0.5, 0.5);
+    let (mut graph2, builds2) = {
+        let mut graph = Graph::new();
+        let dc = graph.add_node(0);
+        let gn = graph.add_node(0);
+        graph.connect(PortRef::new(dc, 0), PortRef::new(gn, 0), EdgeKind::Plain).unwrap();
+        (graph, (dc, gn))
+    };
+    let _ = &mut graph2;
+    let builds = vec![
+        (
+            builds2.0,
+            NodeBuild {
+                module: Box::new(Dc),
+                manifest: validated(dc_manifest()),
+                params: params(&[0.5]),
+            },
+        ),
+        (
+            builds2.1,
+            NodeBuild {
+                module: Box::new(Gain),
+                manifest: validated(gain_manifest("mono")),
+                params: params(&[0.5]),
+            },
+        ),
+    ];
+    let mut c = cfg(1);
+    c.latency = LatencyMode::Compensated;
+    let mut comp_ex = Executor::build(graph2, builds, c).unwrap();
+    let (mut a, mut b) = (vec![0.0f32; FRAMES], vec![0.0f32; FRAMES]);
+    for _ in 0..10 {
+        raw_ex.render_block(raw_m, &mut a).unwrap();
+        comp_ex.render_block(builds2.1, &mut b).unwrap();
+        assert_eq!(a, b, "a chain is byte-identical under the switch");
+    }
 }

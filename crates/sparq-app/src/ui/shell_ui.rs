@@ -13,7 +13,7 @@
 //! hard-coded colour/size/spacing values in widget code"; `token_audit.py` R6 enforces).
 //! Everything is a token constant or a `Palette` field.
 
-use egui::{Align2, Color32, Painter};
+use egui::{Align2, Color32, Painter, Stroke};
 use sparq_module_api::port::Phase;
 use sparq_module_api::registry::Registry;
 use sparq_ui::audit::{InteractiveElement, TouchClass};
@@ -165,6 +165,10 @@ impl ShellUi {
                 Graph::new()
             },
         };
+        // The browser's catalogue is the registry, viewed (increment 3): built once at startup,
+        // from the validated manifests — the browser cannot offer what is not installed (#58).
+        let mut canvas = CanvasState::new();
+        canvas.set_catalog(crate::bridge::browser_catalog(&modules));
         Self {
             state: ShellState::default(),
             theme: ThemeChoice::PhosphorDark,
@@ -177,7 +181,7 @@ impl ShellUi {
             theme_dirty: false,
             graph,
             modules,
-            canvas: CanvasState::new(),
+            canvas,
             canvas_layout: CanvasLayout::default(),
         }
     }
@@ -237,7 +241,7 @@ impl ShellUi {
         let canvas_rect = layout.canvas;
         let ctx = ConnectContext::no_adapters(Phase::Zero);
         for intent in &intents {
-            if self.route_to_canvas(*intent, canvas_rect) {
+            if self.route_to_canvas(*intent, &layout) {
                 for ev in self.canvas.on_intent(
                     &mut self.graph,
                     *intent,
@@ -256,6 +260,15 @@ impl ShellUi {
             }
         }
 
+        // 3b. the browser's provisional text path: while the sheet is modal, typed characters,
+        //     Backspace, Enter, Escape and the arrows go to it. This is an INPUT-EVENT feed, not
+        //     an egui widget — the wrap-egui rule holds (no widget owns input behind the
+        //     recogniser's back); a real text-entry surface (rename, search history) is its own
+        //     future increment. Headless drivers call `browser_set_query` directly.
+        if self.canvas.browser().is_some() {
+            self.feed_browser_keys(ui, canvas_rect);
+        }
+
         // 4. Recompute the shell layout so this frame's toggles are reflected in what we draw and
         //    in `last_layout` (step 2's effective layout predates the intents, and exists only to
         //    give routing a canvas rect and mode). `design_refused` is left as step 2 set it — the
@@ -266,8 +279,80 @@ impl ShellUi {
         self.canvas_layout =
             sparq_ui::canvas::layout::compute(&self.graph, &self.canvas.camera, layout.canvas);
 
+        // 5. the inspector geometry for the CURRENT selection: exactly one node selected and the
+        //    panel open, else None (multi-select inspects nothing in v0 — a param edit needs one
+        //    unambiguous target). Computed here so next frame's routing and this frame's paint
+        //    read the same rects — what you see is what you touch. The panel rect minus its
+        //    header band is the content the rows live in.
+        let inspector = if self.state.mode == ShellMode::Design {
+            layout.inspector.and_then(|panel| {
+                let mut sel = self.canvas.selection.nodes.iter();
+                let (Some(&id), None) = (sel.next(), sel.next()) else { return None };
+                let node = self.graph.node(id)?;
+                let hb = LAYOUT_SHELL_PANEL_HEADER_HEIGHT as f32;
+                let content = Rect::new(Vec2::new(panel.min.x, panel.min.y + hb), panel.max);
+                Some(sparq_ui::canvas::inspector::compute(node, content))
+            })
+        } else {
+            None
+        };
+        self.canvas.set_inspector(inspector);
+
         self.draw(ui, &layout);
         self.last_layout = Some(layout);
+    }
+
+    /// The browser's keyboard feed (step 3b of `frame`): characters append to the query,
+    /// Backspace deletes, the arrows move the selection, Enter spawns it, Escape closes. Every
+    /// action logs through the same event path the gestures use — one voice for the shell.
+    fn feed_browser_keys(&mut self, ui: &egui::Ui, canvas_rect: Rect) {
+        let mut q = self.canvas.browser().map_or(String::new(), |b| b.query().to_string());
+        let mut query_changed = false;
+        let mut nav = 0i64;
+        let mut confirm = false;
+        let mut escape = false;
+        ui.input(|i| {
+            for ev in &i.raw.events {
+                match ev {
+                    egui::Event::Text(t) => {
+                        // Control characters arrive as Text on some backends; the query is printables only.
+                        if t.chars().all(|c| !c.is_control()) {
+                            q.push_str(t);
+                            query_changed = true;
+                        }
+                    },
+                    egui::Event::Key { key, pressed: true, .. } => match key {
+                        egui::Key::Backspace => {
+                            q.pop();
+                            query_changed = true;
+                        },
+                        egui::Key::ArrowUp => nav -= 1,
+                        egui::Key::ArrowDown => nav += 1,
+                        egui::Key::Enter => confirm = true,
+                        egui::Key::Escape => escape = true,
+                        _ => {},
+                    },
+                    _ => {},
+                }
+            }
+        });
+        let mut ev = Vec::new();
+        if escape {
+            ev.extend(self.canvas.browser_close());
+        } else {
+            if query_changed {
+                ev.extend(self.canvas.browser_set_query(&q));
+            }
+            if nav != 0 {
+                self.canvas.browser_navigate(nav, canvas_rect);
+            }
+            if confirm {
+                ev.extend(self.canvas.browser_confirm(&mut self.graph));
+            }
+        }
+        for e in ev {
+            self.push_log(e.message());
+        }
     }
 
     /// The audit over the elements registered in the last drawn frame.
@@ -317,17 +402,28 @@ impl ShellUi {
     /// Whether an intent belongs to the canvas rather than the shell chrome. The canvas graph is
     /// a Design-mode surface: in Perform mode it is inert (the stage pads own the screen), so
     /// everything routes to the shell. Otherwise, positional intents go to the canvas when they
-    /// land in the canvas rect; a drag in flight stays with whoever started it; and pan / zoom /
-    /// undo are the canvas's (the panels do not pan or zoom in increment 1).
-    fn route_to_canvas(&self, intent: GestureIntent, canvas_rect: Rect) -> bool {
+    /// land in the canvas rect OR on an inspector parameter row (the inspector's slider drags are
+    /// canvas operations — the panel is the canvas's parameter surface, increment 3); a drag in
+    /// flight stays with whoever started it; and pan / zoom / undo are the canvas's (the panels
+    /// do not pan or zoom in increment 1).
+    fn route_to_canvas(&self, intent: GestureIntent, layout: &ShellLayout) -> bool {
         if self.state.mode != ShellMode::Design {
             return false;
         }
+        let canvas_rect = layout.canvas;
+        // An inspector-row hit: inside the panel rect AND on a row the previous frame computed
+        // (the same stale-by-one-frame convention the canvas hit-testing uses).
+        let inspector_hit = |pos: Vec2| -> bool {
+            layout.inspector.is_some_and(|r| r.contains(pos))
+                && self.canvas.inspector().is_some_and(|il| il.row_at(pos).is_some())
+        };
         match intent {
-            GestureIntent::Activate { pos }
-            | GestureIntent::Context { pos }
-            | GestureIntent::DragStart { pos }
-            | GestureIntent::DoubleTap { pos } => canvas_rect.contains(pos),
+            GestureIntent::Activate { pos } | GestureIntent::DragStart { pos } => {
+                canvas_rect.contains(pos) || inspector_hit(pos)
+            },
+            GestureIntent::Context { pos } | GestureIntent::DoubleTap { pos } => {
+                canvas_rect.contains(pos)
+            },
             GestureIntent::DragUpdate { .. } | GestureIntent::DragEnd { .. } => {
                 !matches!(self.canvas.interaction, Interaction::Idle)
             },
@@ -706,8 +802,7 @@ impl ShellUi {
                 &ctx,
                 &mut self.audit_elements,
             );
-            // A one-line affordance hint until the module browser lands (increment 2). It sits
-            // above the intent log band so the two never collide.
+            // A one-line affordance hint above the intent log band (the two never collide).
             p.text(
                 eg.left_bottom()
                     + egui::vec2(
@@ -715,7 +810,7 @@ impl ShellUi {
                         -(LAYOUT_SPACE_9 as f32 + LAYOUT_SPACE_6 as f32),
                     ),
                 Align2::LEFT_BOTTOM,
-                "drag port to port to patch - long-press a node for the menu - two-finger pan/pinch - double-tap fits",
+                "drag port to patch - long-press empty canvas: ADD MODULE - long-press a node: menu - drag a wire end: re-patch - double-tap fits",
                 font_xs(),
                 pal.text_disabled,
             );
@@ -820,9 +915,100 @@ impl ShellUi {
             .dense(),
         );
 
+        // Increment 3: ONE selected node → its parameters, as touch sliders. Geometry is the
+        // computed `InspectorLayout` the gesture path hit-tests — the row you see is the row you
+        // touch. Anything else (no selection, multi-selection) says so in words.
+        let il = self.canvas.inspector().cloned();
+        let node = il.as_ref().and_then(|l| self.graph.node(l.node).cloned());
+        if let (Some(il), Some(node)) = (il, node) {
+            p.text(
+                egui::pos2(il.title.min.x, il.title.center().y),
+                Align2::LEFT_CENTER,
+                node.title(),
+                font_s(),
+                pal.text_primary,
+            );
+            p.text(
+                egui::pos2(il.title.max.x, il.title.center().y),
+                Align2::RIGHT_CENTER,
+                node.spec.module_id.as_str(),
+                font_xs(),
+                pal.text_tertiary,
+            );
+            p.line_segment(
+                [
+                    egui::pos2(il.title.min.x, il.title.max.y),
+                    egui::pos2(il.title.max.x, il.title.max.y),
+                ],
+                pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
+            );
+            if il.rows.is_empty() {
+                p.text(
+                    egui::pos2(il.title.min.x, il.title.max.y + LAYOUT_SPACE_4 as f32),
+                    Align2::LEFT_TOP,
+                    "this module declares no parameters",
+                    font_s(),
+                    pal.text_disabled,
+                );
+            }
+            for row in &il.rows {
+                let Some(desc) = node.spec.params.get(row.index) else { continue };
+                // Rows below the panel bottom are not drawn — and the core refuses to hit-test
+                // them, so the clip is honest in both directions.
+                if row.track.min.y >= insp.max.y {
+                    break;
+                }
+                let value = node.param_value(row.index).unwrap_or(desc.default as f32);
+                p.text(
+                    egui::pos2(row.label.min.x, row.label.center().y),
+                    Align2::LEFT_CENTER,
+                    desc.name.as_str(),
+                    font_s(),
+                    if row.editable { pal.text_secondary } else { pal.text_disabled },
+                );
+                if row.editable {
+                    let mid_y = row.track.center().y;
+                    let (a, b) =
+                        (egui::pos2(row.track.min.x, mid_y), egui::pos2(row.track.max.x, mid_y));
+                    p.line_segment(
+                        [a, b],
+                        pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32),
+                    );
+                    let kx = sparq_ui::canvas::inspector::knob_x(desc, row.track, value);
+                    let knob = egui::pos2(kx, mid_y);
+                    p.line_segment(
+                        [a, knob],
+                        Stroke::new(LAYOUT_STROKE_SIGNAL as f32, pal.selected),
+                    );
+                    p.circle_filled(knob, LAYOUT_TOUCH_PORT_RADIUS as f32, pal.selected);
+                    p.circle_stroke(
+                        knob,
+                        LAYOUT_TOUCH_PORT_RADIUS as f32,
+                        pal.hairline(pal.hairline_strong, LAYOUT_STROKE_HAIRLINE as f32),
+                    );
+                }
+                p.text(
+                    egui::pos2(row.value.max.x, row.value.center().y),
+                    Align2::RIGHT_CENTER,
+                    sparq_ui::canvas::inspector::value_text(desc, value),
+                    font_s(),
+                    if row.editable { pal.text_primary } else { pal.text_disabled },
+                );
+                // The whole row span is the touch target (the drawn track is thin; the row is
+                // 44 px — the port-capture trick applied to sliders).
+                self.audit_elements.push(InteractiveElement {
+                    id: format!("inspector/param/{}/{}", il.node, row.index),
+                    class: TouchClass::S,
+                    rect: Rect::new(row.label.min, row.value.max),
+                    dense_allowed: false,
+                });
+            }
+            return;
+        }
+
         let mut y = insp.min.y + hb + LAYOUT_SPACE_PADDING_SECTION as f32;
         for line in [
-            "params   - WO-007 module contract",
+            "select ONE node - its params appear here",
             "ports    - WO-008 graph edges",
             "mapping  - WO-009 controller map",
             "analysis - WO-014",

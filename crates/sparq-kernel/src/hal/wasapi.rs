@@ -103,9 +103,9 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Media::Audio::{
     eMultimedia, eRender, EDataFlow, ERole, AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED,
     AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_DEVICE_IN_USE, AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED,
-    AUDCLNT_E_UNSUPPORTED_FORMAT, AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, DEVICE_STATE_ACTIVE, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
-    WAVEFORMATEXTENSIBLE_0,
+    AUDCLNT_E_INVALID_DEVICE_PERIOD, AUDCLNT_E_UNSUPPORTED_FORMAT, AUDCLNT_SHAREMODE_EXCLUSIVE,
+    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, DEVICE_STATE_ACTIVE, WAVEFORMATEX,
+    WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
 };
 use windows_sys::Win32::System::Com::StructuredStorage::{PropVariantClear, PROPVARIANT};
 use windows_sys::Win32::System::Com::{
@@ -1034,6 +1034,7 @@ fn hr_text(hr: HRESULT) -> String {
         x if x == AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED => "AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED",
         x if x == AUDCLNT_E_UNSUPPORTED_FORMAT => "AUDCLNT_E_UNSUPPORTED_FORMAT",
         x if x == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED => "AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED",
+        x if x == AUDCLNT_E_INVALID_DEVICE_PERIOD => "AUDCLNT_E_INVALID_DEVICE_PERIOD",
         _ => "",
     };
     if name.is_empty() {
@@ -1739,33 +1740,89 @@ fn open_exclusive(
         )));
     };
 
-    let period_100ns = (cfg.block_frames as i64) * 10_000_000 / i64::from(rate);
-    let mut client = first_client;
-    let mut hr = client.initialize(
-        AUDCLNT_SHAREMODE_EXCLUSIVE,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-        period_100ns,
-        period_100ns,
-        &wfxe.Format,
+    // Period negotiation (defect #79): the block period is a REQUEST, not an entitlement. Inc
+    // 1.2 asked Initialize for the sparq block — 64 frames = 666 µs at 96 kHz — and the
+    // Behringer's 10 ms engine answered AUDCLNT_E_INVALID_DEVICE_PERIOD, a refusal the format
+    // ladder could not see (IsFormatSupported takes no period). The caps line had been printing
+    // the driver's 10 ms all along; the open path just never asked it. The ladder is pure data
+    // from `crate::hal::period` (unit-tested on Linux, where this project is developed): block
+    // period clamped to the driver minimum first, the driver default second, deduplicated. Each
+    // candidate gets a FRESH IAudioClient — a failed Initialize consumes it — and the documented
+    // BUFFER_SIZE_NOT_ALIGNED two-step rides along per candidate. The pump's FIFO already
+    // decouples device period from sparq block ("Period ≠ block", docs/hal/windows-notes.md), so
+    // accepting the driver's period changes nothing structurally; the latency report and the
+    // open log line read the TRUE period from GetBufferSize in finish_open, as before.
+    let (hw_default, hw_min) = first_client.device_period();
+    let to_100ns = |d: Option<Duration>| d.map(|d| (d.as_nanos() / 100) as i64);
+    let ladder = crate::hal::period::exclusive_period_ladder(
+        cfg.block_frames as u32,
+        rate,
+        to_100ns(hw_default),
+        to_100ns(hw_min),
     );
-    if hr == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED {
-        // Alignment two-step (documented recovery): the failed client reports the driver's
-        // alignment via GetBufferSize; a FRESH client is activated because an initialised (or
-        // failed-initialised) IAudioClient cannot be re-initialised.
-        let frames = client.buffer_size()?;
-        let aligned = (i64::from(frames) * 10_000_000 + i64::from(rate) / 2) / i64::from(rate);
-        client = device.activate_client()?;
-        hr = client.initialize(
+    let mut period_log: Vec<String> = Vec::new();
+    let mut client = first_client;
+    let mut first_try = true;
+    let mut opened: Option<Com<AudioClient>> = None;
+    for &cand in &ladder {
+        if !first_try {
+            client = device.activate_client()?;
+        }
+        first_try = false;
+        let mut hr = client.initialize(
             AUDCLNT_SHAREMODE_EXCLUSIVE,
             AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-            aligned,
-            aligned,
+            cand,
+            cand,
             &wfxe.Format,
         );
+        let mut tried = format!("{}: {}", crate::hal::period::period_text(cand), hr_text(hr));
+        if hr == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED {
+            // Alignment two-step (documented recovery): the failed client reports the driver's
+            // alignment via GetBufferSize; a FRESH client is activated because an initialised
+            // (or failed-initialised) IAudioClient cannot be re-initialised.
+            let frames = client.buffer_size()?;
+            let aligned = (i64::from(frames) * 10_000_000 + i64::from(rate) / 2) / i64::from(rate);
+            client = device.activate_client()?;
+            hr = client.initialize(
+                AUDCLNT_SHAREMODE_EXCLUSIVE,
+                AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                aligned,
+                aligned,
+                &wfxe.Format,
+            );
+            tried = format!(
+                "{tried} → aligned {}: {}",
+                crate::hal::period::period_text(aligned),
+                hr_text(hr)
+            );
+        }
+        if hr >= 0 {
+            opened = Some(client);
+            break;
+        }
+        period_log.push(tried);
+        if hr != AUDCLNT_E_INVALID_DEVICE_PERIOD {
+            // Busy / invalidated / not-allowed: no other period will fix that. Stop asking and
+            // report — the table says what the endpoint actually answered.
+            break;
+        }
     }
-    if hr < 0 {
-        return Err(classify("Initialize (exclusive)", hr));
-    }
+    let Some(client) = opened else {
+        return Err(HalError::Device(format!(
+            "Initialize (exclusive) was refused at {rate} Hz / {ch} ch ({fmt_name}) for every \
+             device period tried [{}] — endpoint reports default {}, minimum {}; if this is a \
+             USB interface its driver wants a period this ladder does not offer — send this \
+             line back, the table IS the diagnosis",
+            period_log.join(" · "),
+            to_100ns(hw_default)
+                .map(crate::hal::period::period_text)
+                .unwrap_or_else(|| "unknown".to_string()),
+            to_100ns(hw_min)
+                .map(crate::hal::period::period_text)
+                .unwrap_or_else(|| "unknown".to_string()),
+        )));
+    };
 
     finish_open(
         client,

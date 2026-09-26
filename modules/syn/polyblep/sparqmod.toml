@@ -1,0 +1,84 @@
+# sparq module manifest — syn/polyblep (WO-014 increment 2).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+# NOTE ON THE NAME: the id is the stable Appendix-B id and cannot be renamed without an alias
+# (manifest-schema §12). The IMPLEMENTATION is a truncated additive synthesis, per defect #12:
+# the original PolyBLEP residual measured -29 dB aliasing against a claimed -60 dB floor and was
+# replaced rather than shipped wrong. Additive is bandlimited by construction — no harmonic above
+# Nyquist exists to alias — and the module-level acceptance test measures the floor (>= 60 dB
+# below the fundamental at 48 kHz). The docs say which is which, in words.
+
+[identity]
+id = "sparq/syn/polyblep"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Polyblep"
+summary = "Bandlimited saw/square/pulse (truncated additive - see defect #12)"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "synth/oscillator/polyblep"
+top = "syn"
+kind = "source"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "out"
+name = "Output"
+direction = "out"
+type = "audio"
+channel_set = "mono"
+
+[[params]]
+id = "freq"
+name = "Frequency"
+type = "float"
+unit = "Hz"
+min = 0.0
+max = 24000.0
+default = 220.0
+
+[[params]]
+id = "shape"
+name = "Shape (0 saw 1 square 2 pulse)"
+type = "int"
+unit = "x"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "pw"
+name = "Pulse width"
+type = "float"
+unit = "ratio"
+min = 0.05
+max = 0.95
+default = 0.5
+
+[[params]]
+id = "amp"
+name = "Amplitude"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 1.0
+default = 0.5
+
+[[params]]
+id = "partials"
+name = "Max partials (0 = Nyquist cap)"
+type = "int"
+unit = "x"
+min = 0.0
+max = 128.0
+default = 48.0
+
+[state]
+schema_id = "sparq/syn/polyblep/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "medium"

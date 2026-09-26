@@ -141,10 +141,39 @@ Template: one row per (machine, interface, backend, config) actually run.
   far says the boost is doing its job. Recorded so it cannot be overlooked; investigate with the
   MMCSS max-characteristics retry.
 
+## 4c. test004, first exclusive acceptance attempt (2026-09-24 evening, increment 1.2 build)
+
+* **Caps checkpoint PASSED — #77's fix works on hardware.** With the four-rung format ladder, the
+  Behringer endpoints list `exclusive 96000` (and the 4-ch endpoint its rates) instead of
+  `exclusive none`. The probe side of the format question is closed on the device that raised it.
+* **Defect #79 — the period, not the format.** Exclusive playback then failed on EVERY rung with
+  one code: `Initialize (exclusive): HRESULT 0x88890020` = `AUDCLNT_E_INVALID_DEVICE_PERIOD`.
+  The arithmetic, in the style of #76: the open asked for the sparq **block** as the exclusive
+  **device period** — 64 fr ÷ 96 000 Hz = **666.7 µs** — while the endpoint's own `GetDevicePeriod`
+  reports default = minimum = **10 ms** (960 fr), the number the caps line had been printing as
+  `hw period 10.000 ms` since increment 1.1. A 15× under-run of the engine period; the driver
+  refuses, and because `IsFormatSupported` takes no period, no format probe can ever see this —
+  only `Initialize` tells the truth (the file's own comment, proved again).
+* **Why the fix costs nothing structurally:** the pump's FIFO already decouples *device period*
+  from *sparq block* ("Period ≠ block", §WASAPI specifics) — the 2 h shared-mode soak of the same
+  day ran a 10 ms period over 64-frame blocks with 0 xruns (10 798 597 blocks). Only the exclusive
+  open's *asking* was missing. Increment 1.3 adds the asking: `hal/period.rs` computes the
+  candidate ladder as pure data (block period clamped to the driver minimum, then the driver
+  default, deduplicated — on the UMC 204HD that collapses to a single 10 ms candidate, the
+  driver's own number), each candidate gets a fresh `IAudioClient` (a failed `Initialize` consumes
+  it) plus the documented alignment two-step, non-period HRESULTs abort early, and total refusal
+  carries the full period probe table. Expected open line on the re-run:
+  `device period 960 fr (10.00 ms) · sparq block 64 fr`.
+* **Also re-confirmed on the real endpoints:** friendly-name `E_ACCESSDENIED` (0x80070005, vt 0)
+  fires with no remote session (#75's signature), endpoints fall back to `<endpoint N>` labels,
+  registry names read fine — the fallback path is doing its job until increment 2's STA retry.
+
 ## 5. Increment 2 backlog (declared, not hidden)
 
 * **Increment 1.2 (pulls ahead of ASIO — it blocks the acceptance soak): integer exclusive
-  rungs (#77).** The exclusive ladder probes f32 only; the Behringer UMC 204HD 192k driver refuses
+  rungs (#77).** **SHIPPED 2026-09-24; probe side verified on hardware by test004's caps
+  checkpoint; the open side surfaced #79, fixed by increment 1.3 the next day (`hal/period.rs`).
+  Acceptance is the test004 re-run.** The exclusive ladder probes f32 only; the Behringer UMC 204HD 192k driver refuses
   f32 exclusive (`AUDCLNT_E_UNSUPPORTED_FORMAT`) and USB DAC drivers generally speak integer in
   exclusive. Add i32 / 24-in-32 / i16 rungs (both `WAVEFORMATEX` and `WAVEFORMATEXTENSIBLE`
   shapes), generalise the pump's existing shared-mode i16 conversion to a `DeviceSampleFormat`

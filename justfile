@@ -49,11 +49,13 @@ ui-headless:
 test:
     cargo test --workspace
 
-# The three Python gates: tokens up to date, mockups/source conformant, unsafe allowlisted.
+# The Python gates: tokens up to date, mockups/source conformant, unsafe allowlisted,
+# module docs generated (no hand-written duplicates).
 python-gates:
     python3 tools/token_gen.py --check
     python3 tools/token_audit.py
     python3 tools/unsafe_audit.py
+    python3 tools/module_docs.py --check
 
 # Regenerate the token artefacts after editing design/tokens/*.toml.
 tokens:

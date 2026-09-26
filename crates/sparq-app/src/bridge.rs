@@ -7,11 +7,12 @@
 //! ungated means `cargo test --workspace` (default features, the CI path) exercises the whole
 //! chain: manifest → registry → factory → graph → executor → samples → WAV.
 //!
-//! The honest limits, declared: parameters come from the manifests' DEFAULTS until the inspector
-//! (WO-013 increment 3) gives nodes param state; every canvas wire becomes a `Plain` edge because
-//! the canvas has no delay-edge UI yet; and a patch containing cv/event/data edges is refused by
-//! the executor in words (v0 `AudioCtx` carries audio only) — the refusal surfaces verbatim in
-//! the shell log rather than rendering silence.
+//! The honest limits, declared: parameters come from the NODE'S param state (the inspector,
+//! WO-013 increment 3) — which starts at the manifests' defaults, so an untouched patch renders
+//! exactly what an increment-2 patch did; every canvas wire becomes a `Plain` edge because the
+//! canvas has no delay-edge UI yet; and a patch containing cv/event/data edges is refused by the
+//! executor in words (v0 `AudioCtx` carries audio only) — the refusal surfaces verbatim in the
+//! shell log rather than rendering silence.
 
 // Without the `ui` feature nothing calls into the bridge — its only consumer (the shell) is
 // ui-gated — but its tests still run in the default build, which is exactly why it is ungated.
@@ -20,7 +21,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use sparq_audio::executor::{ExecConfig, Executor, NodeBuild};
+use sparq_audio::executor::{ExecConfig, Executor, LatencyMode, NodeBuild, Watchdog};
 use sparq_audio::hash::{fnv1a64_f32, hex64};
 use sparq_audio::wav::{write_wav, SampleFormat};
 use sparq_kernel::graph::{
@@ -55,9 +56,8 @@ pub fn demo_graph(registry: &Registry) -> Result<CanvasGraph, String> {
         let reg = registry.get(id).ok_or_else(|| {
             format!("built-in `{id}` is not in the registry — register_builtins first")
         })?;
-        let m = reg.manifest();
-        let name = m.manifest().identity.display_name.clone().unwrap_or_else(|| id.to_string());
-        Ok(NodeSpec::new(id, name, m.ports().to_vec()))
+        // The validated manifest IS the spec source — ports and params, never a hand-copy.
+        Ok(NodeSpec::from_manifest(reg.manifest()))
     };
 
     let mut g = CanvasGraph::new();
@@ -88,6 +88,29 @@ fn node_id(op: &sparq_ui::canvas::model::Op) -> CanvasNodeId {
         // id fails the build loudly at the first wire instead of silently miswiring.
         _ => CanvasNodeId::MAX,
     }
+}
+
+/// The module browser's catalogue, built from the registry (WO-013 increment 3). This is the
+/// ONLY place the registry becomes UI catalogue data, and it is built from the same validated
+/// manifests the executor instantiates from — so the browser cannot offer a module that is not
+/// installed (defect #58's rule, structurally, at the third consumer). Sorted by module id:
+/// deterministic rows for the audit and the goldens.
+#[must_use]
+pub fn browser_catalog(registry: &Registry) -> Vec<sparq_ui::canvas::browser::BrowserItem> {
+    let mut ids = registry.ids();
+    ids.sort_unstable();
+    ids.iter()
+        .filter_map(|id| {
+            registry.get(id).map(|reg| {
+                let m = reg.manifest().manifest();
+                sparq_ui::canvas::browser::BrowserItem {
+                    spec: NodeSpec::from_manifest(reg.manifest()),
+                    summary: m.identity.summary.clone().unwrap_or_default(),
+                    category: m.classification.category.clone().unwrap_or_default(),
+                }
+            })
+        })
+        .collect()
 }
 
 /// Convert a canvas graph into a kernel graph + executor, with `master` as the rendered node.
@@ -137,16 +160,11 @@ pub fn build(
         let reg = registry
             .get(&n.spec.module_id)
             .ok_or_else(|| format!("module `{}` vanished mid-build", n.spec.module_id))?;
-        // Parameters: the manifest defaults, until the inspector gives nodes param state
-        // (WO-013 increment 3). Stated here, and stated in the render log line.
-        let defaults: Vec<f32> = reg
-            .manifest()
-            .manifest()
-            .params
-            .iter()
-            .map(|p| p.default.unwrap_or(0.0) as f32)
-            .collect();
-        let params = ParamSet::new(1, &defaults).ok_or_else(|| {
+        // Parameters: the NODE's state (inspector edits, undoable), which starts at the
+        // manifest defaults — so a never-touched patch renders exactly as before increment 3.
+        // The count is the manifest's own: `effective_params` is one value per declared param.
+        let values = n.effective_params();
+        let params = ParamSet::new(1, &values).ok_or_else(|| {
             format!("module `{}` declares more than MAX_PARAMS parameters", n.spec.module_id)
         })?;
         builds.push((
@@ -159,6 +177,10 @@ pub fn build(
         sample_rate: RENDER_RATE,
         block_frames: RENDER_BLOCK,
         device_channels: RENDER_CHANNELS,
+        // Raw latency: the canvas render reports what the patch declares, it does not silently
+        // re-time it (ADR-006.6's switch is opt-in; the shell will expose it when it matters).
+        latency: LatencyMode::Raw,
+        watchdog: Watchdog::default(),
     };
     let ex = Executor::build(kg, builds, cfg).map_err(|e| e.to_string())?;
     Ok((ex, k_master))
@@ -259,5 +281,60 @@ mod tests {
         assert!(len > 1_900_000, "suspiciously small wav: {len} bytes");
         assert!(ev.contains("hash") && ev.contains("master"), "evidence line: {ev}");
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn the_catalogue_is_the_registry_sorted_with_full_specs() {
+        let reg = registry();
+        let cat = browser_catalog(&reg);
+        assert_eq!(cat.len(), reg.len());
+        let ids: Vec<&str> = cat.iter().map(|i| i.spec.module_id.as_str()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        assert_eq!(ids, sorted, "catalogue order is deterministic");
+        let sine = cat.iter().find(|i| i.spec.module_id == "sparq/syn/sine").unwrap();
+        assert_eq!(sine.spec.params.len(), 2, "freq + amp travel with the spec");
+        assert_eq!(sine.spec.ports.len(), 1);
+        assert!(!sine.summary.is_empty() && !sine.category.is_empty(), "row prose is populated");
+    }
+
+    #[test]
+    fn a_node_param_edit_reaches_the_samples_and_back() {
+        let reg = registry();
+        let mut g = demo_graph(&reg).unwrap();
+        let master = CanvasState::new().resolve_master(&g).unwrap();
+        let peak_of = |g: &CanvasGraph| -> f32 {
+            let (mut ex, km) = build(g, master, &reg).unwrap();
+            let mut out = vec![0.0f32; RENDER_BLOCK * RENDER_CHANNELS];
+            let mut peak = 0.0f32;
+            for _ in 0..100 {
+                ex.render_block(km, &mut out).unwrap();
+                for s in &out {
+                    peak = peak.max(s.abs());
+                }
+            }
+            peak
+        };
+        let before = peak_of(&g);
+        assert!((before - 0.5).abs() < 1e-3, "defaults: sine 0.5 × gain 1.0");
+
+        // The gain node IN THE CHAIN (the spare has no wires), edited through the same op the
+        // inspector uses — the bridge must render the node's state, not the manifest default.
+        let gid = g
+            .nodes()
+            .iter()
+            .find(|n| {
+                n.spec.module_id == "sparq/util/gain" && g.wires().iter().any(|w| w.to.node == n.id)
+            })
+            .map(|n| n.id)
+            .unwrap();
+        let pidx = g.node(gid).unwrap().spec.params.iter().position(|p| p.id == "gain").unwrap();
+        g.op_set_param(gid, pidx, 0.25).unwrap();
+        let after = peak_of(&g);
+        assert!((after - 0.125).abs() < 1e-3, "sine 0.5 × gain 0.25 → peak {after}");
+
+        // Undo-equivalent (the inverse op's value): back to the default render, bit-exact.
+        g.op_set_param(gid, pidx, 1.0).unwrap();
+        assert_eq!(peak_of(&g), before, "the default render is reproducible");
     }
 }

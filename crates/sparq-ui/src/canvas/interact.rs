@@ -12,10 +12,12 @@
 
 use std::collections::BTreeSet;
 
+use crate::canvas::browser::{BrowserHit, BrowserItem, BrowserState};
 use crate::canvas::camera::{Camera, Lod};
 use crate::canvas::connect::{self, ConnectContext, ConnectOutcome};
-use crate::canvas::layout::{self, CanvasLayout, Hit};
-use crate::canvas::model::{Graph, NodeId, Op, PortRef, UndoStack, WireId};
+use crate::canvas::inspector::{self, InspectorLayout};
+use crate::canvas::layout::{self, CanvasLayout, Hit, WireEndSide};
+use crate::canvas::model::{Graph, NodeId, Op, PortRef, UndoStack, Wire, WireId};
 use crate::geom::{Rect, Vec2};
 use crate::gesture::GestureIntent;
 use crate::tokens::{
@@ -85,6 +87,33 @@ pub enum Interaction {
     },
     /// Dragging a wire out of a port.
     Wire(PendingWire),
+    /// Re-patching one end of an EXISTING wire (increment 3): the other end stays put; `orig` is
+    /// the wire as it was, so a refusal or a drop on empty canvas restores it exactly.
+    Repatch {
+        /// The wire being re-patched.
+        wire: WireId,
+        /// Which end is detached and following the finger.
+        side: WireEndSide,
+        /// The wire as it was before the drag (restore data).
+        orig: Wire,
+        /// Where the finger is now, screen px.
+        cursor_screen: Vec2,
+        /// The port the cursor is currently capturing (magnet), if any.
+        hovered: Option<PortRef>,
+    },
+    /// Dragging an inspector slider (increment 3). `pushed` records whether this drag has its own
+    /// history entry yet — the first value change pushes one, later changes within the SAME drag
+    /// replace it, so one gesture is one undo step (and two gestures never merge).
+    Param {
+        /// The node being edited.
+        node: NodeId,
+        /// Index into the node spec's params.
+        index: usize,
+        /// Where the finger is now, screen px.
+        cursor_screen: Vec2,
+        /// Whether this drag already pushed its history entry.
+        pushed: bool,
+    },
     /// Rubber-band multi-select; screen anchor + accumulated screen delta.
     Marquee {
         /// Where the drag began, screen px.
@@ -117,6 +146,8 @@ pub enum MenuAction {
     SetMaster,
     /// Render the patch to a WAV through the executor (the shell executes; the canvas asks).
     RenderWav,
+    /// Open the module browser at the long-press position (increment 3).
+    OpenBrowser,
 }
 
 /// One row of the context menu.
@@ -186,8 +217,9 @@ impl MenuState {
     }
 }
 
-/// Keep a menu of `size` inside `view` given a requested `anchor`.
-fn clamp_origin(anchor: Vec2, size: Vec2, view: Rect) -> Vec2 {
+/// Keep a menu of `size` inside `view` given a requested `anchor`. Shared by the context menu and
+/// the module browser sheet — one clamping rule, so both overlays behave the same near edges.
+pub(super) fn clamp_origin(anchor: Vec2, size: Vec2, view: Rect) -> Vec2 {
     let x = anchor.x.min(view.max.x - size.x).max(view.min.x);
     let y = anchor.y.min(view.max.y - size.y).max(view.min.y);
     Vec2::new(x, y)
@@ -219,6 +251,11 @@ pub enum CanvasEvent {
     /// The user asked for a render. The canvas cannot render (it knows no executor); the shell
     /// consumes this event and does it — an intent, not an effect, all the way down.
     RenderWav,
+    /// The module browser opened (`true`) or closed (`false`).
+    Browser(bool),
+    /// The browser's query changed; carries the match count (the shell's log shows the ranking
+    /// is alive while the user types).
+    BrowserQuery(usize),
 }
 
 impl CanvasEvent {
@@ -238,6 +275,9 @@ impl CanvasEvent {
             Self::Lod(l) => format!("canvas: LOD {l:?}"),
             Self::MasterSet(id) => format!("canvas: master = node {id}"),
             Self::RenderWav => "canvas: RENDER WAV requested".to_string(),
+            Self::Browser(true) => "canvas: module browser open".to_string(),
+            Self::Browser(false) => "canvas: module browser closed".to_string(),
+            Self::BrowserQuery(n) => format!("canvas: browser query — {n} match(es)"),
         }
     }
 }
@@ -259,6 +299,15 @@ pub struct CanvasState {
     /// documented default rule. Until `out/main` exists (WO-014), this is what tells the bridge
     /// which node feeds the listener.
     pub master: Option<crate::canvas::model::NodeId>,
+    /// The open module browser, if any (increment 3). Modal over the canvas like the menu.
+    pub browser: Option<BrowserState>,
+    /// The module catalogue the browser ranks: what the registry actually has, supplied by the
+    /// shell at startup — the canvas never invents modules (defect #58, structurally).
+    catalog: Vec<BrowserItem>,
+    /// The inspector panel geometry for the current selection, recomputed by the shell each
+    /// frame (`None` when nothing is selected or the panel is collapsed). The canvas reads it to
+    /// route slider drags; the painter reads it to draw.
+    inspector: Option<InspectorLayout>,
     last_lod: Lod,
 }
 
@@ -281,7 +330,88 @@ impl CanvasState {
             menu: None,
             history: UndoStack::new(),
             master: None,
+            browser: None,
+            catalog: Vec::new(),
+            inspector: None,
         }
+    }
+
+    /// Supply the browser's catalogue (the shell builds it from the registry: one [`BrowserItem`]
+    /// per installed module, spec + summary + category straight from the validated manifest).
+    pub fn set_catalog(&mut self, items: Vec<BrowserItem>) {
+        self.catalog = items;
+    }
+
+    /// The catalogue size (diagnostics, tests).
+    #[must_use]
+    pub fn catalog_len(&self) -> usize {
+        self.catalog.len()
+    }
+
+    /// The open browser, for the painter.
+    #[must_use]
+    pub fn browser(&self) -> Option<&BrowserState> {
+        self.browser.as_ref()
+    }
+
+    /// Replace the browser's query (the shell pipes its text entry here) and report the match
+    /// count as an event, so the log shows the ranking responding.
+    pub fn browser_set_query(&mut self, q: &str) -> Vec<CanvasEvent> {
+        match &mut self.browser {
+            Some(b) => {
+                b.set_query(q);
+                vec![CanvasEvent::BrowserQuery(b.visible_len())]
+            },
+            None => Vec::new(),
+        }
+    }
+
+    /// Move the browser's selection (a scroll/arrow from the shell), clamped by the core.
+    pub fn browser_move_selection(&mut self, delta: i64, page_rows: usize) {
+        if let Some(b) = &mut self.browser {
+            b.move_selection(delta, page_rows);
+        }
+    }
+
+    /// Navigate the browser rows by keyboard/scroll: the shell pipes arrows, the core owns the
+    /// page geometry (one copy of the row math, shared with the hit-test).
+    pub fn browser_navigate(&mut self, delta: i64, view: Rect) {
+        if let Some(b) = &mut self.browser {
+            let (_, max_h) = crate::canvas::browser::caps(view);
+            b.move_selection(delta, BrowserState::page_rows(max_h));
+        }
+    }
+
+    /// Confirm the browser's selection (the shell's Enter path): spawn the selected module,
+    /// close the sheet. Same code path as a row tap — one spawn rule, two inputs.
+    pub fn browser_confirm(&mut self, graph: &mut Graph) -> Vec<CanvasEvent> {
+        if self.browser.is_some() {
+            self.spawn_selected(graph)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Close the browser without spawning (the shell's Escape path; a tap outside closes via
+    /// [`Self::on_intent`]'s activate path instead).
+    pub fn browser_close(&mut self) -> Vec<CanvasEvent> {
+        if self.browser.take().is_some() {
+            vec![CanvasEvent::Browser(false)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Store this frame's inspector geometry (the shell computes it from the selection and the
+    /// shell layout's inspector rect).
+    pub fn set_inspector(&mut self, il: Option<InspectorLayout>) {
+        self.inspector = il;
+    }
+
+    /// The inspector geometry, for the painter.
+    #[must_use]
+    pub fn inspector(&self) -> Option<&InspectorLayout> {
+        self.inspector.as_ref()
     }
 
     /// Which node feeds the listener: the explicit master when set (and still present), else the
@@ -433,6 +563,12 @@ impl CanvasState {
         layout: &CanvasLayout,
         view: Rect,
     ) -> Vec<CanvasEvent> {
+        // An open browser captures the whole canvas, like the menu: a row spawns, the header
+        // points at the text entry, anything else closes it.
+        if self.browser.is_some() {
+            return self.activate_browser(graph, pos, view);
+        }
+
         // An open menu captures the tap: a row runs its action, anything else closes the menu.
         if let Some(menu) = self.menu.clone() {
             let origin = self.menu_origin(view).unwrap_or(menu.anchor);
@@ -441,7 +577,13 @@ impl CanvasState {
                     if row.enabled {
                         self.menu = None;
                         let mut ev = vec![CanvasEvent::Menu(false)];
-                        ev.extend(self.run_menu_action(graph, menu.target, row.action, view));
+                        ev.extend(self.run_menu_action(
+                            graph,
+                            menu.target,
+                            row.action,
+                            menu.anchor,
+                            view,
+                        ));
                         return ev;
                     }
                     return vec![CanvasEvent::Refused(format!(
@@ -452,6 +594,12 @@ impl CanvasState {
             }
             self.menu = None;
             return vec![CanvasEvent::Menu(false)];
+        }
+
+        // An inspector slider under the finger sets the value where you tapped (tap-to-set;
+        // a drag from here adjusts continuously).
+        if let Some(ev) = self.activate_inspector(graph, pos) {
+            return ev;
         }
 
         let lod = self.camera.lod();
@@ -475,7 +623,7 @@ impl CanvasState {
                 }
                 vec![CanvasEvent::Selection(self.selection.len())]
             },
-            Hit::Wire(id) => {
+            Hit::Wire(id) | Hit::WireEnd(id, _) => {
                 self.selection.clear();
                 self.selection.wires.insert(id);
                 vec![CanvasEvent::Selection(1)]
@@ -487,7 +635,156 @@ impl CanvasState {
         }
     }
 
+    /// Tap routing while the module browser is open. Sheet geometry caps mirror the painter's
+    /// (the browser sheet lives inside the canvas view, at most half of it wide/tall).
+    fn activate_browser(&mut self, graph: &mut Graph, pos: Vec2, view: Rect) -> Vec<CanvasEvent> {
+        let (max_w, max_h) = crate::canvas::browser::caps(view);
+        let hit =
+            self.browser.as_ref().map_or(BrowserHit::Outside, |b| b.hit(pos, view, max_w, max_h));
+        match hit {
+            BrowserHit::Row(i) => {
+                if let Some(b) = &mut self.browser {
+                    b.select(i);
+                }
+                self.spawn_selected(graph)
+            },
+            BrowserHit::Query => {
+                vec![CanvasEvent::Note(
+                    "the search field takes the keyboard — type to filter".to_string(),
+                )]
+            },
+            BrowserHit::Outside => {
+                self.browser = None;
+                vec![CanvasEvent::Browser(false)]
+            },
+        }
+    }
+
+    /// Spawn the browser's selected module where the browser was opened. Closes the browser —
+    /// one row tap is one module, then you are back on the canvas wiring it (the command-surface
+    /// behaviour; "add another" is one long-press away). A no-match query keeps the browser open
+    /// and says so: closing it would hide the reason the tap did nothing.
+    fn spawn_selected(&mut self, graph: &mut Graph) -> Vec<CanvasEvent> {
+        let Some(b) = self.browser.take() else {
+            return vec![CanvasEvent::Refused("the browser is not open".to_string())];
+        };
+        let Some(item) = b.selected_item() else {
+            self.browser = Some(b);
+            return vec![CanvasEvent::Refused(
+                "nothing matches — clear the search or close the browser".to_string(),
+            )];
+        };
+        let spec = item.spec.clone();
+        self.spawn_node(graph, spec, b.spawn_world)
+    }
+
+    /// Insert a node at `world` (snapped to the grid; cascading off an occupied spot so a second
+    /// spawn never lands exactly under the first).
+    fn spawn_node(
+        &mut self,
+        graph: &mut Graph,
+        spec: crate::canvas::model::NodeSpec,
+        world: Vec2,
+    ) -> Vec<CanvasEvent> {
+        let grid = LAYOUT_CANVAS_SNAP as f32;
+        let mut pos = snap(world, grid);
+        let mut guard = 0usize;
+        while guard < 64
+            && graph.nodes().iter().any(|n| {
+                (n.pos.x - pos.x).abs() < f32::EPSILON && (n.pos.y - pos.y).abs() < f32::EPSILON
+            })
+        {
+            pos = snap(Vec2::new(pos.x + grid * 3.0, pos.y + grid * 3.0), grid);
+            guard += 1;
+        }
+        let op = graph.op_add_node(spec, pos);
+        let (new_id, name) = match &op {
+            Op::AddNode(n) => (n.id, n.title().to_string()),
+            _ => return vec![CanvasEvent::Refused("spawn failed".to_string())],
+        };
+        self.history.push(op);
+        self.selection.clear();
+        self.selection.nodes.insert(new_id);
+        vec![
+            CanvasEvent::Browser(false),
+            CanvasEvent::Applied(format!("added {name}")),
+            CanvasEvent::Selection(1),
+        ]
+    }
+
+    /// Tap on an inspector row: select the node and set the parameter at the tapped x. Returns
+    /// `None` when the tap is not on the inspector (the caller continues to the canvas).
+    fn activate_inspector(&mut self, graph: &mut Graph, pos: Vec2) -> Option<Vec<CanvasEvent>> {
+        let (node_id, index, editable, track) = self.inspector.as_ref().and_then(|il| {
+            il.row_at(pos)
+                .map(|i| (il.node, il.rows[i].index, il.rows[i].editable, il.rows[i].track))
+        })?;
+        let desc = graph.node(node_id)?.spec.params.get(index)?.clone();
+        self.selection.clear();
+        self.selection.nodes.insert(node_id);
+        if !editable {
+            return Some(vec![CanvasEvent::Refused(format!(
+                "`{}` ({:?}) is not editable in v0 — options/text editing arrives with manifest v1",
+                desc.name, desc.kind
+            ))]);
+        }
+        let v = inspector::value_from_x(&desc, track, pos.x);
+        Some(self.apply_param(graph, node_id, index, v, false))
+    }
+
+    /// One parameter edit through the model (which clamps/snaps), with history. `coalesce` is
+    /// true only for the updates *inside* an open slider drag whose first change already pushed:
+    /// those replace the open entry, so one drag is one undo step and the log stays quiet until
+    /// the finger lifts. Everything else pushes its own entry and reports the new value.
+    fn apply_param(
+        &mut self,
+        graph: &mut Graph,
+        node: NodeId,
+        index: usize,
+        value: f32,
+        coalesce: bool,
+    ) -> Vec<CanvasEvent> {
+        let Some(op) = graph.op_set_param(node, index, value) else {
+            return Vec::new(); // no change (or refused by the model): silent, the slider says it
+        };
+        if coalesce {
+            if let Some(Op::SetParam { node: pn, index: pi, from: pfrom, .. }) = self.history.top()
+            {
+                if *pn == node && *pi == index {
+                    // Merge into the open entry — keeping its ORIGINAL `from`, so one undo
+                    // restores the value the finger found, not the drag's first waypoint.
+                    if let Op::SetParam { to, .. } = &op {
+                        self.history.replace_top(Op::SetParam {
+                            node,
+                            index,
+                            from: *pfrom,
+                            to: *to,
+                        });
+                    }
+                    return Vec::new();
+                }
+            }
+        }
+        let text = match &op {
+            Op::SetParam { to, .. } => graph
+                .node(node)
+                .and_then(|n| n.spec.params.get(index))
+                .map(|d| format!("{} = {}", d.name, inspector::value_text(d, *to)))
+                .unwrap_or_else(|| format!("param {index} = {to}")),
+            _ => "param".to_string(),
+        };
+        self.history.push(op);
+        vec![CanvasEvent::Applied(text)]
+    }
+
     fn open_menu(&mut self, graph: &Graph, pos: Vec2, layout: &CanvasLayout) -> Vec<CanvasEvent> {
+        // A long-press over an open browser closes it and opens the menu where you pressed —
+        // the menu is the deeper modal (it can re-open the browser).
+        let mut ev = Vec::new();
+        if self.browser.is_some() {
+            self.browser = None;
+            ev.push(CanvasEvent::Browser(false));
+        }
         let lod = self.camera.lod();
         let target = match layout::hit_test(layout, pos, lod) {
             Hit::Node(id) => {
@@ -495,7 +792,7 @@ impl CanvasState {
                 self.selection.nodes.insert(id);
                 MenuTarget::Node(id)
             },
-            Hit::Wire(id) => {
+            Hit::Wire(id) | Hit::WireEnd(id, _) => {
                 self.selection.clear();
                 self.selection.wires.insert(id);
                 MenuTarget::Wire(id)
@@ -538,6 +835,18 @@ impl CanvasState {
             },
             MenuTarget::Wire(_) => vec![MenuRow::row(MenuAction::Delete, "DELETE WIRE", true)],
             MenuTarget::Empty => vec![
+                // ADD MODULE first: on an empty canvas it is the reason you long-pressed.
+                // Disabled (with the reason) when the shell supplied no catalogue — never a row
+                // that silently does nothing (#58's rule reaches the menu too).
+                MenuRow::row(
+                    MenuAction::OpenBrowser,
+                    if self.catalog.is_empty() {
+                        "ADD MODULE (NONE INSTALLED)"
+                    } else {
+                        "ADD MODULE"
+                    },
+                    !self.catalog.is_empty(),
+                ),
                 MenuRow::row(MenuAction::SelectAll, "SELECT ALL", true),
                 MenuRow::row(MenuAction::ZoomFit, "ZOOM TO FIT", true),
                 MenuRow::row(MenuAction::RenderWav, "RENDER WAV", true),
@@ -545,7 +854,8 @@ impl CanvasState {
             ],
         };
         self.menu = Some(MenuState { target, anchor: pos, rows });
-        vec![CanvasEvent::Menu(true)]
+        ev.push(CanvasEvent::Menu(true));
+        ev
     }
 
     fn run_menu_action(
@@ -553,6 +863,7 @@ impl CanvasState {
         graph: &mut Graph,
         target: MenuTarget,
         action: MenuAction,
+        anchor: Vec2,
         view: Rect,
     ) -> Vec<CanvasEvent> {
         match (target, action) {
@@ -562,6 +873,13 @@ impl CanvasState {
                 vec![CanvasEvent::MasterSet(id)]
             },
             (MenuTarget::Empty, MenuAction::RenderWav) => vec![CanvasEvent::RenderWav],
+            (MenuTarget::Empty, MenuAction::OpenBrowser) => {
+                // The sheet anchors at the press; the spawn point is the same press, un-projected
+                // into the world — the module lands where you asked for it, on the grid.
+                let spawn_world = self.camera.to_world(anchor, view);
+                self.browser = Some(BrowserState::open(self.catalog.clone(), anchor, spawn_world));
+                vec![CanvasEvent::Browser(true)]
+            },
             (MenuTarget::Node(id), MenuAction::Bypass) => self.toggle_flag(graph, id, 0),
             (MenuTarget::Node(id), MenuAction::Mute) => self.toggle_flag(graph, id, 1),
             (MenuTarget::Node(id), MenuAction::Lock) => self.toggle_flag(graph, id, 2),
@@ -665,9 +983,45 @@ impl CanvasState {
         }
     }
 
-    fn drag_start(&mut self, graph: &Graph, pos: Vec2, layout: &CanvasLayout) -> Vec<CanvasEvent> {
-        // An open menu is dismissed by a drag that starts outside it.
+    fn drag_start(
+        &mut self,
+        graph: &mut Graph,
+        pos: Vec2,
+        layout: &CanvasLayout,
+    ) -> Vec<CanvasEvent> {
+        // An open menu or browser is dismissed by a drag that starts outside it.
+        let mut ev = Vec::new();
+        if self.browser.is_some() {
+            self.browser = None;
+            ev.push(CanvasEvent::Browser(false));
+        }
         self.menu = None;
+
+        // An inspector slider: the drag edits the parameter continuously (tap-to-set already
+        // happened via Activate when the recogniser decided it was a tap, not a drag).
+        if let Some((node_id, index, editable, track)) = self.inspector.as_ref().and_then(|il| {
+            il.row_at(pos)
+                .map(|i| (il.node, il.rows[i].index, il.rows[i].editable, il.rows[i].track))
+        }) {
+            if !editable {
+                ev.push(CanvasEvent::Refused(
+                    "that parameter is not editable in v0 — see the inspector row".to_string(),
+                ));
+                return ev;
+            }
+            // Set at the grab x immediately (the finger may land off the knob; the value follows
+            // the finger from the first pixel — direct manipulation, no jump-on-move).
+            if let Some(n) = graph.node(node_id) {
+                if let Some(d) = n.spec.params.get(index) {
+                    let v = inspector::value_from_x(d, track, pos.x);
+                    ev.extend(self.apply_param(graph, node_id, index, v, false));
+                }
+            }
+            self.interaction =
+                Interaction::Param { node: node_id, index, cursor_screen: pos, pushed: true };
+            return ev;
+        }
+
         let lod = self.camera.lod();
         match layout::hit_test(layout, pos, lod) {
             Hit::Port(pref, dir) => {
@@ -677,15 +1031,32 @@ impl CanvasState {
                     cursor_screen: pos,
                     hovered: Some(pref),
                 });
-                vec![CanvasEvent::Note("drawing a wire".to_string())]
+                ev.push(CanvasEvent::Note("drawing a wire".to_string()));
+            },
+            Hit::WireEnd(id, side) => {
+                let Some(w) = graph.wire(id).copied() else {
+                    ev.push(CanvasEvent::Refused("no such wire".to_string()));
+                    return ev;
+                };
+                self.selection.clear();
+                self.selection.wires.insert(id);
+                self.interaction = Interaction::Repatch {
+                    wire: id,
+                    side,
+                    orig: w,
+                    cursor_screen: pos,
+                    hovered: None,
+                };
+                ev.push(CanvasEvent::Note("re-patching a wire end".to_string()));
             },
             Hit::Node(id) => {
                 let locked = graph.node(id).map(|n| n.flags.locked).unwrap_or(false);
                 if locked {
-                    return vec![CanvasEvent::Refused(
+                    ev.push(CanvasEvent::Refused(
                         "node is locked — unlock it from the long-press menu to move it"
                             .to_string(),
-                    )];
+                    ));
+                    return ev;
                 }
                 if !self.selection.nodes.contains(&id) {
                     self.selection.clear();
@@ -698,23 +1069,24 @@ impl CanvasState {
                     .filter_map(|nid| graph.node(*nid).map(|n| (n.id, n.pos)))
                     .collect();
                 self.interaction = Interaction::Move { orig, acc_screen: Vec2::ZERO };
-                vec![CanvasEvent::Selection(self.selection.len())]
+                ev.push(CanvasEvent::Selection(self.selection.len()));
             },
             Hit::Wire(id) => {
                 self.selection.clear();
                 self.selection.wires.insert(id);
-                // Wire endpoint re-patch by drag is increment 2; selecting on drag-start is honest.
-                vec![
-                    CanvasEvent::Selection(1),
-                    CanvasEvent::Note("wire re-patch by drag lands in increment 2".to_string()),
-                ]
+                // The body selects; the ENDS (grab points) re-patch — both by drag, so the
+                // gesture you mean is the gesture you get, and the note says which is which.
+                ev.push(CanvasEvent::Selection(1));
+                ev.push(CanvasEvent::Note(
+                    "wire selected — drag one of its ends to re-patch it".to_string(),
+                ));
             },
             Hit::Empty => {
                 self.interaction =
                     Interaction::Marquee { start_screen: pos, acc_screen: Vec2::ZERO };
-                Vec::new()
             },
         }
+        ev
     }
 
     fn drag_update(
@@ -746,6 +1118,32 @@ impl CanvasState {
                     _ => None,
                 };
             },
+            Interaction::Repatch { cursor_screen, hovered, .. } => {
+                *cursor_screen = Vec2::new(cursor_screen.x + delta.x, cursor_screen.y + delta.y);
+                // The same magnet as a fresh wire: the drop target is whatever port captures.
+                let lod = self.camera.lod();
+                *hovered = match layout::hit_test(layout, *cursor_screen, lod) {
+                    Hit::Port(pref, _) => Some(pref),
+                    _ => None,
+                };
+            },
+            Interaction::Param { node, index, cursor_screen, pushed } => {
+                *cursor_screen = Vec2::new(cursor_screen.x + delta.x, cursor_screen.y + delta.y);
+                let (node, index, x, pushed) = (*node, *index, cursor_screen.x, *pushed);
+                // Geometry comes from this frame's inspector; a stale layout (selection changed
+                // mid-drag) simply stops editing rather than guessing.
+                let track = self.inspector.as_ref().and_then(|il| {
+                    if il.node != node {
+                        return None;
+                    }
+                    il.rows.iter().find(|r| r.index == index).map(|r| r.track)
+                });
+                let desc = graph.node(node).and_then(|n| n.spec.params.get(index).cloned());
+                if let (Some(track), Some(d)) = (track, desc) {
+                    let v = inspector::value_from_x(&d, track, x);
+                    self.apply_param(graph, node, index, v, pushed);
+                }
+            },
             Interaction::Marquee { acc_screen, .. } => {
                 acc_screen.x += delta.x;
                 acc_screen.y += delta.y;
@@ -770,10 +1168,112 @@ impl CanvasState {
                 self.finish_move(graph, orig, acc_screen, cancelled)
             },
             Interaction::Wire(p) => self.finish_wire(graph, p, pos, cancelled, layout, ctx),
+            Interaction::Repatch { side, orig, .. } => {
+                self.finish_repatch(graph, side, orig, pos, cancelled, layout, ctx)
+            },
+            Interaction::Param { node, index, .. } => self.finish_param(graph, node, index),
             Interaction::Marquee { start_screen, acc_screen } => {
                 self.finish_marquee(graph, start_screen, acc_screen, view)
             },
             Interaction::Idle => Vec::new(),
+        }
+    }
+
+    /// The slider drag committed: one log line with the final value (mid-drag updates were
+    /// silent and coalesced — the history already holds exactly one entry for the gesture).
+    fn finish_param(&mut self, graph: &Graph, node: NodeId, index: usize) -> Vec<CanvasEvent> {
+        let Some(n) = graph.node(node) else {
+            return Vec::new();
+        };
+        let (Some(d), Some(v)) = (n.spec.params.get(index), n.param_value(index)) else {
+            return Vec::new();
+        };
+        vec![CanvasEvent::Applied(format!("{} = {}", d.name, inspector::value_text(d, v)))]
+    }
+
+    /// Drop a re-patched wire end. The verdict runs on the graph with the old wire ALREADY
+    /// removed — so the cycle check and the single-input replacement rule judge the world the
+    /// re-patch would actually create, not the one it is leaving. A refusal (or a drop on empty
+    /// canvas, or a cancel) restores the original wire exactly: the drag was a question, and
+    /// "no" leaves everything as it was.
+    // The drop-site arguments mirror `finish_wire`'s shape; bundling them into a struct would
+    // hide, not reduce, the same eight values (repo precedent: canvas_ui.rs).
+    #[allow(clippy::too_many_arguments)]
+    fn finish_repatch(
+        &mut self,
+        graph: &mut Graph,
+        side: WireEndSide,
+        orig: Wire,
+        pos: Vec2,
+        cancelled: bool,
+        layout: &CanvasLayout,
+        ctx: &ConnectContext<'_>,
+    ) -> Vec<CanvasEvent> {
+        if cancelled {
+            return vec![CanvasEvent::Note("re-patch cancelled".to_string())];
+        }
+        if graph.wire(orig.id).is_none() {
+            return vec![CanvasEvent::Refused("that wire no longer exists".to_string())];
+        }
+        let lod = self.camera.lod();
+        let target = match layout::hit_test(layout, pos, lod) {
+            Hit::Port(pref, _) => pref,
+            _ => {
+                return vec![CanvasEvent::Note(
+                    "wire end dropped on empty canvas — it snapped back".to_string(),
+                )];
+            },
+        };
+        let current_end = if side == WireEndSide::From { orig.from } else { orig.to };
+        if target == current_end {
+            return vec![CanvasEvent::Note("that end is already there".to_string())];
+        }
+        let target_dir = graph.port(target).map(|p| p.direction).unwrap_or(Direction::In);
+        let (src, dst) = match (side, target_dir) {
+            (WireEndSide::From, Direction::Out) => (target, orig.to),
+            (WireEndSide::To, Direction::In) => (orig.from, target),
+            (WireEndSide::From, _) => {
+                return vec![CanvasEvent::Refused(
+                    "the source end of a wire lives on an OUTPUT — drop it on another output"
+                        .to_string(),
+                )];
+            },
+            (WireEndSide::To, _) => {
+                return vec![CanvasEvent::Refused(
+                    "the destination end of a wire lives on an INPUT — drop it on another input"
+                        .to_string(),
+                )];
+            },
+        };
+        // Detach the old wire first (the verdict must see the post-re-patch graph), then ask the
+        // matrix. Both mutations ride one Batch into history: one three-finger tap restores the
+        // wire exactly where it was.
+        let Some(rm) = graph.op_remove_wire(orig.id) else {
+            return vec![CanvasEvent::Refused("no such wire".to_string())];
+        };
+        match connect::resolve(graph, src, dst, ctx) {
+            ConnectOutcome::Connected { op, conversion, replaced, adapter } => {
+                self.history.push(Op::Batch(vec![rm, op]));
+                let mut ev = vec![CanvasEvent::Applied("re-patch".to_string())];
+                if replaced {
+                    ev.push(CanvasEvent::Note(
+                        "replaced the wire on that single input".to_string(),
+                    ));
+                }
+                if conversion {
+                    ev.push(CanvasEvent::Note(
+                        "summing to mono — warning hairline drawn".to_string(),
+                    ));
+                }
+                if let Some(a) = adapter {
+                    ev.push(CanvasEvent::Note(format!("inserted adapter {}", a.module_id())));
+                }
+                ev
+            },
+            ConnectOutcome::Refused(r) => {
+                graph.apply(&rm.inverse()); // the drag was a question; "no" changes nothing
+                vec![CanvasEvent::Refused(r.reason)]
+            },
         }
     }
 
@@ -913,7 +1413,7 @@ mod tests {
     use super::*;
     use crate::canvas::connect::ConnectContext;
     use crate::canvas::layout::compute;
-    use crate::canvas::model::NodeSpec;
+    use crate::canvas::model::{NodeSpec, ParamDesc, ParamKind};
     use sparq_module_api::manifest::Port;
     use sparq_module_api::port::Phase;
     use sparq_module_api::port::{ChannelSet, CvRange, CvRate, Multiplicity, PortType};
@@ -1365,5 +1865,433 @@ mod tests {
         );
         assert_eq!(g.wire_count(), 0);
         assert!(ev.iter().any(|e| matches!(e, CanvasEvent::Refused(_))));
+    }
+
+    // --------------------------------------- increment 3: browser, inspector, wire re-patch
+
+    fn freq_param() -> ParamDesc {
+        ParamDesc {
+            id: "freq".into(),
+            name: "Frequency".into(),
+            kind: ParamKind::Float,
+            unit: Some("Hz".into()),
+            min: 0.0,
+            max: 24_000.0,
+            default: 440.0,
+        }
+    }
+
+    fn sine_with_params() -> NodeSpec {
+        sine().with_params(vec![freq_param()])
+    }
+
+    fn catalogue() -> Vec<BrowserItem> {
+        vec![
+            BrowserItem {
+                spec: sine_with_params(),
+                summary: "Exact-frequency sine oscillator".into(),
+                category: "synth/oscillator/sine".into(),
+            },
+            BrowserItem::new(gain()),
+            BrowserItem::new(rms_like()),
+        ]
+    }
+
+    #[test]
+    fn the_empty_menu_opens_the_browser_and_a_row_tap_spawns_the_module() {
+        let (mut g, _, _) = two_nodes();
+        let mut s = CanvasState::new();
+        s.set_catalog(catalogue());
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let empty = Vec2::new(v.max.x - 10.0, v.max.y - 10.0);
+        // long-press the empty canvas → the menu offers ADD MODULE (first row)
+        s.on_intent(&mut g, GestureIntent::Context { pos: empty }, &layout, v, &ctx());
+        let menu = s.menu.clone().expect("menu open");
+        let row = menu
+            .rows
+            .iter()
+            .position(|r| r.action == MenuAction::OpenBrowser)
+            .expect("ADD MODULE row");
+        assert!(menu.rows[row].enabled, "a non-empty catalogue enables the row");
+        let origin = s.menu_origin(v).unwrap();
+        let tap = menu.row_rect(origin, row).center();
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: tap }, &layout, v, &ctx());
+        assert!(ev.iter().any(|e| matches!(e, CanvasEvent::Browser(true))), "{ev:?}");
+        assert!(s.browser.is_some(), "the browser is open");
+
+        // type "si" → Sine (name match) first; Gain's id `sparq/util/gain` also contains s…i as
+        // a subsequence, honestly — a name match outranks an id match, so rank 0 is Sine.
+        let ev = s.browser_set_query("si");
+        assert!(ev.iter().any(|e| matches!(e, CanvasEvent::BrowserQuery(2))), "{ev:?}");
+        let (max_w, max_h) = crate::canvas::browser::caps(v);
+        let b = s.browser.as_ref().unwrap();
+        assert_eq!(b.selected_item().unwrap().spec.module_id, "sparq/syn/sine");
+        let origin = b.sheet_origin(v, max_w, max_h);
+        let row0 = b.row_rect(origin, 0, v, max_w).center();
+
+        // tap the row → the module spawns at the press, selected, browser closed
+        let before = g.node_count();
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: row0 }, &layout, v, &ctx());
+        assert_eq!(g.node_count(), before + 1, "a node was spawned");
+        let spawned = g.nodes().iter().last().unwrap();
+        assert_eq!(spawned.spec.module_id, "sparq/syn/sine");
+        assert_eq!(spawned.spec.params.len(), 1, "the spec carried its params");
+        assert!(s.browser.is_none(), "one tap = one module, back to the canvas");
+        assert!(s.selection.nodes.contains(&spawned.id), "the new node is selected");
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Applied(t) if t.contains("Sine"))),
+            "{ev:?}"
+        );
+        // it spawned where the menu was anchored, on the grid
+        let world = s.camera.to_world(empty, v);
+        assert!((spawned.pos.x - world.x).abs() < 64.0 && (spawned.pos.y - world.y).abs() < 64.0);
+        assert_eq!(spawned.pos.x % 8.0, 0.0, "snapped to the grid");
+    }
+
+    #[test]
+    fn a_second_spawn_cascades_off_the_first_instead_of_stacking() {
+        let (mut g, _, _) = two_nodes();
+        let mut s = CanvasState::new();
+        s.set_catalog(catalogue());
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let empty = Vec2::new(v.max.x - 10.0, v.max.y - 10.0);
+        for _ in 0..2 {
+            s.on_intent(&mut g, GestureIntent::Context { pos: empty }, &layout, v, &ctx());
+            let menu = s.menu.clone().unwrap();
+            let row = menu.rows.iter().position(|r| r.action == MenuAction::OpenBrowser).unwrap();
+            let origin = s.menu_origin(v).unwrap();
+            s.on_intent(
+                &mut g,
+                GestureIntent::Activate { pos: menu.row_rect(origin, row).center() },
+                &layout,
+                v,
+                &ctx(),
+            );
+            let (max_w, max_h) = crate::canvas::browser::caps(v);
+            let b = s.browser.as_ref().unwrap();
+            let origin = b.sheet_origin(v, max_w, max_h);
+            let row0 = b.row_rect(origin, 0, v, max_w).center();
+            s.on_intent(&mut g, GestureIntent::Activate { pos: row0 }, &layout, v, &ctx());
+        }
+        let spawned: Vec<_> = g.nodes().iter().skip(2).collect();
+        assert_eq!(spawned.len(), 2);
+        assert_ne!(spawned[0].pos, spawned[1].pos, "the cascade kept them apart");
+    }
+
+    #[test]
+    fn no_catalogue_no_add_module() {
+        let (mut g, _, _) = two_nodes();
+        let mut s = CanvasState::new(); // no catalogue supplied
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let empty = Vec2::new(v.max.x - 10.0, v.max.y - 10.0);
+        s.on_intent(&mut g, GestureIntent::Context { pos: empty }, &layout, v, &ctx());
+        let menu = s.menu.clone().unwrap();
+        let row = menu.rows.iter().position(|r| r.action == MenuAction::OpenBrowser).unwrap();
+        assert!(!menu.rows[row].enabled, "#58: never offer what is not installed");
+        let origin = s.menu_origin(v).unwrap();
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::Activate { pos: menu.row_rect(origin, row).center() },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(s.browser.is_none());
+        assert!(ev.iter().any(|e| matches!(e, CanvasEvent::Refused(_))), "{ev:?}");
+    }
+
+    #[test]
+    fn a_no_match_query_keeps_the_browser_open_and_says_why() {
+        let (mut g, _, _) = two_nodes();
+        let mut s = CanvasState::new();
+        s.set_catalog(catalogue());
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let empty = Vec2::new(v.max.x - 10.0, v.max.y - 10.0);
+        s.on_intent(&mut g, GestureIntent::Context { pos: empty }, &layout, v, &ctx());
+        let menu = s.menu.clone().unwrap();
+        let row = menu.rows.iter().position(|r| r.action == MenuAction::OpenBrowser).unwrap();
+        let origin = s.menu_origin(v).unwrap();
+        s.on_intent(
+            &mut g,
+            GestureIntent::Activate { pos: menu.row_rect(origin, row).center() },
+            &layout,
+            v,
+            &ctx(),
+        );
+        s.browser_set_query("zzz");
+        let (max_w, max_h) = crate::canvas::browser::caps(v);
+        let b = s.browser.as_ref().unwrap();
+        let origin = b.sheet_origin(v, max_w, max_h);
+        // the NO-MATCH page still has a row slot; tapping it must refuse, not spawn
+        let row0 = b.row_rect(origin, 0, v, max_w).center();
+        let before = g.node_count();
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: row0 }, &layout, v, &ctx());
+        assert_eq!(g.node_count(), before, "nothing spawned");
+        assert!(s.browser.is_some(), "the browser stays open — the empty list is the answer");
+        assert!(ev.iter().any(|e| matches!(e, CanvasEvent::Refused(_))), "{ev:?}");
+    }
+
+    #[test]
+    fn dragging_a_wires_end_repatches_it_and_one_undo_restores_the_original() {
+        let mut g = Graph::new();
+        let s_id = nid(&g.op_add_node(sine(), Vec2::new(0.0, 0.0)));
+        let a_id = nid(&g.op_add_node(gain(), Vec2::new(400.0, 0.0)));
+        let b_id = nid(&g.op_add_node(gain(), Vec2::new(400.0, 300.0)));
+        g.op_add_wire(PortRef::new(s_id, 0), PortRef::new(a_id, 0));
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let grab = layout.wires[0].grab_to;
+        let b_in = layout
+            .nodes
+            .iter()
+            .find(|n| n.id == b_id)
+            .unwrap()
+            .ports
+            .iter()
+            .find(|p| p.dir == Direction::In)
+            .unwrap()
+            .screen;
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: grab }, &layout, v, &ctx());
+        assert!(
+            matches!(s.interaction, Interaction::Repatch { side: WireEndSide::To, .. }),
+            "{:?}",
+            s.interaction
+        );
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragUpdate { delta: b_in.sub(grab), scale: 1.0 },
+            &layout,
+            v,
+            &ctx(),
+        );
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: b_in, cancelled: false },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Applied(t) if t == "re-patch")),
+            "{ev:?}"
+        );
+        assert_eq!(g.wire_count(), 1);
+        let new_id = g.wires()[0].id;
+        assert_ne!(new_id, 0, "the re-patch made a NEW wire (the old one was removed)");
+        assert_eq!(g.wires()[0].from, PortRef::new(s_id, 0), "the source end stayed put");
+        assert_eq!(
+            g.wires()[0].to,
+            PortRef::new(b_id, 0),
+            "the destination moved to the spare gain"
+        );
+        // ONE undo restores the original wire — id 0, original ends (the batch is the unit)
+        s.on_intent(&mut g, GestureIntent::Undo, &layout, v, &ctx());
+        assert_eq!(g.wire_count(), 1);
+        assert_eq!(g.wires()[0].id, 0, "the ORIGINAL wire is back, same id, not a copy");
+        assert_eq!(g.wires()[0].to, PortRef::new(a_id, 0));
+    }
+
+    #[test]
+    fn a_repatch_dropped_on_empty_canvas_snaps_back() {
+        let mut g = Graph::new();
+        let s_id = nid(&g.op_add_node(sine(), Vec2::new(0.0, 0.0)));
+        let a_id = nid(&g.op_add_node(gain(), Vec2::new(400.0, 0.0)));
+        g.op_add_wire(PortRef::new(s_id, 0), PortRef::new(a_id, 0));
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let grab = layout.wires[0].grab_to;
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: grab }, &layout, v, &ctx());
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: Vec2::new(600.0, 700.0), cancelled: false },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Note(t) if t.contains("snapped back"))),
+            "{ev:?}"
+        );
+        assert_eq!(g.wires()[0].to, PortRef::new(a_id, 0), "untouched");
+        assert!(!s.history.can_undo(), "a snap-back is not an operation");
+    }
+
+    #[test]
+    fn a_repatch_that_would_close_a_cycle_is_refused_and_restores_the_wire() {
+        // s → a → b; re-patch wire s→a's FROM end onto b's OUTPUT: a→b→a cycle → refused,
+        // and the original wire must survive byte-for-byte (id included).
+        let mut g = Graph::new();
+        let s_id = nid(&g.op_add_node(sine(), Vec2::new(0.0, 0.0)));
+        let a_id = nid(&g.op_add_node(gain(), Vec2::new(400.0, 0.0)));
+        let b_id = nid(&g.op_add_node(gain(), Vec2::new(400.0, 300.0)));
+        g.op_add_wire(PortRef::new(s_id, 0), PortRef::new(a_id, 0));
+        g.op_add_wire(PortRef::new(a_id, 1), PortRef::new(b_id, 0));
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let grab = layout.wires[0].grab_from;
+        let b_out = layout
+            .nodes
+            .iter()
+            .find(|n| n.id == b_id)
+            .unwrap()
+            .ports
+            .iter()
+            .find(|p| p.dir == Direction::Out)
+            .unwrap()
+            .screen;
+        let id_before = g.wires()[0].id;
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: grab }, &layout, v, &ctx());
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: b_out, cancelled: false },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Refused(r) if r.contains("cycle"))),
+            "{ev:?}"
+        );
+        assert_eq!(g.wire_count(), 2, "nothing was lost");
+        // (the restore re-appends, so DRAW ORDER can move — identity and ends must not)
+        let w = g.wire(id_before).expect("the original wire, same id");
+        assert_eq!(w.from, PortRef::new(s_id, 0));
+        assert_eq!(w.to, PortRef::new(a_id, 0));
+    }
+
+    #[test]
+    fn dropping_the_wrong_end_on_the_wrong_direction_says_so() {
+        let mut g = Graph::new();
+        let s_id = nid(&g.op_add_node(sine(), Vec2::new(0.0, 0.0)));
+        let a_id = nid(&g.op_add_node(gain(), Vec2::new(400.0, 0.0)));
+        let b_id = nid(&g.op_add_node(gain(), Vec2::new(400.0, 300.0)));
+        g.op_add_wire(PortRef::new(s_id, 0), PortRef::new(a_id, 0));
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let grab = layout.wires[0].grab_to; // the INPUT end…
+        let b_out = layout
+            .nodes
+            .iter()
+            .find(|n| n.id == b_id)
+            .unwrap()
+            .ports
+            .iter()
+            .find(|p| p.dir == Direction::Out)
+            .unwrap()
+            .screen; // …dropped on an OUTPUT
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: grab }, &layout, v, &ctx());
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: b_out, cancelled: false },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Refused(r) if r.contains("INPUT"))),
+            "{ev:?}"
+        );
+        assert_eq!(g.wires()[0].to, PortRef::new(a_id, 0), "restored");
+    }
+
+    #[test]
+    fn inspector_tap_sets_a_param_and_one_drag_is_one_undo_step() {
+        let mut g = Graph::new();
+        let id = nid(&g.op_add_node(sine_with_params(), Vec2::ZERO));
+        let mut s = CanvasState::new();
+        let panel = Rect::from_min_size(Vec2::new(800.0, 100.0), Vec2::new(400.0, 600.0));
+        let il = inspector::compute(g.node(id).unwrap(), panel);
+        s.set_inspector(Some(il.clone()));
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let row = il.rows[0];
+
+        // tap at 3/4 of the track → freq = 18 000 Hz, node selected, one history entry
+        let tap = Vec2::new(row.track.min.x + row.track.width() * 0.75, row.track.center().y);
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: tap }, &layout, v, &ctx());
+        let got = g.node(id).unwrap().param_value(0).unwrap();
+        assert!((got - 18_000.0).abs() < 1.0, "{got}");
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Applied(t) if t.contains("Frequency"))),
+            "{ev:?}"
+        );
+        assert!(s.selection.nodes.contains(&id), "editing selects the node");
+
+        // drag from 1/4 to 1/2 of the track: many updates, ONE history entry
+        let undo_before = s.history.undo_len();
+        let start = Vec2::new(row.track.min.x + row.track.width() * 0.25, row.track.center().y);
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: start }, &layout, v, &ctx());
+        assert!(matches!(s.interaction, Interaction::Param { .. }), "{:?}", s.interaction);
+        for _ in 0..5 {
+            s.on_intent(
+                &mut g,
+                GestureIntent::DragUpdate {
+                    delta: Vec2::new(row.track.width() * 0.05, 0.0),
+                    scale: 1.0,
+                },
+                &layout,
+                v,
+                &ctx(),
+            );
+        }
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd {
+                pos: Vec2::new(start.x + row.track.width() * 0.25, start.y),
+                cancelled: false,
+            },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(s.history.undo_len(), undo_before + 1, "one drag = one undo step");
+        let dragged = g.node(id).unwrap().param_value(0).unwrap();
+        assert!((dragged - 12_000.0).abs() < 600.0, "{dragged} ≈ half of 24 kHz");
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Applied(t) if t.contains("12000"))),
+            "the final value is logged once, at the end: {ev:?}"
+        );
+
+        // undo → the tap value; undo → the default (param state rides the graph history)
+        s.on_intent(&mut g, GestureIntent::Undo, &layout, v, &ctx());
+        assert!((g.node(id).unwrap().param_value(0).unwrap() - 18_000.0).abs() < 1.0);
+        s.on_intent(&mut g, GestureIntent::Undo, &layout, v, &ctx());
+        assert!((g.node(id).unwrap().param_value(0).unwrap() - 440.0).abs() < 1.0, "default");
+    }
+
+    #[test]
+    fn the_inspector_refuses_a_non_editable_param_in_words() {
+        let mut g = Graph::new();
+        let spec = sine().with_params(vec![ParamDesc {
+            id: "mode".into(),
+            name: "Mode".into(),
+            kind: ParamKind::Enum,
+            unit: None,
+            min: 0.0,
+            max: 0.0,
+            default: 0.0,
+        }]);
+        let id = nid(&g.op_add_node(spec, Vec2::ZERO));
+        let mut s = CanvasState::new();
+        let panel = Rect::from_min_size(Vec2::new(800.0, 100.0), Vec2::new(400.0, 600.0));
+        let il = inspector::compute(g.node(id).unwrap(), panel);
+        s.set_inspector(Some(il.clone()));
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let tap = il.rows[0].track.center();
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: tap }, &layout, v, &ctx());
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Refused(r) if r.contains("not editable"))),
+            "{ev:?}"
+        );
+        assert!(!s.history.can_undo(), "a refusal is not an operation");
     }
 }

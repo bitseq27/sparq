@@ -64,6 +64,7 @@
 pub mod conformance;
 pub mod diag;
 pub mod null;
+pub mod period;
 
 #[cfg(all(windows, feature = "hal-wasapi"))]
 pub mod wasapi;

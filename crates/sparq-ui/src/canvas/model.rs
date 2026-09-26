@@ -17,7 +17,11 @@
 //! executor's atomic mutation (ADR-009 decision 7) will accept.
 
 use crate::geom::{Rect, Vec2};
-use sparq_module_api::manifest::Port;
+use sparq_module_api::manifest::{Port, ValidatedManifest};
+
+// The param value-type is the CONTRACT's enum, re-exported so consumers of `ParamDesc` can match
+// on `kind` without a second import path (one vocabulary, one name in the canvas namespace).
+pub use sparq_module_api::manifest::ParamKind;
 
 /// A node identity. Stable, never reused (see the module docs).
 pub type NodeId = u32;
@@ -57,11 +61,89 @@ pub struct NodeFlags {
     pub locked: bool,
 }
 
+/// One parameter the inspector can show, as a **validated view** of the manifest's `params[]`
+/// entry — the same discipline [`Port`] holds for `[[ports]]`: the canvas never re-reads raw
+/// `Option` fields, and never copies the vocabulary (the `kind` is the contract's own
+/// [`ParamKind`]).
+///
+/// Numeric kinds (`Float`, `Int`) are guaranteed by manifest validation to carry `unit`, `min`,
+/// `max` and an in-range `default`; the defensive `unwrap_or`s in [`param_descs`] only cover the
+/// impossible-so-it-is-documented case. `Bool` maps onto `[0, 1]`. The non-numeric kinds
+/// (`Enum`, `Text`, `Blob`) keep zeroed ranges and are **not editable in v0** — the inspector
+/// shows them greyed with the reason, because inventing an options editor before the manifest
+/// schema grows `options[]` would be a lie the user could act on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParamDesc {
+    /// Stable id, unique within the module.
+    pub id: String,
+    /// Display label.
+    pub name: String,
+    /// The contract's value type.
+    pub kind: ParamKind,
+    /// Unit for numeric kinds (the closed vocabulary's spelling, e.g. `Hz`).
+    pub unit: Option<String>,
+    /// Inclusive minimum (numeric kinds); 0 for `Bool`/non-numeric.
+    pub min: f64,
+    /// Inclusive maximum (numeric kinds); 1 for `Bool`, 0 for non-numeric.
+    pub max: f64,
+    /// The value a fresh node starts at, inside `[min, max]` for editable kinds.
+    pub default: f64,
+}
+
+impl ParamDesc {
+    /// Whether the v0 inspector can edit this parameter with a slider.
+    #[must_use]
+    pub fn editable(&self) -> bool {
+        matches!(self.kind, ParamKind::Float | ParamKind::Int | ParamKind::Bool)
+    }
+}
+
+/// The validated parameter view of a manifest's `params[]`, in declared order. Non-numeric kinds
+/// are carried (so the inspector can *show* them) but flagged non-editable by
+/// [`ParamDesc::editable`].
+#[must_use]
+pub fn param_descs(m: &ValidatedManifest) -> Vec<ParamDesc> {
+    m.manifest()
+        .params
+        .iter()
+        .map(|p| {
+            let kind = p.kind.as_deref().and_then(ParamKind::parse).unwrap_or(ParamKind::Blob);
+            let id = p.id.clone().unwrap_or_default();
+            let name = p.name.clone().unwrap_or_else(|| id.clone());
+            match kind {
+                ParamKind::Float | ParamKind::Int => ParamDesc {
+                    id,
+                    name,
+                    kind,
+                    unit: p.unit.clone(),
+                    // Validation required all three for numeric kinds; the fallbacks keep this
+                    // function total without pretending a missing field is meaningful.
+                    min: p.min.unwrap_or(0.0),
+                    max: p.max.unwrap_or(1.0),
+                    default: p.default.unwrap_or(0.0),
+                },
+                ParamKind::Bool => ParamDesc {
+                    id,
+                    name,
+                    kind,
+                    unit: None,
+                    min: 0.0,
+                    max: 1.0,
+                    default: if p.default.unwrap_or(0.0) != 0.0 { 1.0 } else { 0.0 },
+                },
+                _ => ParamDesc { id, name, kind, unit: None, min: 0.0, max: 0.0, default: 0.0 },
+            }
+        })
+        .collect()
+}
+
 /// What a canvas node *is*: the identity and port vocabulary it renders and wires against.
 ///
-/// Increment 1 carries only what the canvas needs to draw and connect. Parameters, custom panels
-/// and the UI descriptor (plan §6.6) arrive with the inspector increment; the port list is the
-/// validated [`Port`] vocabulary straight from `sparq-module-api`, never a copy.
+/// Increment 1 carried only what the canvas needs to draw and connect. Increment 3 adds the
+/// parameter descriptors the inspector shows ([`NodeSpec::params`]) — still a validated *view* of
+/// the manifest, never a copy of raw schema; the port list remains the validated [`Port`]
+/// vocabulary straight from `sparq-module-api`. Custom panels and the UI descriptor (plan §6.6)
+/// stay future work.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeSpec {
     /// The module id, e.g. `sparq/syn/sine`.
@@ -71,17 +153,41 @@ pub struct NodeSpec {
     /// The module's validated ports, in manifest order (inputs and outputs interleaved as
     /// declared; [`NodeSpec::inputs`]/[`NodeSpec::outputs`] filter by direction).
     pub ports: Vec<Port>,
+    /// The module's validated parameters, in manifest order — what the inspector renders and
+    /// what [`Node::param_values`] indexes into.
+    pub params: Vec<ParamDesc>,
 }
 
 impl NodeSpec {
-    /// A spec from an id, a name and its ports.
+    /// A spec from an id, a name and its ports (no parameters — tests and hand-built specs).
     #[must_use]
     pub fn new(
         module_id: impl Into<String>,
         display_name: impl Into<String>,
         ports: Vec<Port>,
     ) -> Self {
-        Self { module_id: module_id.into(), display_name: display_name.into(), ports }
+        Self {
+            module_id: module_id.into(),
+            display_name: display_name.into(),
+            ports,
+            params: Vec::new(),
+        }
+    }
+
+    /// Builder: attach the parameter descriptors.
+    #[must_use]
+    pub fn with_params(mut self, params: Vec<ParamDesc>) -> Self {
+        self.params = params;
+        self
+    }
+
+    /// The spec of a validated manifest — THE construction path for anything that came through
+    /// the registry, so ports and params both stay the contract's validated views (one copy).
+    #[must_use]
+    pub fn from_manifest(m: &ValidatedManifest) -> Self {
+        let id = m.id().to_string();
+        let display_name = m.manifest().identity.display_name.clone().unwrap_or_else(|| id.clone());
+        Self { module_id: id, display_name, ports: m.ports().to_vec(), params: param_descs(m) }
     }
 
     /// Indices of the input ports, in manifest order.
@@ -122,6 +228,10 @@ pub struct Node {
     /// A user rename (increment 2 supplies the text entry; the field exists so [`Op::Rename`] is
     /// representable and undoable from day one).
     pub custom_name: Option<String>,
+    /// Per-node parameter values, indexed into [`NodeSpec::params`]. Empty means "all defaults"
+    /// (nodes restored from pre-increment-3 history); [`Op::SetParam`] materialises the vector
+    /// from the spec's defaults before writing, so a partially-filled vector is never observable.
+    pub param_values: Vec<f32>,
 }
 
 impl Node {
@@ -129,6 +239,35 @@ impl Node {
     #[must_use]
     pub fn title(&self) -> &str {
         self.custom_name.as_deref().unwrap_or(&self.spec.display_name)
+    }
+
+    /// The current value of parameter `index`: the override if set, else the spec default.
+    /// `None` only when the index is out of range.
+    #[must_use]
+    pub fn param_value(&self, index: usize) -> Option<f32> {
+        if index >= self.spec.params.len() {
+            return None;
+        }
+        Some(
+            self.param_values.get(index).copied().unwrap_or(self.spec.params[index].default as f32),
+        )
+    }
+
+    /// Every parameter value in manifest order — what the bridge hands the executor. Always the
+    /// full length of [`NodeSpec::params`], defaults filled in.
+    #[must_use]
+    pub fn effective_params(&self) -> Vec<f32> {
+        self.spec
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, d)| self.param_values.get(i).copied().unwrap_or(d.default as f32))
+            .collect()
+    }
+
+    /// The defaults of the spec's params — the initial `param_values` of a fresh node.
+    fn default_param_values(spec: &NodeSpec) -> Vec<f32> {
+        spec.params.iter().map(|d| d.default as f32).collect()
     }
 }
 
@@ -192,6 +331,19 @@ pub enum Op {
         /// New custom name.
         to: Option<String>,
     },
+    /// Set one parameter of one node (already clamped/snapped by [`Graph::op_set_param`], so the
+    /// values are exactly what the audio thread will see — the op never carries an out-of-range
+    /// value that undo would have to re-validate).
+    SetParam {
+        /// Which node.
+        node: NodeId,
+        /// Index into [`NodeSpec::params`].
+        index: usize,
+        /// Previous value.
+        from: f32,
+        /// New value.
+        to: f32,
+    },
     /// A group of ops applied and undone as one unit.
     Batch(Vec<Op>),
 }
@@ -215,6 +367,9 @@ impl Op {
             Self::Rename { id, from, to } => {
                 Self::Rename { id: *id, from: to.clone(), to: from.clone() }
             },
+            Self::SetParam { node, index, from, to } => {
+                Self::SetParam { node: *node, index: *index, from: *to, to: *from }
+            },
             Self::Batch(ops) => Self::Batch(ops.iter().rev().map(Op::inverse).collect()),
         }
     }
@@ -230,6 +385,7 @@ impl Op {
             Self::RemoveWire(_) => "disconnect",
             Self::SetFlags { .. } => "flags",
             Self::Rename { .. } => "rename",
+            Self::SetParam { .. } => "param",
             Self::Batch(_) => "batch",
         }
     }
@@ -373,9 +529,13 @@ impl Graph {
     // here: these are the *structural* primitives.
 
     /// Build and apply an [`Op::AddNode`] for `spec` at `pos` (snapped to the grid by the caller).
+    /// The node's parameter values start at the spec's defaults, materialised — so a fresh node
+    /// and an edited-then-undone node carry the same shape of data.
     pub fn op_add_node(&mut self, spec: NodeSpec, pos: Vec2) -> Op {
         let id = self.alloc_node();
-        let node = Node { id, spec, pos, flags: NodeFlags::default(), custom_name: None };
+        let param_values = Node::default_param_values(&spec);
+        let node =
+            Node { id, spec, pos, flags: NodeFlags::default(), custom_name: None, param_values };
         self.apply(&Op::AddNode(node.clone()));
         Op::AddNode(node)
     }
@@ -445,6 +605,29 @@ impl Graph {
         Some(op)
     }
 
+    /// Build and apply a parameter edit, or `None` when there is nothing to record: no such node,
+    /// no such parameter, the parameter is not editable in v0 (see [`ParamDesc::editable`]), or
+    /// the clamped/snapped value equals the current one.
+    ///
+    /// The clamp lives HERE, not in the gesture layer, so every path that can change a parameter
+    /// (slider drag, numeric entry, a future automation lane) obeys the same range and stepping
+    /// rules — and so the [`Op::SetParam`] in history never carries an out-of-range value.
+    pub fn op_set_param(&mut self, id: NodeId, index: usize, to: f32) -> Option<Op> {
+        let node = self.node(id)?;
+        let desc = node.spec.params.get(index)?;
+        if !desc.editable() {
+            return None;
+        }
+        let from = node.param_value(index)?;
+        let to = clamp_param(desc, to);
+        if (from - to).abs() <= f32::EPSILON * from.abs().max(to.abs()).max(1.0) {
+            return None;
+        }
+        let op = Op::SetParam { node: id, index, from, to };
+        self.apply(&op);
+        Some(op)
+    }
+
     // ------------------------------------------------------------ the structural mutator
 
     /// Apply an op to the graph **without validation** — the low-level mutator that both the
@@ -490,12 +673,46 @@ impl Graph {
                     n.custom_name = to.clone();
                 }
             },
+            Op::SetParam { node, index, to, .. } => {
+                if let Some(n) = self.node_mut(*node) {
+                    // Materialise the full vector from defaults before writing, so a node from
+                    // older history (empty param_values) upgrades on first edit, and the vector's
+                    // length always equals the spec's param count after any edit.
+                    if n.param_values.len() < n.spec.params.len() {
+                        n.param_values = Node::default_param_values(&n.spec);
+                    }
+                    if *index < n.param_values.len() {
+                        n.param_values[*index] = *to;
+                    }
+                }
+            },
             Op::Batch(ops) => {
                 for o in ops {
                     self.apply(o);
                 }
             },
         }
+    }
+}
+
+/// The parameter range + stepping rule, in one place: clamp to `[min, max]`, snap `Int` to whole
+/// steps, snap `Bool` to the nearer pole. `Float` keeps continuous values (zipper-noise concerns
+/// belong to the module's smoothing, plan §6 — the canvas must not pre-quantise what the DSP
+/// smooths).
+fn clamp_param(desc: &ParamDesc, v: f32) -> f32 {
+    let lo = desc.min as f32;
+    let hi = desc.max as f32;
+    let v = v.clamp(lo, hi);
+    match desc.kind {
+        ParamKind::Int => v.round(),
+        ParamKind::Bool => {
+            if v >= (lo + hi) / 2.0 {
+                hi
+            } else {
+                lo
+            }
+        },
+        _ => v,
     }
 }
 
@@ -537,6 +754,25 @@ impl UndoStack {
             self.undo.drain(0..excess);
         }
         self.redo.clear();
+    }
+
+    /// The most recent applied op, without removing it. `None` when history is empty.
+    #[must_use]
+    pub fn top(&self) -> Option<&Op> {
+        self.undo.last()
+    }
+
+    /// Overwrite the most recent applied op in place (does NOT clear redo — the caller is
+    /// *extending* the top action, e.g. one slider drag coalesced into one history entry, not
+    /// starting a new one). Returns `false` when history is empty and nothing was replaced.
+    pub fn replace_top(&mut self, op: Op) -> bool {
+        match self.undo.last_mut() {
+            Some(slot) => {
+                *slot = op;
+                true
+            },
+            None => false,
+        }
     }
 
     /// Undo the most recent op: apply its inverse, move it to the redo stack. Returns the op that
@@ -700,6 +936,130 @@ mod tests {
             h.push(op);
         }
         assert_eq!(h.undo_len(), UNDO_DEPTH, "history stops growing at the cap");
+    }
+
+    // ------------------------------------------------------- increment 3: per-node param state
+
+    fn pd(id: &str, kind: ParamKind, min: f64, max: f64, default: f64) -> ParamDesc {
+        ParamDesc {
+            id: id.into(),
+            name: id.into(),
+            kind,
+            unit: Some("Hz".into()),
+            min,
+            max,
+            default,
+        }
+    }
+
+    fn sine_with_params() -> NodeSpec {
+        spec("sine", vec![port("out", Direction::Out, PortType::Audio)]).with_params(vec![
+            pd("freq", ParamKind::Float, 0.0, 24000.0, 440.0),
+            pd("amp", ParamKind::Float, 0.0, 1.0, 0.5),
+        ])
+    }
+
+    #[test]
+    fn a_fresh_node_carries_the_spec_defaults() {
+        let mut g = Graph::new();
+        let op = g.op_add_node(sine_with_params(), Vec2::ZERO);
+        let id = node_id(&op);
+        let n = g.node(id).unwrap();
+        assert_eq!(n.effective_params(), vec![440.0, 0.5]);
+        assert_eq!(n.param_value(0), Some(440.0));
+        assert_eq!(n.param_value(2), None, "out of range is None, not a silent 0");
+    }
+
+    #[test]
+    fn set_param_clamps_and_undoes() {
+        let mut g = Graph::new();
+        let op = g.op_add_node(sine_with_params(), Vec2::ZERO);
+        let id = node_id(&op);
+        let mut h = UndoStack::new();
+        h.push(op);
+
+        let set = g.op_set_param(id, 0, 30_000.0).expect("editable");
+        assert_eq!(g.node(id).unwrap().param_value(0), Some(24_000.0), "clamped to max");
+        h.push(set);
+
+        let set = g.op_set_param(id, 1, 0.25).expect("editable");
+        h.push(set);
+        assert_eq!(g.node(id).unwrap().effective_params(), vec![24_000.0, 0.25]);
+
+        h.undo(&mut g);
+        assert_eq!(g.node(id).unwrap().param_value(1), Some(0.5), "undo restores the value");
+        h.undo(&mut g);
+        assert_eq!(g.node(id).unwrap().param_value(0), Some(440.0));
+        h.redo(&mut g);
+        assert_eq!(g.node(id).unwrap().param_value(0), Some(24_000.0), "redo re-applies");
+    }
+
+    #[test]
+    fn int_params_snap_to_whole_steps_and_bools_to_poles() {
+        let mut g = Graph::new();
+        let s = spec("x", vec![]).with_params(vec![
+            pd("steps", ParamKind::Int, 1.0, 16.0, 4.0),
+            pd("on", ParamKind::Bool, 0.0, 1.0, 0.0),
+        ]);
+        let id = node_id(&g.op_add_node(s, Vec2::ZERO));
+        g.op_set_param(id, 0, 7.4).unwrap();
+        assert_eq!(g.node(id).unwrap().param_value(0), Some(7.0), "int snaps");
+        g.op_set_param(id, 1, 0.7).unwrap();
+        assert_eq!(g.node(id).unwrap().param_value(1), Some(1.0), "bool above mid → on");
+        g.op_set_param(id, 1, 0.3).unwrap();
+        assert_eq!(g.node(id).unwrap().param_value(1), Some(0.0), "bool below mid → off");
+        assert!(g.op_set_param(id, 1, 0.2).is_none(), "already off — no-op records nothing");
+    }
+
+    #[test]
+    fn non_editable_kinds_are_refused_not_faked() {
+        let mut g = Graph::new();
+        let s = spec("x", vec![]).with_params(vec![pd("mode", ParamKind::Enum, 0.0, 0.0, 0.0)]);
+        let id = node_id(&g.op_add_node(s, Vec2::ZERO));
+        assert!(g.op_set_param(id, 0, 1.0).is_none(), "enum is not slider-editable in v0");
+        assert!(g.op_set_param(id, 9, 1.0).is_none(), "no such parameter");
+    }
+
+    #[test]
+    fn an_unchanged_value_records_no_op() {
+        let mut g = Graph::new();
+        let id = node_id(&g.op_add_node(sine_with_params(), Vec2::ZERO));
+        assert!(g.op_set_param(id, 0, 440.0).is_none(), "same value is not an edit");
+    }
+
+    #[test]
+    fn deleting_a_node_takes_its_param_edits_and_undo_restores_them() {
+        let mut g = Graph::new();
+        let id = node_id(&g.op_add_node(sine_with_params(), Vec2::ZERO));
+        let mut h = UndoStack::new();
+        h.push(g.op_set_param(id, 0, 880.0).unwrap());
+        h.push(g.op_remove_node(id).unwrap());
+        assert!(g.node(id).is_none());
+        h.undo(&mut g); // restores the delete
+        let n = g.node(id).expect("node is back");
+        assert_eq!(n.param_value(0), Some(880.0), "the AddNode op carried the edited values");
+    }
+
+    #[test]
+    fn a_node_from_older_history_materialises_defaults_on_first_edit() {
+        let mut g = Graph::new();
+        // A node shaped like pre-increment-3 history: spec has params, values are empty.
+        let legacy = Node {
+            id: 0,
+            spec: sine_with_params(),
+            pos: Vec2::ZERO,
+            flags: NodeFlags::default(),
+            custom_name: None,
+            param_values: Vec::new(),
+        };
+        g.apply(&Op::AddNode(legacy));
+        assert_eq!(g.node(0).unwrap().param_value(1), Some(0.5), "reads fall back to defaults");
+        g.op_set_param(0, 1, 0.9).unwrap();
+        assert_eq!(
+            g.node(0).unwrap().param_values,
+            vec![440.0, 0.9],
+            "first edit materialises the whole vector"
+        );
     }
 
     fn node_id(op: &Op) -> NodeId {

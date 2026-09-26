@@ -68,17 +68,17 @@ WO-002 ─┬─> WO-003                        WO-008 ─> WO-013 ────�
 | WO-003 | **done** | `VISION.md` + ADR-000…009 (009 still `draft` — ratify with the WO-006/008 measurements). |
 | WO-004 | **done (3 of 3 mockups)** | Design mode, Perform mode, display sheet — all generated from tokens, all passing `token_audit`. **Open:** the human protocols (blind identity, distance, dark-room, glove, monochrome) and the display-sheet tablet/wall breakpoints. |
 | WO-005 | **done except live playback (Phase A)** | Offline render, DSP chain, control ring, diagnostics, golden reference, selftest, soak. Deviation: **no window** — the egui shell is WO-012, so Phase 0 uses a terminal control surface. Everything the window would have driven (control ring, counters, render path) is real and tested. `play` compiles and lints clean in CI on all three OSes but **has never produced sound**: no audio device exists in this environment. |
-| WO-006 | **in progress — increment 1.1d; the FIRST PHYSICAL session ran (2026-09-24, `test001`/`test002`)** | HAL trait + diagnostics + null backend + conformance + WASAPI exclusive/shared, 242 tests, four clippy matrix cells clean. **Physical SATURN session (operator present, no RDP, High-performance scheme):** the endpoints are RESOLVED by name — the default is **OUT 1-2 (BEHRINGER UMC 204HD 192k)**; shared mode is proven on the real interface: **first sound ever through the HAL** (tone audible), 10 s plays + a 5-min soak @96k/64 all **0 xruns / 0 allocations** (450 307 blocks, p50 1.0 µs / p99 2.0 µs / max 108 µs, 3 outliers), 4 ch f32 @96k negotiated on OUT 1-4 via the two-shapes ladder (#38/#46 fix working on hardware), **the unplug acceptance criterion PASSED** (mid-run removal → `Removed` state, dev-err 1, 0 xruns, clean stop, recovery play + tone after re-plug), reopen-leak 0 on hardware. **Multichannel criterion resolved honestly** (interface maxes at 4 out; caps say so; null proves ≥8). Remaining for acceptance: **the 2 h zero-xrun soak at 96 kHz/64 EXCLUSIVE — blocked by defect #77**: the exclusive ladder probes f32 only and the Behringer driver refuses f32 exclusive (`AUDCLNT_E_UNSUPPORTED_FORMAT`, not policy — both checkboxes ticked); increment 1.2 adds integer rungs (i32/24-in-32/i16 + pump conversion), then test004 runs the acceptance. Also found: **#75** (friendly-name `E_ACCESSDENIED` on REAL endpoints with no remote session — #40's "RDP quirk" attribution falsified; registry reads names fine → fallback path proven) and **#76** (the `SUSPECT` drift decoded: `(buffer_frames ÷ event_period) ÷ rate − 1` = +1.2 M ppm on BOTH the RDP and Behringer sessions to four digits — `IAudioClock` advances in buffer steps per event tick; the #45 guard did its job, throughput stayed truthful). `docs/hal/windows-notes.md` §4/§4b carry the rows and the arithmetic. |
+| WO-006 | **in progress — increment 1.3 built (2026-09-25); the FIRST PHYSICAL session ran (2026-09-24, `test001`–`test004`); acceptance = the `test004` re-run** | HAL trait + diagnostics + null backend + conformance + WASAPI exclusive/shared, 242 tests, four clippy matrix cells clean. **Physical SATURN session (operator present, no RDP, High-performance scheme):** the endpoints are RESOLVED by name — the default is **OUT 1-2 (BEHRINGER UMC 204HD 192k)**; shared mode is proven on the real interface: **first sound ever through the HAL** (tone audible), 10 s plays + a 5-min soak @96k/64 all **0 xruns / 0 allocations** (450 307 blocks, p50 1.0 µs / p99 2.0 µs / max 108 µs, 3 outliers), 4 ch f32 @96k negotiated on OUT 1-4 via the two-shapes ladder (#38/#46 fix working on hardware), **the unplug acceptance criterion PASSED** (mid-run removal → `Removed` state, dev-err 1, 0 xruns, clean stop, recovery play + tone after re-plug), reopen-leak 0 on hardware. **Multichannel criterion resolved honestly** (interface maxes at 4 out; caps say so; null proves ≥8). Remaining for acceptance: **the 2 h zero-xrun soak at 96 kHz/64 EXCLUSIVE — blocked by defect #77**: the exclusive ladder probes f32 only and the Behringer driver refuses f32 exclusive (`AUDCLNT_E_UNSUPPORTED_FORMAT`, not policy — both checkboxes ticked); increment 1.2 adds integer rungs (i32/24-in-32/i16 + pump conversion), then test004 runs the acceptance. Also found: **#75** (friendly-name `E_ACCESSDENIED` on REAL endpoints with no remote session — #40's "RDP quirk" attribution falsified; registry reads names fine → fallback path proven) and **#76** (the `SUSPECT` drift decoded: `(buffer_frames ÷ event_period) ÷ rate − 1` = +1.2 M ppm on BOTH the RDP and Behringer sessions to four digits — `IAudioClock` advances in buffer steps per event tick; the #45 guard did its job, throughput stayed truthful). `docs/hal/windows-notes.md` §4/§4b carry the rows and the arithmetic. |
 | WO-012 | **in progress — increment 1 built and headless-green** | Toolkit-independent UI core in `sparq-ui` (pointer model, gesture recogniser with the full §14.3 table, shell layout computation, touch-target audit — 37 tests, zero dependencies) + the egui shell in `sparq-app` behind `ui`/`ui-window` features (token-generated style adapter incl. the derived high-contrast theme, window host with per-monitor DPI via winit, headless driver). `sparq ui --audit` is a gate: 5 viewports × 4 DPI scales × 2 modes + DPI-invariance + 9 synthetic-gesture smokes — **PASS (0 failures)** in sandbox; frame logic med 94 µs headless. Defects #50–#53 found and fixed (table below). **Awaiting device:** the DPI matrix on real monitors, touch with a real finger, palm rejection (needs WM_POINTER contact area — winit reports none), 60 fps on the stage device. |
 | WO-007 | **task 1 done — the contract is data, and ten decisions are taken** | `docs/api/compat-matrix.toml` (6 port types, 21 same-type cases, 5 verdicts, 4 adapters, 1 cell still open) and `docs/api/manifest-fields.toml` (82 field rows, 22 required, an error code per violation) — the tables-first artefact task 1 asks for, both parsing, neither consumed by code yet. `WO007-TASK1-REVIEW.md` carries the ten ratified decisions and the two acceptance blockers found. §16's five open questions are all answered, Q1 **by measurement** (`tools/dispatch-bench`: enum dispatch is within noise of monomorphised; per-sample trait objects cost 27–36 µs for 100 null modules against a 20 µs budget, so `process(block)` may be a trait object and nothing per-sample may be). Amended: `manifest-schema.md`, `module-api-v1.md` (§2 cascade rule, §3, §14, §16), ADR-005 addendum, **ADR-009 executor decision 7 + Consequences**, Appendix B and §17 Phase 1 (12 → 15 modules). Defects #54–#65 below. **Tasks 2–3 built** (increment below): `sparq-module-api` — the closed port vocabulary as types, the connection rules as functions, the derived error catalogue (19 legacy kinds + 5), the manifest with every required field an `Option` so absence is reportable, `validate()` returning either a `ValidatedManifest` the executor may use or *every* failure at once, `Copy` param snapshots through the kernel's lock-free ring, and the dyn-compatible `Module` trait whose `AudioCtx` exposes no allocator, clock, filesystem or lock. Three conforming modules as contract tests (`util/gain`, `syn/sine`, `ana/rms`). **368 tests** (was 280 before WO-007), clippy clean in seven of eight cells, **0 allocations across 15 000 `process` calls through `Box<dyn Module>`**. Increment 2 added the **TOML reader** — `toml.rs`, a dependency-free subset parser, and `decode.rs`, text → `ValidatedManifest` reporting syntax and type failures before semantic ones — so a real `sparqmod.toml` can now be read; sections v0 does not decode are still *key-checked*, because accepting `[ui]` while ignoring a typo inside it would be an invisible failure. New stamp **`src 65f/1034459B`**. Defects #60–#63 below. Increment 3 added the **registry and discovery** and task 5's two gates — the API-surface snapshot and the throwaway-module test that walks every engine source file to prove criterion 1 mechanically — so **all six acceptance criteria are now addressed** (3 only as far as Rust allows, and the log says so). **388 tests**, stamp `src 67f/1063788B`, defects #64–#65. Increment 4 closed the last two: **task 4** (`docs/module-author-guide-v0.md`, written from the three reference modules) and the **app-side scan** (`sparq modules [--root DIR] [--strict]` in `crates/sparq-app/src/modules.rs` — the only place in the workspace that reads a directory; the contract crate still holds no I/O). **WO-007 is complete.** The one piece deliberately left open is reading `compat-matrix.toml` at discovery instead of mirroring it in `port.rs` — carried to WO-008, because until then the mirror is the only copy of the matrix that can drift. **P1 device run (2026-09-23, SATURN physical): the first real MSVC build of the increment is green where it counts** — clippy audio+hal clean, release build 58 s, golden bit-identical (`ba577186c988db21`), selftest 8/8, `ui --audit` PASS, 1059× realtime, exe stamp `src 68f/1070593B` — and found six defects, #66–#71 below, fixed in `sync-p1-fixes.zip` (tests + scripts only; stamp unchanged) |
-| WO-013 | **in progress — increment 2 (the bridge) built and headless-green; increment 2b closed the delivery gap (#78) that test005's first SATURN run found** | The graph canvas: `sparq-ui::canvas` (model with invertible ops + undo/redo, camera + LOD, computed layout + hit-testing, connect verdicts delegated to `sparq-module-api`'s own `connect_*`, the intent→op interaction table) + the egui painter in `sparq-app/src/ui/canvas_ui.rs` (nodes/wires/ports in the token signal-class language, glow/dim affordances, marquee, long-press menu). Shell routes canvas intents and binds the WO-012 `DoubleTap`/`Context`/`Undo` stubs. Demo patch = the reference modules that actually exist (#58 honoured). **474 tests**, `sparq ui --audit` PASS (16 smokes incl. 7 canvas; Design cells audit 24 touch targets), goldens unchanged, `ui-window` compiles. **Increment 2 shipped the bridge:** `sparq-app/src/bridge.rs` (ungated — the default CI test path exercises canvas graph → registry → executor → WAV), master resolution (SET MASTER + MASTER badge + the documented default rule), the RENDER WAV menu row, the registry-driven demo graph, `scripts/test005.bat` for SATURN. Artefacts `sparq-ui::canvas`, `docs/ui/gestures.md`. Defect #73 (recogniser release position) found + fixed. **Increment 2b (no product code):** test005's first run on
+| WO-013 | **in progress — increments 2/2b device-VERIFIED (test005 PASS 2026-09-25); increment 3 (browser + inspector + wire re-patch) built and sandbox-green, device run pending (test006)** | The graph canvas: `sparq-ui::canvas` (model with invertible ops + undo/redo, camera + LOD, computed layout + hit-testing, connect verdicts delegated to `sparq-module-api`'s own `connect_*`, the intent→op interaction table) + the egui painter in `sparq-app/src/ui/canvas_ui.rs` (nodes/wires/ports in the token signal-class language, glow/dim affordances, marquee, long-press menu). Shell routes canvas intents and binds the WO-012 `DoubleTap`/`Context`/`Undo` stubs. Demo patch = the reference modules that actually exist (#58 honoured). **474 tests**, `sparq ui --audit` PASS (16 smokes incl. 7 canvas; Design cells audit 24 touch targets), goldens unchanged, `ui-window` compiles. **Increment 2 shipped the bridge:** `sparq-app/src/bridge.rs` (ungated — the default CI test path exercises canvas graph → registry → executor → WAV), master resolution (SET MASTER + MASTER badge + the documented default rule), the RENDER WAV menu row, the registry-driven demo graph, `scripts/test005.bat` for SATURN. Artefacts `sparq-ui::canvas`, `docs/ui/gestures.md`. Defect #73 (recogniser release position) found + fixed. **Increment 2b (no product code):** test005's first run on
 SATURN compiled the new `sparq-app` against the *previous* increment's `sparq-ui` — cargo answered
 `Fresh` for an rlib whose source had been replaced by a zip with archive-restored mtimes (#41's
 mechanism, on the side of the failure the stamp guard cannot see). Now `SYNC-STAMP.txt` +
 `tools/sync_check.py` verify the tree by sha256 *before* cargo runs, and `build.bat` purges the
-first-party fingerprints every build; `test005` reports both as step [00b]. Defect #78. **Awaiting device:** 60 fps at 200 nodes, real palm rejection (WM_POINTER, increment 2), full DPI matrix — none claimable over RDP. **Increment 3:** module browser + fuzzy search, inspector with touch sliders (per-node param state — the bridge renders manifest defaults until then), wire endpoint re-patch, live wire levels (needs WO-008 taps) |
-| WO-008 | **in progress — increments 1–2 built and sandbox-green: the structural graph core + the executor** | `sparq-kernel::graph` (task 1): stable never-reused `NodeId`/`EdgeId`; `EdgeKind {Plain, UnitDelay, BlockDelay}` — §5.4's cycle vocabulary as a type; a topology **version** bumped on committed mutations only (latency edits are data, not topology); the **cached deterministic topological sort** (Kahn, smallest-id frontier — the same graph state always yields the identical order, which is what ADR-007 replay demands; `order_computes()` makes "recomputed only when the version changes" observable, ADR-009 decision 1); plain-edge **cycle refusal carrying the loop's path** in the error, rendered as a sentence that names the delay-edge remedy; delay edges close loops legally and stay out of the ordering; `remove_node` returns the detached edges for the journal/undo layer; per-node `latency_samples` stored for task 5. **Layering decision, recorded:** the kernel graph is *structural* — module-api sits above the kernel in the dependency order, so typed verdicts stay with `connect_*`'s single copy of the matrix and only validated edges are offered to the kernel. 12 tests incl. a 200-node/399-edge order at the acceptance scale; **430 tests total**, clippy/fmt/4 python gates clean, no new unsafe. **Increment 2 (same day):** `sparq-audio::executor` — builds a runnable patch from a kernel graph + contract modules and renders it block-by-block: channel negotiation (mono↔multi, buffer pool pre-allocated and pre-touched at build, budget reported per ADR-009 d4), one `Box<dyn Module>` dispatch per node per block (d7's hybrid), block-delay/unit-delay feedback memories refreshed at block end, `Failed` → silenced + flagged (never unwound), relaxed-atomic meters, deterministic fan-in sums, bit-identical renders across builds (hashed). **Measured: 0 allocations across 1000 blocks and across a 201-node block under the counting allocator**; 13 integration tests + 7 unit; the kernel gained the increment-2 cycle refinement (a `unit_delay` edge is in-block, so it ORDERS like a plain edge and cannot close a loop — loops must contain a `block_delay`; §5.4's own "keeps the executor a simple topological sort" clause, made structural, 2 new tests). **452 tests total**, clippy clean in three cells (workspace + both MSVC cross), goldens unchanged. **Remaining:** task 4 RCU swap + the 10 000-mutation stress test, task 5 latency accounting, task 6 watchdog (overruns are counted, not yet acted on), task 7 the determinism harness proper, multi-port `AudioCtx` (contract v1) so cv/event payloads travel — until then a non-audio edge is REFUSED at build in words, never silently ignored |
-| WO-014 | **in progress — increment 1 built and sandbox-green: the first-party module batch** | The three reference modules promoted from contract tests to library code (`sparq-audio::modules`: `syn/sine`, `util/gain`, `ana/rms`), with their manifests as real files under `modules/` **and** compiled in via `include_str!` — one copy, two consumers (disk discovery + built-in registry), and a test that fails if the file and the binary ever drift. `sparq modules` discovers all three from disk; §11 precedence demonstrated live (the disk copies shadow against the built-ins, reported not errored). New **`sparq exec`** command: registry → factories → kernel graph → executor → WAV with no device — prints the ADR-009 d4 budget line, the analysis-tap value, the master meters and the render's golden hash. **Goldens checked in** (demo patch 2.8 s = `53de3b1f3f40e3c9`, sine 1 s = `3f325d4f99ca2a01`); zero allocations measured per module (5 000 `process` calls each) and through the executor path (1 000 blocks); the rms tap value and the master's metered rms agree to the bit (0.16621882 — analysis-as-control-source, cross-validated). **468 tests**, clippy clean (workspace + ui + MSVC audio cross), existing goldens unchanged. **Remaining:** the other 14 of the WO's 17 modules (Appendix-B order), per-module example patches + generated docs, polyblep aliasing measurement, the rms→filter modulation demo, and the <15 %-of-a-core benchmark on the stage machine |
+first-party fingerprints every build; `test005` reports both as step [00b]. Defect #78. **Awaiting device:** 60 fps at 200 nodes, real palm rejection (WM_POINTER, increment 2), full DPI matrix — none claimable over RDP. **Increment 3 (2026-09-25): shipped the browser, the inspector and wire re-patch — 519 tests, audit PASS with 19 smokes, goldens unchanged** (per-node param state in the model with `Op::SetParam`; the bridge renders node state, untouched patches bit-identical; fuzzy ranking deterministic; re-patch verdicts run on the post-removal graph, refusals restore byte-exact; one drag = one undo step for both moves and sliders). **Live wire levels stay parked** (need WO-008 executor taps — faking them from canvas data would be a lie in motion). Full entry below; device evidence is `test006` |
+| WO-008 | **in progress — increments 1–3 built and sandbox-green: graph core + executor + tasks 4–7 (swap, latency, watchdog, determinism); remaining: multi-port `AudioCtx` (contract v1), the cross-thread hot-swap primitive, and the device-side loaded soak** | `sparq-kernel::graph` (task 1): stable never-reused `NodeId`/`EdgeId`; `EdgeKind {Plain, UnitDelay, BlockDelay}` — §5.4's cycle vocabulary as a type; a topology **version** bumped on committed mutations only (latency edits are data, not topology); the **cached deterministic topological sort** (Kahn, smallest-id frontier — the same graph state always yields the identical order, which is what ADR-007 replay demands; `order_computes()` makes "recomputed only when the version changes" observable, ADR-009 decision 1); plain-edge **cycle refusal carrying the loop's path** in the error, rendered as a sentence that names the delay-edge remedy; delay edges close loops legally and stay out of the ordering; `remove_node` returns the detached edges for the journal/undo layer; per-node `latency_samples` stored for task 5. **Layering decision, recorded:** the kernel graph is *structural* — module-api sits above the kernel in the dependency order, so typed verdicts stay with `connect_*`'s single copy of the matrix and only validated edges are offered to the kernel. 12 tests incl. a 200-node/399-edge order at the acceptance scale; **430 tests total**, clippy/fmt/4 python gates clean, no new unsafe. **Increment 2 (same day):** `sparq-audio::executor` — builds a runnable patch from a kernel graph + contract modules and renders it block-by-block: channel negotiation (mono↔multi, buffer pool pre-allocated and pre-touched at build, budget reported per ADR-009 d4), one `Box<dyn Module>` dispatch per node per block (d7's hybrid), block-delay/unit-delay feedback memories refreshed at block end, `Failed` → silenced + flagged (never unwound), relaxed-atomic meters, deterministic fan-in sums, bit-identical renders across builds (hashed). **Measured: 0 allocations across 1000 blocks and across a 201-node block under the counting allocator**; 13 integration tests + 7 unit; the kernel gained the increment-2 cycle refinement (a `unit_delay` edge is in-block, so it ORDERS like a plain edge and cannot close a loop — loops must contain a `block_delay`; §5.4's own "keeps the executor a simple topological sort" clause, made structural, 2 new tests). **452 tests total**, clippy clean in three cells (workspace + both MSVC cross), goldens unchanged. **Increment 3 (2026-09-25) shipped tasks 4–7 — 549 tests, goldens unchanged:** the boundary-swap `Engine` (clock inheritance, retire-at-boundary, refusals in words) + **the 10 000-mutation stress** (10 001 blocks · 7 203 swaps · 2 797 refusals · **0 audio-path allocations** · hash bit-identical across debug/release); the kernel **per-path latency map** (version+edit-count cached; three hand-computed reference graphs) + the **raw/compensated switch** (per-edge fan-in alignment, no global offset, chains byte-identical); the **watchdog** (N consecutive overruns ⇒ auto-bypass + bounded journal + passthrough-or-silence, the rest of the graph keeps playing); the **determinism harness** (`sparq_audio::determinism` — scripted seeded replay, hash equality; it caught a real HashMap-order nondeterminism in the stress schedule on day one, fixed before shipping). **Remaining:** multi-port `AudioCtx` (contract v1) so cv/event payloads travel — until then a non-audio edge is REFUSED at build in words, never silently ignored; the cross-thread hot-swap primitive (ADR-009 d3's pointer swap, allowlisted-unsafe kernel work — the Engine is single-owner and declared so until it lands); the loaded soak (200 modules, 30 min, zero xruns) stays device-track |
+| WO-014 | **in progress — increments 1–2 built and sandbox-green: 9 first-party modules (the six audio-domain ones of batch 2 measured, goldens checked in, aliasing acceptance passed at −166.8 dB, docs generated from manifests)** | The three reference modules promoted from contract tests to library code (`sparq-audio::modules`: `syn/sine`, `util/gain`, `ana/rms`), with their manifests as real files under `modules/` **and** compiled in via `include_str!` — one copy, two consumers (disk discovery + built-in registry), and a test that fails if the file and the binary ever drift. `sparq modules` discovers all three from disk; §11 precedence demonstrated live (the disk copies shadow against the built-ins, reported not errored). New **`sparq exec`** command: registry → factories → kernel graph → executor → WAV with no device — prints the ADR-009 d4 budget line, the analysis-tap value, the master meters and the render's golden hash. **Goldens checked in** (demo patch 2.8 s = `53de3b1f3f40e3c9`, sine 1 s = `3f325d4f99ca2a01`); zero allocations measured per module (5 000 `process` calls each) and through the executor path (1 000 blocks); the rms tap value and the master's metered rms agree to the bit (0.16621882 — analysis-as-control-source, cross-validated). **468 tests**, clippy clean (workspace + ui + MSVC audio cross), existing goldens unchanged. **Increment 2 (2026-09-26): the six audio-domain modules** (`syn/noise` seeded+resettable, `syn/polyblep` bandlimited-additive with the aliasing acceptance MEASURED through the registry build at **−166.8 dB** vs the −60 dB bar, `flt/svf` five modes, `util/delay` with the set's first parametric latency declaration, `fx/bitcrush` seeded dither, `util/panner` two laws) + six module goldens + a full-chain golden + per-module zero-allocation gates + **`tools/module_docs.py`** (the generated-docs acceptance, `--check` wired into CI/justfile/gates.bat, proven failable). 559 tests, goldens unchanged, audit PASS 19 smokes, `modules --strict` 9/9. **Remaining:** the eight event/cv/multi-port/display modules — declared waiting on the multi-port `AudioCtx` (contract v1) and WO-009, because a trigger port that cannot receive a trigger is a lie with a manifest; per-module example patches (WO-015's study is the example patch; `.sparq` needs WO-011); the rms→filter modulation demo (needs cv edges = contract v1); the <15 %-of-a-core benchmark on the stage machine |
 | WO-009…WO-011, WO-015…WO-016 | not started | WO-009/010 follow WO-008 on the plan's own gate order. WO-013 builds directly on the shell: the gesture layer it needs (drag/pan/pinch/context/undo) is implemented and tested — but see #58: the canvas may not offer a converter module that does not yet exist |
 
 **Phase A additions (Windows bring-up, so a first run on untested hardware is diagnosable rather than mysterious):**
@@ -962,6 +962,289 @@ verified-stale artefact is the same signature #49 recorded.)
 
 Not a product change: no `.rs` under the five `src` roots moved, the stamp stays
 **`src 80f/1348971B`**, the goldens are untouched, the test count is unchanged at **474**.
+
+**WO-013 increment 3 — the browser, the inspector, wire re-patch (2026-09-25, sandbox-built):** the
+three surfaces the increment-2 status line named, built in the established order — *logic* first in
+the toolkit-independent crate with tests, *drawing* last behind the feature. **Live wire levels
+stay parked** (they need the WO-008 executor's analysis taps; faking them from the canvas's own
+data would be a lie in motion).
+
+* **`sparq-ui::canvas::model` gains per-node param state.** `NodeSpec.params: Vec<ParamDesc>` — a
+  *validated view* of the manifest's `params[]` in the same discipline `ports` holds (the `kind` is
+  the contract's own `ParamKind`, re-exported, never copied), built by `NodeSpec::from_manifest`,
+  which is now THE registry→spec constructor (`demo_graph` and the browser catalogue both go
+  through it). `Node.param_values` starts materialised from the spec defaults; nodes restored from
+  pre-increment-3 history (empty vector) read as defaults and materialise on first edit.
+  **`Op::SetParam`** is invertible like every op, and the clamp lives in `Graph::op_set_param` —
+  one range/stepping rule for every edit path (float clamps, int snaps to whole steps, bool snaps
+  to poles, `enum`/`text`/`blob` refuse), so history never holds an out-of-range value.
+* **`sparq-ui::canvas::browser` (new): fuzzy search + browser state + sheet geometry.** The scorer
+  is a deterministic case-insensitive in-order subsequence: **contiguity (+6/char) outranks word
+  starts (+4) outranks earliness (−first index)**; ties break by field (display name > module id >
+  category) then catalogue position — same catalogue + query ⇒ same ranking, which is what makes
+  the rows auditable. The catalogue is *input*: the shell supplies `BrowserItem`s built from the
+  registry (`bridge::browser_catalog`, sorted by id), so the browser **cannot offer a module that
+  is not installed** — #58's rule, structural, at the third consumer. Rows are 56 px
+  (`touch.row_height_browser`, the token that existed for exactly this), one page with
+  selection-scrolling, sheet clamped into the view by the menu's own `clamp_origin`. `caps()` is
+  the ONE size contract shared by hit-test, painter and smokes.
+* **`sparq-ui::canvas::inspector` (new): computed param-panel geometry.** Title + one 44 px row
+  per param (label | track | value); the drawn track is thin but the **touch target is the full
+  row** — the port-capture trick applied to sliders. `value_from_x`/`knob_x` round-trip; rows
+  clipped below the panel are **not touchable** (an invisible control cannot be hit by accident;
+  scrolling is parked in `LATER.md`); `value_text` renders every kind in words ("440.00 Hz",
+  "ON"/"OFF", "Enum · v1" for the not-editable-in-v0 kinds).
+* **Wire-end re-patch.** `WireLayout` gains `grab_from`/`grab_to`: screen points 32 px
+  (port-capture 24 + one space step) along the bézier from each port — clear of the port's own
+  capture, so *"draw a new wire from this port"* and *"move this wire's end"* are two
+  distinguishable touches; on a wire shorter than 2× the offset both converge to the midpoint and
+  the source end wins (documented at the constant). `Hit::WireEnd` sits between ports and bodies
+  in the hit order and is LOD-gated like ports. The drag detaches one end (`Interaction::Repatch`,
+  fixed end stays home, magnet + glow/dim via `connect::preview` against the MOVING end); on drop
+  the old wire is removed **first**, then `resolve` judges — so cycle, duplicate and single-input
+  replacement all see the post-re-patch graph. Success stores `Batch[RemoveWire, <connect ops>]`
+  (one undo restores the original wire, **id included**); refusal / cancel / empty-drop re-applies
+  the inverse — the drag was a question, and "no" changes nothing. Wrong-direction drops are
+  refused in words naming which end lives where.
+* **`interact`: the intent→op table grows three rows, refusals stay verbal.** Empty-canvas menu
+  gains **ADD MODULE** (first row; disabled *with the reason* when the catalogue is empty). The
+  browser is modal over the canvas like the menu: row tap spawns at the press (grid-snapped,
+  cascading off an occupied spot so two spawns never stack), header tap points at the text entry
+  in words, outside tap closes; a no-match query **keeps the sheet open** and its single NO-MATCH
+  row slot is tappable so the refusal arrives in words instead of silence. Slider gestures:
+  `Activate` on a track tap-to-sets; `DragStart`+updates edit continuously with **one drag = one
+  history entry** (mid-drag updates coalesce into the open entry, keeping its ORIGINAL `from` so
+  one undo restores the value the finger *found*). The shell routes inspector-rect drags to the
+  canvas (`route_to_canvas` grows the row-hit case) and pipes keystrokes while the sheet is modal
+  (`feed_browser_keys` reads egui **input events** — no widget, no focus policy; the wrap-egui
+  rule holds. Headless drivers call `browser_set_query` directly.).
+* **`sparq-app`: paint + bridge.** `bridge::build` renders **node param state**; a never-touched
+  node renders at its manifest defaults, so untouched patches are bit-identical to increment 2 —
+  and the goldens prove it rather than the doc claiming it. The painter draws the browser sheet
+  (query header with caret + match count in words, ranked rows name/id + summary·category, the
+  selection worn as a filled band + accent bar), the inspector (track, filled run, knob, value
+  text; non-editable kinds greyed), the re-patch drag (detached end wears an open warning ring at
+  the cursor) and the wire-end rings **exactly where the layout says they are targetable** — what
+  you can touch is what you see, at every LOD that has them. Inspector rows and browser rows
+  register into the same audit list as everything else (class S / M).
+* **Caught in-development by the new tests, fixed before shipping** (no defect numbers — they
+  never left the sandbox): (1) the slider coalescing replaced the whole top op *including its
+  `from`*, so undo would have restored the drag's first waypoint instead of the pre-gesture value
+  — the merge now keeps the original `from`; (2) the browser's `height()` reserved the NO-MATCH
+  row but `hit()` did not cover it, so tapping the only visible row closed the sheet silently —
+  hit and height now agree by construction.
+
+**Measured in sandbox:** **519 tests** (was 474; +45: model params 7, browser 16, inspector 7, layout 3,
+interact 10, bridge 2); clippy clean in the default, `ui`,
+`bootstrap-audio` and **MSVC × 3** cells; the native `ui-window`/gles cell is clean at `-j 1` with
+dev debuginfo off — the "naga OOM" RESUME recorded is **parallel-job pressure at 1 GB**, not naga
+itself (single-job rustc fits); MSVC × `ui-window` remains unrunnable anywhere (the `windows`
+crate's rustc is OOM-killed at 1 GB; environment, not code — CI has no such cell either).
+`sparq ui --audit` **PASS, 0 failures** — 40 matrix cells + DPI invariance unchanged (Design still
+audits 24 targets with nothing selected; inspector rows register only when the panel shows a
+selection) + **19 smokes** (16 + 3 new: *ADD MODULE → fuzzy query → row tap spawns the module*,
+*inslider drag edits the param and ONE undo restores it — graph AND param state*, *drag a wire end
+→ it re-patches; one undo restores the original wire, same id*). Goldens **unchanged**: release
+golden tests pass (`ba577186c988db21` matching), `selftest --golden` **8/8** with determinism
+`0f5c3e86c7f117a9` identical to the ledger, 525.9× realtime (relaxed sandbox codegen — SATURN
+builds with the repo profile), 0 allocations, reopen-leak 0; `sparq modules --strict` clean,
+`sparq exec` PASS with the cross-validated rms tap (0.16621882). 4 Python gates clean.
+**Not claimed (device-only):** 60 fps at 200 nodes, real-finger browser/inspector/re-patch, palm
+rejection while re-patching, the DPI matrix — none claimable over RDP; `test006` runs them.
+Artefacts: `sparq-ui::canvas::{browser,inspector}`, `docs/ui/gestures.md` (§2 rows, §3b, §4b, §4c).
+
+**WO-006 increment 1.3 — the exclusive device-period ladder, defect #79 (2026-09-25, sandbox-built):**
+`test004`'s first acceptance attempt (2026-09-24 21:36, SATURN physical, inc-1.2 build
+`src 75f/1226586B`) split cleanly in two. **The caps checkpoint PASSED** — with the four-rung
+format ladder the Behringer endpoints list `exclusive 96000` instead of `exclusive none`, so #77's
+fix is verified on the device that raised it. **Exclusive playback then failed on every rung** with
+one code: `Initialize (exclusive): HRESULT 0x88890020` = `AUDCLNT_E_INVALID_DEVICE_PERIOD`. The
+format ladder was innocent; the **period** was the lie. The open asked `IAudioClient::Initialize`
+for the sparq **block** as the exclusive **device period** — 64 fr ÷ 96 kHz = **666.7 µs** — while
+the endpoint's `GetDevicePeriod` reports default = minimum = **10 ms** (960 fr): the number the
+caps line had been printing as `hw period 10.000 ms` since increment 1.1. `IsFormatSupported` takes
+no period, so no format probe could ever see this — only `Initialize` tells the truth, and on
+hardware it did.
+
+**The fix asks the driver, and the asking is pure data.** New `sparq-kernel::hal::period`
+(UNGATED — the WASAPI module is `cfg(windows)` and this project is developed on Linux, so the
+decision that failed on the device now unit-tests on the development machine; the null backend's
+discipline applied to a negotiation): `exclusive_period_ladder(block_frames, rate, hw_default,
+hw_min)` returns the candidate periods in 100 ns units — **the block period clamped up to the
+driver minimum first** (on endpoints whose minimum fits the block, the ask is byte-identical to
+inc 1.2's, so the fix costs low-latency devices nothing), **the driver default second** (for the
+documented lying-`min` pattern), deduplicated; a default below the reported minimum is skipped,
+and the raw block period is never re-asked after a clamp (a driver that said no does not get
+asked twice — the #38/#46 lesson). On the UMC 204HD min = default = 10 ms, so the ladder
+**collapses to a single candidate: the driver's own number**. `open_exclusive` executes the list:
+a FRESH `IAudioClient` per candidate (a failed `Initialize` consumes it), the documented
+`BUFFER_SIZE_NOT_ALIGNED` two-step per candidate, `INVALID_DEVICE_PERIOD` advances the ladder,
+any other HRESULT aborts early (busy/invalidated is not a period problem), and total refusal
+carries the **full period probe table** plus the endpoint's reported default/minimum — the #38/#46
+rule kept for the second negotiation axis. `hr_text` now names `0x88890020` (windows-sys 0.61
+exports the constant; checked against the SDK value in the vendored source). The pump needed **no
+change**: the FIFO already decouples device period from sparq block (*Period ≠ block*), and the
+2 h shared soak of 09-24 ran exactly this ratio (10 ms period, 64-fr blocks, 10 798 597 blocks,
+0 xruns) — the latency report and open log keep reading the TRUE period from `GetBufferSize`, so
+no number is invented. `test004.bat`'s header, [04] expectation text and failure HINT now name the
+period axis (text-only edits, ASCII/CRLF/paren rules honoured).
+
+**Defects WO-006 increment 1.3 logs:**
+
+| # | Defect | Caught by |
+|---|---|---|
+| 79 | **Exclusive `Initialize` refused at every format rung with `AUDCLNT_E_INVALID_DEVICE_PERIOD` (0x88890020).** The open passed the sparq block period (64 fr = 666.7 µs @ 96 kHz) as the exclusive device period; the UMC 204HD's engine runs at 10 ms — the value its own caps line printed via `GetDevicePeriod` since inc 1.1. Unreachable by the format ladder (#77) because `IsFormatSupported` takes no period. The block↔period FIFO decoupling already existed and was soak-proven at this exact ratio in shared mode; only the exclusive open's *asking* was missing. Fixed in inc 1.3: the ladder in `hal/period.rs` (pure data, Linux-tested — the failing device's shape is now a unit test that lands on a single 10 ms candidate), fresh client + alignment two-step per candidate, early abort on non-period HRESULTs, full probe table on total refusal | `test004` on SATURN (2026-09-24, `test004.log` line `HRESULT 0x88890020`), root-caused by arithmetic in the sandbox: 64 ÷ 96 000 = 666.7 µs vs `hw period 10.000 ms` — recorded in `docs/hal/windows-notes.md` §4c |
+
+**Measured in sandbox:** **526 tests** (was 519; +7 in `hal/period.rs`, ALL RUNNING ON LINUX —
+including `the_defect_79_device_gets_its_own_period_on_the_first_and_only_try`, the exact
+test004 shape: 64 fr @ 96 kHz, default = min = 10 ms ⇒ ladder `[10 ms]`); fmt clean; clippy clean
+in the default workspace cell and **both MSVC `hal-wasapi` cross-lint cells** (kernel + app,
+`-D warnings`, fresh re-check after touch — the only compiler the WASAPI change meets, as in
+inc 1/1.2, so the wasapi.rs rewiring is compile-verified, not run-verified); goldens untouched
+(the offline path never sees a device period); HAL null conformance unchanged; 4 Python gates
+clean. **Hardware acceptance is unchanged in shape and closer in fact: the `test004` re-run** —
+caps, the exclusive tone (the open line must name its rung AND a ~10 ms period with the 64-fr
+block beneath it), unplug-in-exclusive, and the **2 h zero-xrun soak at 96 kHz/64 exclusive**.
+When it passes: WO-006 acceptance closes and ADR-008's exit condition fires (cpal bootstrap
+deleted, HAL becomes `play`'s default). Artefacts: `sparq-kernel::hal::period`,
+`docs/hal/windows-notes.md` §4c, `WO006-INC13-RUN-SHEET.md`.
+
+**WO-008 increment 3 — tasks 4–7: the swap, the latency, the watchdog, the harness (2026-09-25, sandbox-built):**
+the four tasks the increment-2 status line left open, shipped as one increment because they form
+one argument: *mutation is safe, latency is known, stallers are isolated, and all three are
+reproducible*. The fifth remaining item — multi-port `AudioCtx` (contract v1) — stays declared
+absent: non-audio edges are still REFUSED at build in words, and a contract change deserves its
+own increment, not a rider.
+
+* **Task 4 — atomic mutation + the stress test.** New `sparq-audio::engine::Engine`: one live
+  executor, one staged successor, and a single meeting point — the block boundary. Staging adopts
+  the live transport clock and block count (`Executor::inherit_runtime`: the timeline belongs to
+  the stream, not the patch); the swap is `Option::take` at the top of `render_block`, and the
+  retired executor drops at exactly that point (`ExecNode::Drop` deactivates its modules) —
+  deterministic retirement, because in the single-owner shape nothing else can be inside the old
+  graph. Module STATE is deliberately not carried (state transfer is the state protocol's job,
+  WO-011; declared in the docs). A swap that drops the master refuses **in words** (`NoSuchNode`),
+  never renders silence. **The honest scope, declared where it lives:** ADR-009 d3's literal
+  cross-thread pointer swap needs an epoch-retirement primitive (allowlisted-`unsafe` kernel
+  work, its own increment and proofs — parked in `LATER.md`); until then the boundary semantics
+  are proven by interleaving, which is exactly what the acceptance's stress test measures:
+  **`tests/mutation_stress.rs` — 10 000 seeded random mutations while rendering** (add / remove /
+  connect / disconnect / retune / re-declare latency, each rebuilt control-side and swapped at
+  one boundary): **10 001 blocks, 7 203 swaps, 2 797 refusals** — every refusal left no trace and
+  the render never stopped — **0 allocations** across every rendered block (the counting
+  allocator armed per block, defect #66's serialization discipline), 0 superseded stages, and
+  the whole run takes ~1.2 s debug / 0.23 s release, so it gates every commit.
+* **Task 5 — latency accounting + the raw/compensated switch.** The kernel graph grows the
+  per-path map (`latency_map` / `path_latency` / `max_path_latency`): own declared latency plus
+  the max over incoming arms, computed in topo order, cached on (version, **latency-edit count**,
+  block_frames) — the extra key because `set_latency` is a data edit that deliberately does not
+  bump the version, and a cache that serves the number it just watched change is worse than no
+  cache. `UnitDelay` arms contribute 1 sample; `BlockDelay` arms are feedback and contribute
+  nothing static (a loop's circulation delay is the loop's sound — documented, not averaged
+  away). Three hand-computed reference graphs pin the acceptance criterion (chain 0+128+7=135;
+  diamond 10+max(64,0)=74; unit-delay 5+1=6 at any block size). The switch: `LatencyMode::Raw`
+  (default — byte-identical to increment 2, which the goldens pin) reports; `Compensated` aligns
+  **per fan-in edge** — each plain arm into a summed input is delayed `slowest_arm − own_arm`
+  through a pre-allocated integer-sample ring, so parallel paths arrive together instead of
+  flamming, with **no global pipeline offset invented** (single-input nodes and chains get zero
+  and render byte-identical under the switch — tested). The proof test is arithmetic against a
+  module that physically does what it declares: impulse → {true 128-sample delay | thru} → sum;
+  raw peaks 1.0 at blocks 0 and 2, compensated peaks **2.0 at block 2** and zero before — exactly
+  the hand-computed alignment, and the delay lines show up in the printed memory budget (d4).
+* **Task 6 — the watchdog.** N **consecutive** `Overrun` blocks (default 3, `Watchdog::disabled()`
+  = count-only) auto-bypass the module: it is never called again (a staller cannot stall the
+  block), its output becomes passthrough when shapes match and silence otherwise, the bypass is
+  journaled (`WatchdogEvent {node, block}` in a bounded, build-time-reserved log — audio-path
+  pushes never allocate; overflow is COUNTED as dropped, never grown), and the rest of the graph
+  keeps playing (tested end to end: dc → stall → thru goes silent, bypasses at block 2, and the
+  master hears the dc again from the next block). Any non-overrun block resets the streak —
+  flaky is not stalled (tested). `clear_auto_bypass` re-arms from the control thread. Timing
+  detection stays with the HAL pump, which owns the clock (`Instant::now` is a clippy-denied
+  audio-path call); the executor acts on the status the infrastructure reports — the two halves
+  are one watchdog, and the selftest's HAL gate proves the measuring half.
+* **Task 7 — the determinism harness.** `sparq_audio::determinism`: a script is a seed and a
+  length; the harness plays it against the registry through the SAME engine the stress uses and
+  returns the FNV-1a hash of every sample plus the counters (blocks, swaps, refusals, alloc
+  violations, final graph shape, max path latency). Same seed ⇒ same schedule ⇒ same graphs ⇒
+  same swaps at the same boundaries ⇒ same hash — asserted twice per commit, and the 1 000-
+  mutation replay runs allocation-gated. **It earned its keep on day one:** the first stress
+  replay FAILED — the retune arm indexed a `HashMap`'s iteration order (per-map random), so the
+  same seed chose different gains on each run. Fixed by walking the graph's node Vec (every
+  collection the RNG indexes into must be deterministically ordered), and the lesson is recorded
+  here because the harness is the reason it is a caught bug instead of a stage-day mystery.
+
+**Measured in sandbox:** **549 tests** (was 526; +23: kernel latency 6, engine 4, determinism 5,
+executor watchdog/compensation 6, stress binary 2) · fmt clean · clippy clean in the default,
+`ui`, `bootstrap-audio` and MSVC×3 cells · release goldens **unchanged** (`ba577186c988db21`,
+phase-b, module goldens) and `selftest --golden` **8/8** with determinism `0f5c3e86c7f117a9`
+identical — the executor grew fields and the default path did not move a sample · `sparq ui
+--audit` PASS, 0 failures, 19 smokes (no UI change; re-run because the bridge's `ExecConfig`
+literal moved) · the 10 000-mutation stress hash is **bit-identical across debug and release**
+(`b42068ec7b206789`) — ADR-007's portability claim, measured on the mutation path too · 4 Python
+gates clean. **Not claimed:** the loaded soak (200 modules, 30 min, zero xruns) is the WO's
+hardware acceptance and stays device-track; the cross-thread swap is park-and-declared until the
+kernel primitive lands. Artefacts: `sparq-audio::{engine,determinism}`,
+`sparq-kernel::graph::{latency_map,path_latency,max_path_latency}`, `tests/mutation_stress.rs`.
+
+**WO-014 increment 2 — the audio-domain batch: six modules, measured (2026-09-26, sandbox-built):**
+the module set triples — **9 first-party modules** — with the six whose ports the v0 executor can
+actually carry: **`syn/noise`** (seeded coloured noise, five colours, 8-byte seed state, `reset`
+message replays the stream — §5.6's reproducibility promise, tested), **`syn/polyblep`** (the
+stable Appendix-B id kept — ids are forever, §12 — with the implementation the honest one per
+defect #12: truncated additive synthesis, bandlimited by construction; the manifest header says
+which is which, in words), **`flt/svf`** (the ZDF trapezoidal SVF whose defect #11 test pinned
+"never silently a 1 Hz lowpass", five modes), **`util/delay`** (fractional line, damped feedback,
+dry/wet, **`latency = "param:time"`** — the first parametric latency declaration in the set: the
+wet path delays by `time`, the dry by zero, and a mixed delay has no single static number, which
+is exactly what the parametric form exists for), **`fx/bitcrush`** (depth + rate reduction,
+*deliberate aliasing as a feature*, seeded dither separate per channel), **`util/panner`** (mono→
+stereo, equal-power and linear laws — the gains computed once per block, not per sample). Each is
+a contract-conforming wrapper of a Phase-B primitive that already earned its measurements; each
+ships manifest-on-disk + `include_str!` (the drift test is now **generic over `BUILTINS`** — a
+hardcoded list was the drift it existed to catch, one meta-level up), registry factory, docs.
+**The eight that did NOT ship, declared:** `syn/membrane`, `env/ad`, `mod/lfo`, `mod/clk-div`,
+`util/mixer`, `ana/tap`, `dsp/scope`, `out/main` are event/cv/multi-port/display domain — they
+wait for the multi-port `AudioCtx` (contract v1) and WO-009's clocks, because a module whose
+trigger port cannot receive a trigger is a lie with a manifest. The v0 parameter discipline is
+stated once for the batch: params read once per block; `process` allocation-free **at steady
+params**; a param *change* may recompute tables (polyblep's partial rebuild) — allocation-free
+transitions arrive with contract v1's control-rate design.
+
+**The acceptance item that shipped with this batch: `syn/polyblep` aliasing measured through the
+registry-built module** — frame-exact f0 (340 periods in 16 384 samples at 48 kHz, Phase B's
+method with defect #13's leakage lesson baked in), FFT, content near Nyquist vs the fundamental:
+**−166.8 dB** against the WO's −60 dB requirement. The number is printed by the test, into the
+log, every run — measured, not inherited.
+
+**Also in this increment: the docs generator** (`tools/module_docs.py`, the "docs for all modules
+are generated from manifests (no hand-written duplicates)" acceptance): `docs/modules/*.md` (9)
+are rendered from the same TOML bytes discovery and `include_str!` read — ports, params (with the
+snapshot-order note), parametric latency spelled out, state schema, resources. `--check` is a
+**new CI/gates stage** (wired into `justfile`, `ci.yml` and `scripts\gates.bat`), proven failable
+before shipping (a hand-edit to `syn-sine.md` reads `STALE` and fails the gate), and
+`check_text_io` caught its own Windows-console portability gap (defect #37's class) before the
+first commit — the streams are reconfigured UTF-8 like every other tool.
+
+**Measured in sandbox:** **559 tests** (was 549; +10: 9 in `tests/modules_batch2.rs` — six
+checked-in golden renders (`44ac30042f0233a9`, `bc74dec4272b67a1`, `460cf54e6913ec41`,
+`22ef1d97904b1ff5`, `cdd6232510945825`, `7ef79b30a2c7c469`) plus the full-chain golden
+(`9170415cd3852736`: noise→svf→delay→bitcrush→panner in one executor graph, rendered twice
+bit-identical, 256 blocks allocation-free under the counting allocator — and 5 000-process-call
+zero-allocation gates per module; the delay echo landing at exactly sample 4800 = its declaration,
+decaying through the damping one-pole within measured bounds; the panner's laws at their
+documented curve values; +1 `set_phase` round-trip in `dsp/osc.rs`, the state-restore half the
+polyblep module's 8-byte phase blob needs) · fmt clean · clippy clean in the default, `ui`,
+`bootstrap-audio` and MSVC×3 cells · **goldens UNCHANGED** (`ba577186c988db21`,
+`0f5c3e86c7f117a9`, `d46736fd9a1c48a1` — the demo patch renders identically with a registry three
+times its size) · `selftest --golden` 8/8 · `sparq ui --audit` PASS, 19 smokes (the browser smoke
+still finds exactly one "gain" — the six new names/ids/categories were checked against the fuzzy
+scorer before shipping) · `sparq modules --strict` loads **9/9** from disk · 6 Python gates clean
+incl. the new `module_docs --check`. **Not claimed (device-side):** the <15 %-of-a-core benchmark
+at 96 kHz/64 on the stage machine (sandbox CPU ratios do not transfer — the ledger's standing
+rule); per-module example patches wait for WO-015 (the study IS the example patch, and a
+`.sparq` project needs WO-011's format writer). Artefacts: `modules/{syn/noise,syn/polyblep,
+flt/svf,util/delay,fx/bitcrush,util/panner}/sparqmod.toml`, `docs/modules/*.md`,
+`tools/module_docs.py`, `tests/modules_batch2.rs`.
 
 ---
 

@@ -167,7 +167,7 @@ pub fn run(opts: ExecOpts) -> Result<ExitCode> {
     }
 
     // ---- 2. the patch: registry → factories → kernel graph → executor.
-    let cfg = ExecConfig { sample_rate: opts.rate, block_frames: opts.block, device_channels: 2 };
+    let cfg = ExecConfig::new(opts.rate, opts.block, 2);
     let mut demo = demo_patch(&registry, cfg).map_err(|e| format!("patch build failed: {e}"))?;
     println!(
         "  patch       sine(440 Hz, 0.5) → gain(0.5) → master · rms analysis tap · {} node(s), {} edge(s)",
