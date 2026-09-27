@@ -22,11 +22,16 @@
 //! publishes on its declared `cv` port instead of riding in an audio buffer its manifest never
 //! declared, and `flt/svf` grew the block-rate cv modulation input that the rms→filter acceptance
 //! demo drives. **Increment 3 shipped the three the contract unblocked** (`syn/membrane`,
-//! `env/ad`, `util/mixer`), and **increment 4 ships the two the clocks unblocked** (`mod/lfo`,
-//! `mod/clk-div` — the first event-PROCESSING module: events in, events out). Four remain:
-//! `ana/tap`, `dsp/scope` wait on the ring publication (ADR-009 d8), `out/main` on the canvas
-//! master handover. Declared rather than faked: a module whose trigger port cannot receive a
-//! trigger is a lie with a manifest.
+//! `env/ad`, `util/mixer`), and **increment 4 shipped the two the clocks unblocked** (`mod/lfo`,
+//! `mod/clk-div` — the first event-PROCESSING module: events in, events out). **Increment 5 ships
+//! the last three, completing the set at SEVENTEEN**: `ana/tap` (the generic signal tap — the
+//! waveform a display rides, published onto the analysis ring), `dsp/scope` (the first real visual
+//! module — a display whose `process` is a deliberate NO-OP, so its zero-audio-thread-cost
+//! acceptance is architecture, not optimisation), and `out/main` (the master output with the
+//! metering hook, shipping with the canvas master-handover rule). They waited on the ring
+//! publication (ADR-009 d8, WO-008 inc 5) and the canvas handover, not on effort — declared
+//! rather than faked: a module whose payload cannot travel is a lie with a manifest, and now they
+//! travel.
 //!
 //! The v0 parameter discipline, stated once for the batch: parameters are read once per block
 //! (zipper-free at block granularity, like `syn/sine`), `process` is allocation-free **at steady
@@ -69,6 +74,64 @@ pub const MIXER_MANIFEST: &str = include_str!("../../../modules/util/mixer/sparq
 pub const LFO_MANIFEST: &str = include_str!("../../../modules/mod/lfo/sparqmod.toml");
 /// The `mod/clk-div` manifest — the on-disk file, compiled in.
 pub const CLK_DIV_MANIFEST: &str = include_str!("../../../modules/mod/clk-div/sparqmod.toml");
+/// The `ana/tap` manifest — the on-disk file, compiled in.
+pub const TAP_MANIFEST: &str = include_str!("../../../modules/ana/tap/sparqmod.toml");
+/// The `dsp/scope` manifest — the on-disk file, compiled in.
+pub const SCOPE_MANIFEST: &str = include_str!("../../../modules/dsp/scope/sparqmod.toml");
+/// The `out/main` manifest — the on-disk file, compiled in.
+pub const OUT_MAIN_MANIFEST: &str = include_str!("../../../modules/out/main/sparqmod.toml");
+
+// --------------------------------------------------------------------------- tempo derivation
+
+/// Module-side tempo derivation from the block-start tick the executor already carries — the door
+/// the WO-014 increment-5 DECISION chose over a per-frame tick view (which would have been a
+/// contract change rippling through every implementor and the `api_snapshot` pins).
+///
+/// There is no clock in [`AudioCtx`] and this adds none: the module reads the musical position the
+/// block context carries (WO-009's `set_musical_position` door, fed on the cross-thread side by the
+/// `SetMusical` command) and DIFFS it against the previous block. `bpm = (Δtick / ppqn) / Δseconds
+/// × 60`, where `Δseconds = frames / sample_rate`. A tempo EDIT thus takes effect one block late —
+/// 1.3 ms at 96 kHz/64, below any musical threshold — which is the declared cost of not changing the
+/// contract, recorded rather than hidden.
+///
+/// Honest edge cases: no previous block yet, a frozen tick (transport stopped, or the musical door
+/// never set), or a backwards tick (a transport seek) all leave the estimate HELD rather than
+/// inventing a tempo — `bpm()` returns the last good estimate, or `0.0` when there has never been
+/// one, and callers fall back to their free-running parameter at `0.0` so a beat-locked module
+/// never silently stops. This is performance state, not project state: it is deliberately NOT in any
+/// state blob (a save/restore re-derives it from the transport on the next block, exactly like
+/// `mod/clk-div`'s count and `syn/membrane`'s hit memory).
+#[derive(Clone, Copy, Debug)]
+struct TempoFollower {
+    prev_tick: u64,
+    have_prev: bool,
+    bpm: f64,
+}
+
+impl TempoFollower {
+    /// A follower with no estimate yet (`bpm() == 0.0`).
+    const fn new() -> Self {
+        Self { prev_tick: 0, have_prev: false, bpm: 0.0 }
+    }
+
+    /// Feed this block's musical position; returns the current bpm estimate (`0.0` = never derived).
+    fn update(&mut self, tick: u64, ppqn: u32, frames: usize, sample_rate: u32) -> f64 {
+        if self.have_prev && tick > self.prev_tick && ppqn > 0 && frames > 0 && sample_rate > 0 {
+            let dticks = (tick - self.prev_tick) as f64;
+            let dsec = frames as f64 / f64::from(sample_rate);
+            let beats = dticks / f64::from(ppqn);
+            let derived = beats / dsec * 60.0;
+            if derived.is_finite() && derived > 0.0 {
+                self.bpm = derived;
+            }
+        }
+        // A frozen or backwards tick holds the last estimate (and re-anchors prev so a seek
+        // recovers on the next advancing block rather than deriving a huge spurious tempo).
+        self.prev_tick = tick;
+        self.have_prev = true;
+        self.bpm
+    }
+}
 
 // --------------------------------------------------------------------------- syn/sine
 
@@ -637,8 +700,12 @@ fn stereo_tick<F: FnMut(usize, f32) -> f32>(ctx: &mut AudioCtx<'_>, mut tick: F)
 // --------------------------------------------------------------------------- util/delay
 
 /// The feedback delay: fractional line, damping in the feedback path (a long tail darkens the
-/// way an analogue one does), dry/wet mix, and tempo sync through `set_tempo_sync` when a
-/// transport exists (WO-009 — until then `time` in ms is the source of truth).
+/// way an analogue one does), dry/wet mix, and **tempo sync** — the `set_tempo_sync` path the
+/// WO-014 increment-5 decision unblocked. When `tempo-sync` is on, the delay time is a beat
+/// division derived from a module-side bpm estimate ([`TempoFollower`], the same door the LFO's
+/// beat-lock rides): `time = division × 60 / bpm`, no clock in the context and no contract change.
+/// With no transport feeding a tick, it falls back to the `time` parameter in ms, so a tempo-synced
+/// delay never silently collapses to zero.
 ///
 /// The WO's contract stress for this module is *declared latency + legal cycles*, and both are
 /// real: the manifest declares `latency = "param:time"` (the wet path delays by `time`, the dry
@@ -647,13 +714,17 @@ fn stereo_tick<F: FnMut(usize, f32) -> f32>(ctx: &mut AudioCtx<'_>, mut tick: F)
 /// unit-delay-safe by construction; EXTERNAL loops still need a `block_delay` edge, because
 /// §5.4's cycle rule lives in the kernel, not in a module's good manners.
 ///
-/// Parameters: 0 time (ms) · 1 feedback (0..0.95) · 2 damping (0..1) · 3 mix (0..1). v0 state is
-/// empty and says so: two seconds of delay memory is not project state — a restore starts the
-/// tail again, declared rather than hidden.
+/// Parameters: 0 time (ms) · 1 feedback (0..0.95) · 2 damping (0..1) · 3 mix (0..1) ·
+/// 4 tempo-sync (0 = ms, 1 = beat-locked) · 5 division (delay time in beats when tempo-sync = 1;
+/// e.g. 0.25 = a sixteenth, 0.5 = an eighth, 1 = a quarter). v0 state is empty and says so: two
+/// seconds of delay memory is not project state, and the tempo estimate is performance state —
+/// a restore starts the tail again and re-derives tempo from the transport, declared not hidden.
 #[derive(Clone, Debug)]
 pub struct Delay {
     lines: [crate::dsp::delay::DelayLine; 2],
     applied: (f32, f32, f32, f32),
+    rate: u32,
+    tempo: TempoFollower,
 }
 
 impl Delay {
@@ -664,6 +735,8 @@ impl Delay {
         Self {
             lines: [crate::dsp::delay::DelayLine::new(2.0), crate::dsp::delay::DelayLine::new(2.0)],
             applied: (f32::NAN, f32::NAN, f32::NAN, f32::NAN),
+            rate: 48_000,
+            tempo: TempoFollower::new(),
         }
     }
 }
@@ -692,6 +765,8 @@ impl Module for Delay {
         if resources.sample_rate == 0 {
             return Err(ModuleError::Resources("sample_rate must be non-zero"));
         }
+        self.rate = resources.sample_rate;
+        self.tempo = TempoFollower::new();
         for l in &mut self.lines {
             l.prepare(resources.sample_rate);
         }
@@ -705,18 +780,32 @@ impl Module for Delay {
             }
             return BlockStatus::Silenced;
         }
-        let time = ctx.param(0).clamp(1.0, 2000.0);
+        let time_ms = ctx.param(0).clamp(1.0, 2000.0);
         let fb = ctx.param(1).clamp(0.0, 0.95);
         let damp = ctx.param(2).clamp(0.0, 1.0);
         let mix = ctx.param(3).clamp(0.0, 1.0);
-        if self.applied != (time, fb, damp, mix) {
+        let tempo_sync = ctx.param(4).round().clamp(0.0, 1.0) as i32; // 0 = ms, 1 = beat-locked
+        let division = ctx.param(5).clamp(0.0, 16.0); // delay time in beats, when beat-locked
+        let bpm = self.tempo.update(ctx.block.tick, ctx.block.ppqn, ctx.frames(), self.rate);
+        let synced = tempo_sync == 1 && bpm > 0.0 && division > 0.0;
+        // The effective delay time in seconds, however derived — the guard key, so a steady
+        // tempo/param block costs nothing. Beat-lock rides `set_tempo_sync` (the once-unreachable
+        // DSP path); no transport falls back to the ms parameter so a synced delay never collapses.
+        let secs =
+            if synced { f64::from(division) * 60.0 / bpm } else { f64::from(time_ms) / 1000.0 };
+        let key = (secs.clamp(0.0, 2.0) as f32, fb, damp, mix);
+        if self.applied != key {
             for l in &mut self.lines {
-                l.set_time(f64::from(time) / 1000.0);
+                if synced {
+                    l.set_tempo_sync(bpm, f64::from(division), 1.0);
+                } else {
+                    l.set_time(f64::from(time_ms) / 1000.0);
+                }
                 l.feedback = fb;
                 l.damp = damp;
                 l.mix = mix;
             }
-            self.applied = (time, fb, damp, mix);
+            self.applied = key;
         }
         stereo_tick(ctx, |c, v| self.lines[c].tick(v))
     }
@@ -1339,22 +1428,35 @@ pub fn create_mixer() -> Box<dyn Module> {
 /// triggers are the intended sync source (WO-009 emits them); the range and sync decisions are
 /// recorded in the manifest header, not buried here.
 ///
-/// Parameters: 0 rate (Hz) · 1 shape (0 sine · 1 tri · 2 saw · 3 square) · 2 depth (0..1).
+/// Parameters: 0 rate (Hz) · 1 shape (0 sine · 1 tri · 2 saw · 3 square) · 2 depth (0..1) ·
+/// 3 sync (0 = free-running Hz, 1 = beat-locked to the transport) · 4 division (cycles per beat
+/// when sync = 1; e.g. 1 = one cycle per beat, 0.5 = one per two beats, 2 = two per beat). The
+/// beat-lock is the WO-014 increment-5 DECISION realised: the rate comes from a module-side bpm
+/// derivation ([`TempoFollower`]) over the block-start tick the executor already carries — no
+/// contract change, and a tempo edit lands one block late (declared). With no transport feeding a
+/// tick, sync = 1 falls back to the free-running `rate` so the LFO never silently stops.
 /// The state blob is exactly 8 bytes — the f64 phase, the `syn/sine` promise: a save/restore
-/// lands phase-continuous.
+/// lands phase-continuous. The tempo estimate is performance state, deliberately NOT in the blob.
 #[derive(Clone, Copy, Debug)]
 pub struct Lfo {
     phase: f64,
     inc: f64,
     rate: u32,
     applied: (f32, f32),
+    tempo: TempoFollower,
 }
 
 impl Lfo {
     /// A fresh oscillator at phase zero, 1 Hz.
     #[must_use]
     pub fn new() -> Self {
-        Self { phase: 0.0, inc: 1.0 / 48_000.0, rate: 48_000, applied: (f32::NAN, f32::NAN) }
+        Self {
+            phase: 0.0,
+            inc: 1.0 / 48_000.0,
+            rate: 48_000,
+            applied: (f32::NAN, f32::NAN),
+            tempo: TempoFollower::new(),
+        }
     }
 
     /// The shape at phase `p` (0..1), mapped into 0..1 — the manifest header's range decision.
@@ -1407,6 +1509,7 @@ impl Module for Lfo {
         }
         self.rate = resources.sample_rate;
         self.applied = (f32::NAN, f32::NAN); // force the increment recompute on the first block
+        self.tempo = TempoFollower::new(); // a resource change re-derives tempo from the transport
         Ok(())
     }
 
@@ -1414,9 +1517,22 @@ impl Module for Lfo {
         // Inputs and scalars first, the taken output view last — the v1 borrow discipline.
         let events = ctx.events_in(0).unwrap_or(&[]);
         let frames = ctx.frames();
-        let rate = ctx.param(0).clamp(0.05, 50.0);
+        let rate_hz = ctx.param(0).clamp(0.05, 50.0);
         let depth = ctx.param(2).clamp(0.0, 1.0);
         let shape = ctx.param(1).round().clamp(0.0, 3.0) as i32;
+        let sync = ctx.param(3).round().clamp(0.0, 1.0) as i32; // 0 = free Hz, 1 = beat-locked
+        let division = ctx.param(4).clamp(0.0, 64.0); // cycles per beat, when beat-locked
+                                                      // BEAT LOCK (the WO-014 inc-5 decision, module-side): derive bpm from the block-start tick
+                                                      // delta and run at `division` cycles per beat. A transport that has not yielded a bpm yet
+                                                      // (bpm 0.0 — the musical door never set, or stopped) falls back to the free-running `rate`
+                                                      // parameter, so a beat-locked LFO never silently stops; the one-block lag on a tempo EDIT is
+                                                      // the declared, measured cost of not changing the contract.
+        let bpm = self.tempo.update(ctx.block.tick, ctx.block.ppqn, frames, self.rate);
+        let rate = if sync == 1 && bpm > 0.0 && division > 0.0 {
+            ((f64::from(division) * bpm / 60.0) as f32).clamp(0.0, 1000.0)
+        } else {
+            rate_hz
+        };
         if self.applied != (rate, depth) {
             self.inc = f64::from(rate) / f64::from(self.rate);
             self.applied = (rate, depth);
@@ -1659,11 +1775,260 @@ pub fn create_clk_div() -> Box<dyn Module> {
     Box::new(ClkDiv::new())
 }
 
+// --------------------------------------------------------------------------- ana/tap
+
+/// The generic signal tap for displays (WO-014 increment 5) — the analysis source the display
+/// side rides. Where [`Rms`] publishes ONE block-rate level, `Tap` publishes the WAVEFORM at
+/// audio rate plus the block's peak and rms, so a [`Scope`] can render a signal's shape and not
+/// just its loudness.
+///
+/// Three declared `cv` outputs, one payload each: `wave` (audio-rate, bipolar — the signed mono
+/// monitor mix, the display payload the cross-thread engine publishes onto the analysis ring),
+/// `peak` and `rms` (block-rate, unipolar — magnitudes in 0..1, the `ana/rms` convention, so a
+/// tap drives modulation exactly like an rms follower). `gain` scales the WAVEFORM only (a
+/// display zoom); peak/rms report the TRUE signal, never the trimmed one, so a tap used for
+/// modulation stays honest about level while a tap used for a scope can be zoomed.
+///
+/// Memoryless: v0 state is empty and says so — the waveform it publishes is the block it just
+/// processed, with no follower or history behind it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Tap;
+
+impl Tap {
+    /// A fresh tap.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Module for Tap {
+    fn id(&self) -> &str {
+        "sparq/ana/tap"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        if state.is_empty() {
+            return Ok(()); // memoryless: an empty blob is the whole state
+        }
+        Err(ModuleError::State("sparq/ana/tap is memoryless; its state blob is empty"))
+    }
+
+    fn prepare(&mut self, resources: &Resources) -> Result<(), ModuleError> {
+        if resources.block_frames == 0 {
+            return Err(ModuleError::Resources("block_frames must be at least 1"));
+        }
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        let frames = ctx.frames();
+        let gain = ctx.param(0).clamp(0.0, 4.0);
+        // Inputs first (they escape with the context's lifetime), so the cv outputs can be taken
+        // mutably below without a borrow conflict — the v1 discipline the contract header names.
+        let input = ctx.input();
+        let connected = !input.is_empty();
+        let in_ch = input.len().checked_div(frames).map_or(1, |q| q.max(1));
+
+        // Peak and RMS over the TRUE signal (no display gain), summed in f64 like ana/rms.
+        let mut peak = 0.0f32;
+        let mut sum = 0.0f64;
+        let mut n = 0usize;
+        for &v in input.iter() {
+            let a = v.abs();
+            if a > peak {
+                peak = a;
+            }
+            let x = f64::from(v);
+            sum += x * x;
+            n += 1;
+        }
+        let rms = if n > 0 { (sum / n as f64).sqrt() as f32 } else { 0.0 };
+
+        // Waveform: the per-frame mono mix, scaled by the display gain, into the audio-rate port.
+        if let Some(mut cv) = ctx.take_cv_out(0) {
+            if let Some(buf) = cv.as_audio() {
+                for f in 0..frames.min(buf.len()) {
+                    let mut acc = 0.0f32;
+                    for c in 0..in_ch {
+                        acc += input.get(f * in_ch + c).copied().unwrap_or(0.0);
+                    }
+                    buf[f] = (acc / in_ch as f32) * gain;
+                }
+            }
+        }
+        // Peak and RMS: block-rate cells (manifest ports 1 and 2). A host that did not present
+        // them (a module run outside its manifest's shape — tests do this) gets the number
+        // nowhere, and the status still tells the truth about the input.
+        if let Some(mut cv) = ctx.cv_out(1) {
+            cv.set(if connected { peak } else { 0.0 });
+        }
+        if let Some(mut cv) = ctx.cv_out(2) {
+            cv.set(if connected { rms } else { 0.0 });
+        }
+
+        if connected {
+            BlockStatus::Ok
+        } else {
+            BlockStatus::Silenced
+        }
+    }
+
+    fn message(&mut self, _payload: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("sparq/ana/tap takes no messages"))
+    }
+}
+
+/// Factory for [`Tap`].
+#[must_use]
+pub fn create_tap() -> Box<dyn Module> {
+    Box::new(Tap::new())
+}
+
+// --------------------------------------------------------------------------- dsp/scope
+
+/// The first real visual module (WO-014 increment 5): a DISPLAY, and the set's only module whose
+/// `process` is a deliberate NO-OP. Zero audio-thread cost is the WO's acceptance box
+/// (*"`dsp/scope` renders at ≥ 60 fps alongside audio with zero audio-thread cost"*), and it is
+/// met by architecture, not optimisation: the waveform a scope shows is published by its source
+/// [`Tap`] onto the analysis ring (ADR-009 d8's "published, not polled") and drawn by the UI /
+/// visual thread FROM THE RING — the audio thread computes no pixel and the scope module touches
+/// no sample. Rendering inside `process` would be a lie against the module's own acceptance box,
+/// so it does not happen.
+///
+/// What the module DOES carry is the declarative half: the two audio-rate bipolar `cv` inputs
+/// (`x` the horizontal deflection, `y` the vertical for X/Y mode) record in the patch GRAPH which
+/// taps the scope displays, and the parameters (timebase, mode, trigger, gain, colour map)
+/// configure how the UI draws them. The UI resolves each input wire to its source tap and reads
+/// that tap's published waveform — the wire is the binding, the ring is the payload.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Scope;
+
+impl Scope {
+    /// A fresh scope.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Module for Scope {
+    fn id(&self) -> &str {
+        "sparq/dsp/scope"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        if state.is_empty() {
+            return Ok(()); // memoryless on the audio side: the UI owns any persistence buffer
+        }
+        Err(ModuleError::State(
+            "sparq/dsp/scope is memoryless on the audio side; its state blob is empty",
+        ))
+    }
+
+    fn prepare(&mut self, _resources: &Resources) -> Result<(), ModuleError> {
+        Ok(())
+    }
+
+    fn process(&mut self, _ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        // Zero audio-thread cost, deliberately. The display renders on the UI thread from the
+        // analysis ring; a no-op here is the acceptance criterion, not an unfinished stub.
+        BlockStatus::Ok
+    }
+
+    fn message(&mut self, _payload: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("sparq/dsp/scope takes no messages"))
+    }
+}
+
+/// Factory for [`Scope`].
+#[must_use]
+pub fn create_scope() -> Box<dyn Module> {
+    Box::new(Scope::new())
+}
+
+// --------------------------------------------------------------------------- out/main
+
+/// The master output (WO-014 increment 5) — the canonical terminus, the node the listener hears.
+/// A unity-by-default pass-through with a trim and a hard mute. Because the executor meters every
+/// node, `out/main`'s peak/rms ARE the master meters: that is the "metering hook" the WO names.
+///
+/// It has an audio OUTPUT because the executor renders the MASTER node's FIRST audio output to
+/// the device buffer — a pure sink with no output would render silence as master. So the input is
+/// the mix, the output is what the device plays. The input is `variable` (it accepts whatever
+/// width the mix bus arrives at, resolved at prepare) and the output stereo (the v0 device
+/// target). At the default trim 1.0 and mute off, an untouched `out/main` is a **bit-exact wire**
+/// (`v × 1.0 == v` in IEEE-754), which its golden pins.
+///
+/// This module ships together with the WO-013-side master-handover rule (the canvas
+/// `resolve_master` prefers an `out/main` node over the default highest-id-terminus guess), so
+/// the MASTER badge never lies: when an `out/main` is in the patch, IT is the master, explicitly.
+/// v0 state is empty and says so — the trim is the parameter snapshot the project already saves.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OutMain;
+
+impl OutMain {
+    /// A fresh master output at unity.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Module for OutMain {
+    fn id(&self) -> &str {
+        "sparq/out/main"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        if state.is_empty() {
+            return Ok(()); // stateless: the trim is the snapshot the project saves
+        }
+        Err(ModuleError::State(
+            "sparq/out/main state is the parameter snapshot the project already saves; its own blob is empty",
+        ))
+    }
+
+    fn prepare(&mut self, resources: &Resources) -> Result<(), ModuleError> {
+        if resources.block_frames == 0 {
+            return Err(ModuleError::Resources("block_frames must be at least 1"));
+        }
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        let trim = ctx.param(0).clamp(0.0, 2.0);
+        let muted = ctx.param(1).round() >= 1.0;
+        if muted || !ctx.has_input() {
+            // Mute writes EXACT zeros (never a near-zero), so a muted master is bit-exactly
+            // silent and its meter reads 0 — an on-stage "cut it now" that means it.
+            for s in ctx.output().iter_mut() {
+                *s = 0.0;
+            }
+            return BlockStatus::Silenced;
+        }
+        // Per-channel pass with the trim; `stereo_tick` maps a narrower input by holding its
+        // last channel (mono → both outs) and a wider one by taking the first `out_ch`, which is
+        // the device-shape conversion the master render performs anyway.
+        stereo_tick(ctx, |_c, v| v * trim)
+    }
+
+    fn message(&mut self, _payload: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("sparq/out/main takes no messages"))
+    }
+}
+
+/// Factory for [`OutMain`].
+#[must_use]
+pub fn create_out_main() -> Box<dyn Module> {
+    Box::new(OutMain::new())
+}
+
 // --------------------------------------------------------------------------- the table
 
 /// Every built-in: id → (manifest text, factory). The single place that knows the first-party
 /// set; discovery pairs these with on-disk manifests by id (§11 precedence: built-in wins).
-pub const BUILTINS: [(&str, &str, Factory); 14] = [
+pub const BUILTINS: [(&str, &str, Factory); 17] = [
     ("sparq/syn/sine", SINE_MANIFEST, create_sine),
     ("sparq/syn/noise", NOISE_MANIFEST, create_noise),
     ("sparq/syn/polyblep", POLYBLEP_MANIFEST, create_polyblep),
@@ -1678,6 +2043,9 @@ pub const BUILTINS: [(&str, &str, Factory); 14] = [
     ("sparq/mod/clk-div", CLK_DIV_MANIFEST, create_clk_div),
     ("sparq/fx/bitcrush", BITCRUSH_MANIFEST, create_bitcrush),
     ("sparq/ana/rms", RMS_MANIFEST, create_rms),
+    ("sparq/ana/tap", TAP_MANIFEST, create_tap),
+    ("sparq/dsp/scope", SCOPE_MANIFEST, create_scope),
+    ("sparq/out/main", OUT_MAIN_MANIFEST, create_out_main),
 ];
 
 /// The factory for a first-party id, if this build has one.

@@ -1804,6 +1804,24 @@ impl Executor {
         self.nodes[slot].ev_out.get(idx).map(EventBuf::dropped_total)
     }
 
+    /// Visit every AUDIO-rate `cv` OUTPUT of `node` after a block, calling `f(manifest_port,
+    /// samples)` for each. This is the hook the cross-thread engine uses to publish analysis
+    /// payloads (the waveform a `dsp/scope` displays) without the executor knowing anything about
+    /// rings — the executor offers the buffers it already holds, the caller decides where they go.
+    /// Allocation-free: it walks the build-time port map and borrows the stored cv buffers. A
+    /// node with no audio-rate cv outputs (or an unknown node) simply calls `f` zero times.
+    pub fn with_audio_rate_cv_out(&self, node: NodeId, mut f: impl FnMut(u32, &[f32])) {
+        let Some(&slot) = self.slot_of.get(&node) else { return };
+        let n = &self.nodes[slot];
+        for (idx, &port) in self.plans[slot].cv_out.iter().enumerate() {
+            if n.cv_out_rates.get(idx) == Some(&CvRate::Audio) {
+                if let Some(buf) = n.cv_out_bufs.get(idx) {
+                    f(port, buf);
+                }
+            }
+        }
+    }
+
     /// A node's meters. Any thread holding a reference; relaxed loads, no locks.
     #[must_use]
     pub fn meter(&self, node: NodeId) -> Option<MeterReading> {
@@ -1814,7 +1832,6 @@ impl Executor {
             status: status_from_u8(self.meters[slot].status.load(Ordering::Relaxed)),
         })
     }
-
     /// How many blocks a node returned `Failed` (each one silenced and counted).
     #[must_use]
     pub fn failed_blocks(&self, node: NodeId) -> Option<u64> {

@@ -308,6 +308,12 @@ pub struct CanvasState {
     /// frame (`None` when nothing is selected or the panel is collapsed). The canvas reads it to
     /// route slider drags; the painter reads it to draw.
     inspector: Option<InspectorLayout>,
+    /// Per-node signal levels for the live wire-level animation (WO-013 increment 4). TRANSIENT
+    /// and NOT part of the undoable model: a level is a fact about the last render, not an edit.
+    /// The shell refreshes it from the executor's meters (the bridge reads them); the painter maps
+    /// it onto wires through [`crate::canvas::levels::wire_level`]. Empty until the first render,
+    /// so wires draw at rest exactly as they did before this increment — no faked levels.
+    pub levels: crate::canvas::levels::NodeLevels,
     last_lod: Lod,
 }
 
@@ -333,6 +339,7 @@ impl CanvasState {
             browser: None,
             catalog: Vec::new(),
             inspector: None,
+            levels: crate::canvas::levels::NodeLevels::new(),
         }
     }
 
@@ -414,11 +421,14 @@ impl CanvasState {
         self.inspector.as_ref()
     }
 
-    /// Which node feeds the listener: the explicit master when set (and still present), else the
-    /// default rule — **the highest-id node that has an audio output AND at least one wire**,
-    /// preferring one with no outgoing wires (a terminus). The rule exists so the bridge never
-    /// guesses silently: every render logs the master it chose. Unconnected spare modules (no
-    /// wires at all) are excluded — rendering one would produce silence and confusion.
+    /// Which node feeds the listener: the explicit master when set (and still present), else —
+    /// the WO-014 increment-5 handover — **an `out/main` node in the patch**, else the default
+    /// rule (the highest-id node with an audio output AND at least one wire, preferring a
+    /// terminus). The `out/main` step exists so the MASTER badge never lies: when a patch has a
+    /// real output module, THAT is the master by name, not by a guess about which gain node
+    /// happens to sit last. The rule never guesses silently — every render logs the master it
+    /// chose. Unconnected spare modules (no wires at all) are excluded everywhere: rendering one
+    /// would produce silence and confusion.
     #[must_use]
     pub fn resolve_master(&self, graph: &Graph) -> Option<crate::canvas::model::NodeId> {
         use sparq_module_api::port::{Direction, PortType};
@@ -427,14 +437,25 @@ impl CanvasState {
                 return Some(m);
             }
         }
+        let wired = |id: crate::canvas::model::NodeId| {
+            graph.wires().iter().any(|w| w.from.node == id || w.to.node == id)
+        };
+        // The handover: the highest-id WIRED `out/main` is the master (an unwired one would
+        // render silence, so it does not count). Falls through when the patch has none.
+        let out_main = graph
+            .nodes()
+            .iter()
+            .filter(|n| n.spec.module_id == crate::canvas::OUT_MAIN_ID && wired(n.id))
+            .map(|n| n.id)
+            .max();
+        if let Some(m) = out_main {
+            return Some(m);
+        }
         let has_audio_out = |n: &crate::canvas::model::Node| {
             n.spec
                 .ports
                 .iter()
                 .any(|p| p.direction == Direction::Out && p.port_type == PortType::Audio)
-        };
-        let wired = |id: crate::canvas::model::NodeId| {
-            graph.wires().iter().any(|w| w.from.node == id || w.to.node == id)
         };
         let terminal =
             |id: crate::canvas::model::NodeId| !graph.wires().iter().any(|w| w.from.node == id);
@@ -1782,6 +1803,54 @@ mod tests {
     }
 
     #[test]
+    fn an_out_main_node_supersedes_the_default_master_rule() {
+        // WO-014 inc 5's handover: a patch with a real output module resolves to THAT node, by
+        // name, not to the highest-id terminus the default rule would guess. Here `later` is a
+        // wired gain terminus with the higher id — exactly what the old rule picked — and the
+        // wired `out/main` must win instead, so the MASTER badge never lies.
+        let mut g = Graph::new();
+        let s_op = g.op_add_node(sine(), Vec2::new(0.0, 0.0));
+        let g_op = g.op_add_node(gain(), Vec2::new(400.0, 0.0));
+        let o_op = g.op_add_node(out_main(), Vec2::new(800.0, 0.0));
+        let l_op = g.op_add_node(gain(), Vec2::new(800.0, 200.0));
+        let (sid, gid, oid, lid) = (nid(&s_op), nid(&g_op), nid(&o_op), nid(&l_op));
+        g.op_add_wire(PortRef::new(sid, 0), PortRef::new(gid, 0));
+        g.op_add_wire(PortRef::new(gid, 1), PortRef::new(oid, 0));
+        g.op_add_wire(PortRef::new(gid, 1), PortRef::new(lid, 0));
+        assert!(lid > oid, "the competing terminus has the higher id the default rule preferred");
+        let s = CanvasState::new();
+        assert_eq!(s.resolve_master(&g), Some(oid), "out/main IS the master, by name");
+    }
+
+    #[test]
+    fn an_explicit_master_still_beats_an_out_main_node() {
+        // The handover is the DEFAULT, not an override of the user: SET MASTER on another node
+        // still wins, because an explicit choice is a statement the rule must not contradict.
+        let mut g = Graph::new();
+        let s_op = g.op_add_node(sine(), Vec2::new(0.0, 0.0));
+        let o_op = g.op_add_node(out_main(), Vec2::new(400.0, 0.0));
+        let (sid, oid) = (nid(&s_op), nid(&o_op));
+        g.op_add_wire(PortRef::new(sid, 0), PortRef::new(oid, 0));
+        let mut s = CanvasState::new();
+        s.master = Some(sid);
+        assert_eq!(s.resolve_master(&g), Some(sid), "explicit beats the out/main default");
+    }
+
+    #[test]
+    fn an_unwired_out_main_does_not_become_master() {
+        // A spare out/main with no wires would render silence, so it does not count; the rule
+        // falls through to the wired terminus. Same exclusion the default rule applies.
+        let mut g = Graph::new();
+        let s_op = g.op_add_node(sine(), Vec2::ZERO);
+        let g_op = g.op_add_node(gain(), Vec2::new(400.0, 0.0));
+        let _o = g.op_add_node(out_main(), Vec2::new(800.0, 0.0));
+        let (sid, gid) = (nid(&s_op), nid(&g_op));
+        g.op_add_wire(PortRef::new(sid, 0), PortRef::new(gid, 0));
+        let s = CanvasState::new();
+        assert_eq!(s.resolve_master(&g), Some(gid), "the wired gain, not the unwired out/main");
+    }
+
+    #[test]
     fn an_explicit_master_wins_and_a_deleted_master_falls_back() {
         let mut g = Graph::new();
         let s_op = g.op_add_node(sine(), Vec2::new(0.0, 0.0));
@@ -1840,6 +1909,17 @@ mod tests {
             vec![
                 audio("in", Direction::In, ChannelSet::Stereo),
                 cv("level", Direction::Out, CvRange::Unipolar),
+            ],
+        )
+    }
+
+    fn out_main() -> NodeSpec {
+        NodeSpec::new(
+            crate::canvas::OUT_MAIN_ID,
+            "Main Out",
+            vec![
+                audio("in", Direction::In, ChannelSet::Variable),
+                audio("out", Direction::Out, ChannelSet::Stereo),
             ],
         )
     }

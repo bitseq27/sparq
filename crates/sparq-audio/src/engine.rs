@@ -175,6 +175,66 @@ impl MeterUpdate {
     }
 }
 
+/// The waveform length one [`AnalysisUpdate`] carries — one block at the standard 64-frame block,
+/// with headroom to 128 so a larger host block still publishes its first 128 samples. Bounded and
+/// fixed so the payload stays `Copy` and rides the kernel's [`SpscRing`] without allocation; a
+/// longer block is truncated (the scope's UI accumulates blocks up to its timebase anyway), and
+/// [`AnalysisUpdate::len`] says how many samples are valid.
+pub const ANALYSIS_WAVE_LEN: usize = 128;
+
+/// One node's published analysis waveform — ADR-009 decision 8's "published, not polled" extended
+/// from [`MeterUpdate`] (peak/rms) to the SAMPLES a display needs. `Copy` and fixed-size so it
+/// rides the kernel's [`SpscRing`] without allocation. This is the payload a `dsp/scope`'s UI
+/// reads — off the ring, never off the audio thread and never off the executor — and the reason
+/// `ana/tap`'s audio-rate `wave` port exists: the tap writes the waveform, the audio engine
+/// publishes it here once per block, the visual thread draws it. Zero audio-thread cost on the
+/// display side is structural: the display consumer is on the other end of this ring.
+///
+/// Published for EVERY audio-rate `cv` output in the patch (see
+/// [`AudioEngine::publish_analysis`]) — the generic rule needs no per-node kind storage, it is
+/// bounded by the ring depth, and it means any audio-rate cv signal (a tap's waveform, an
+/// envelope, an LFO) is scopable. A consumer filters by the `(node, port)` its display is bound to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnalysisUpdate {
+    /// The node that produced the waveform.
+    pub node: u32,
+    /// The manifest port index of the audio-rate `cv` output it came from.
+    pub port: u32,
+    /// The block count the waveform was captured at (the stream's clock, inherited across swaps).
+    pub block: u64,
+    /// How many samples of [`Self::samples`] are valid (≤ [`ANALYSIS_WAVE_LEN`]).
+    pub len: u32,
+    /// The waveform samples, mono, in block order.
+    pub samples: [f32; ANALYSIS_WAVE_LEN],
+}
+
+impl AnalysisUpdate {
+    /// An empty update for one `(node, port)` at `block`.
+    #[must_use]
+    pub fn new(node: u32, port: u32, block: u64) -> Self {
+        Self { node, port, block, len: 0, samples: [0.0; ANALYSIS_WAVE_LEN] }
+    }
+
+    /// Fill from a waveform slice, truncated to [`ANALYSIS_WAVE_LEN`]; records the copied length.
+    pub fn set_samples(&mut self, wave: &[f32]) {
+        let n = wave.len().min(ANALYSIS_WAVE_LEN);
+        self.samples[..n].copy_from_slice(&wave[..n]);
+        self.len = n as u32;
+    }
+
+    /// The valid waveform samples.
+    #[must_use]
+    pub fn wave(&self) -> &[f32] {
+        &self.samples[..(self.len as usize).min(ANALYSIS_WAVE_LEN)]
+    }
+}
+
+impl Default for AnalysisUpdate {
+    fn default() -> Self {
+        Self::new(0, 0, 0)
+    }
+}
+
 /// A control → audio command: the between-block edits the single-owner engine makes through
 /// `live_mut`, crossing the thread boundary as `Copy` ring payloads instead (plan §4.3's
 /// bounded rings; [`ParamSet`] was made `Copy` for exactly this trip).
@@ -233,6 +293,10 @@ pub struct EngineStats {
     /// Meter publications refused because the meter ring was full (the UI fell behind; the
     /// audio thread never waits for a reader).
     pub meter_refusals: u64,
+    /// Analysis publications refused because the analysis ring was full (the visual consumer fell
+    /// behind; like meters, the audio thread never waits — a dropped waveform is a dropped frame
+    /// of a scope, which is exactly what a real-time display is allowed to do).
+    pub analysis_refusals: u64,
 }
 
 /// Default command-ring depth: a UI editing several params per frame stays far inside it, and a
@@ -242,6 +306,11 @@ pub const CMD_RING_SLOTS: usize = 256;
 /// 48 kHz/64 — a frame-rate consumer never comes close; an absent one wraps into counted
 /// refusals instead of memory growth.
 pub const METER_RING_SLOTS: usize = 4096;
+/// Default analysis-ring depth. Analysis payloads are bigger than meters (a waveform each), so the
+/// ring is shallower: 512 slots hold a few blocks' worth of every audio-rate cv output in a small
+/// patch. A frame-rate visual consumer drains it every frame; an absent one wraps into counted
+/// refusals (the audio thread never waits for a reader, exactly like the meter ring).
+pub const ANALYSIS_RING_SLOTS: usize = 512;
 /// Commands drained per block. The rest wait for the next boundary — bounded latency, bounded
 /// stack, no allocation.
 const CMD_BATCH: usize = 64;
@@ -257,6 +326,7 @@ pub struct SharedEngine {
     control: HotSwapControl<LivePatch>,
     cmds: Arc<SpscRing<EngineCmd>>,
     meters: Arc<SpscRing<MeterUpdate>>,
+    analysis: Arc<SpscRing<AnalysisUpdate>>,
     counters: Arc<CmdCounters>,
 }
 
@@ -278,9 +348,24 @@ impl SharedEngine {
         cmd_slots: usize,
         meter_slots: usize,
     ) -> (Self, AudioEngine) {
+        Self::with_all_capacities(executor, master, cmd_slots, meter_slots, ANALYSIS_RING_SLOTS)
+    }
+
+    /// [`SharedEngine::new`] with every ring depth explicit, including the analysis ring. The
+    /// analysis ring carries waveforms (bigger than meters), so a rig that scopes many taps at
+    /// once may want it deeper; like the others it is bounded and refuses-and-counts when full.
+    #[must_use]
+    pub fn with_all_capacities(
+        executor: Executor,
+        master: NodeId,
+        cmd_slots: usize,
+        meter_slots: usize,
+        analysis_slots: usize,
+    ) -> (Self, AudioEngine) {
         let (control, audio) = HotSwap::split(LivePatch { executor, master });
         let cmds = Arc::new(SpscRing::new(cmd_slots));
         let meters = Arc::new(SpscRing::new(meter_slots));
+        let analysis = Arc::new(SpscRing::new(analysis_slots));
         let counters =
             Arc::new(CmdCounters { applied: AtomicU64::new(0), refused: AtomicU64::new(0) });
         (
@@ -288,9 +373,17 @@ impl SharedEngine {
                 control,
                 cmds: Arc::clone(&cmds),
                 meters: Arc::clone(&meters),
+                analysis: Arc::clone(&analysis),
                 counters: Arc::clone(&counters),
             },
-            AudioEngine { audio, cmds, meters, counters, cmd_batch: [EngineCmd::Noop; CMD_BATCH] },
+            AudioEngine {
+                audio,
+                cmds,
+                meters,
+                analysis,
+                counters,
+                cmd_batch: [EngineCmd::Noop; CMD_BATCH],
+            },
         )
     }
 
@@ -339,6 +432,14 @@ impl SharedEngine {
         self.meters.drain(out)
     }
 
+    /// Drain up to `out.len()` published analysis waveforms (the `dsp/scope` / visual side).
+    /// Returns how many were read; allocation-free — the caller owns the destination. A scope
+    /// keeps the newest waveform per `(node, port)` it is bound to and ignores the rest; the ring
+    /// is the only place a display reads signal, so the audio thread is never touched.
+    pub fn read_analysis(&self, out: &mut [AnalysisUpdate]) -> usize {
+        self.analysis.drain(out)
+    }
+
     /// A snapshot of every counter. Cheap enough to poll per UI frame.
     #[must_use]
     pub fn stats(&self) -> EngineStats {
@@ -348,6 +449,7 @@ impl SharedEngine {
             cmd_refused: self.counters.refused.load(Ordering::Relaxed),
             cmd_queue_refusals: self.cmds.refusals(),
             meter_refusals: self.meters.refusals(),
+            analysis_refusals: self.analysis.refusals(),
         }
     }
 }
@@ -365,6 +467,7 @@ pub struct AudioEngine {
     audio: HotSwapAudio<LivePatch>,
     cmds: Arc<SpscRing<EngineCmd>>,
     meters: Arc<SpscRing<MeterUpdate>>,
+    analysis: Arc<SpscRing<AnalysisUpdate>>,
     counters: Arc<CmdCounters>,
     /// Pre-allocated drain target: bounded stack, never a fresh Vec per block.
     cmd_batch: [EngineCmd; CMD_BATCH],
@@ -392,9 +495,10 @@ impl AudioEngine {
         // 3. Render.
         let patch = self.audio.live_mut();
         let result = patch.executor.render_block(patch.master, out);
-        // 4. Publish the meters (decision 8). A full ring refuses-and-counts inside the ring;
-        //    the audio thread never waits for a reader.
+        // 4. Publish the meters and the analysis waveforms (decision 8). A full ring
+        //    refuses-and-counts inside the ring; the audio thread never waits for a reader.
         self.publish_meters();
+        self.publish_analysis();
         result
     }
 
@@ -469,6 +573,29 @@ impl AudioEngine {
                 // A full ring refuses and counts inside itself — the publication never waits.
                 self.meters.push(update);
             }
+        }
+    }
+
+    /// Publish every audio-rate `cv` output's waveform for the block just rendered — the payload
+    /// a `dsp/scope` draws. Allocation-free and bounded: the executor hands over the buffers it
+    /// already holds ([`Executor::with_audio_rate_cv_out`]), the update is a `Copy` struct built
+    /// on the stack, and a full ring refuses-and-counts inside itself (a dropped waveform is a
+    /// dropped frame of a scope, which is what a real-time display is allowed to do — the audio
+    /// thread never waits for the visual consumer).
+    fn publish_analysis(&self) {
+        let patch = self.audio.live();
+        let block = patch.executor.blocks_rendered();
+        // One reused stack buffer: the samples beyond `len` are never read (`wave()` bounds by
+        // `len`), so re-filling only the valid prefix keeps the audio-thread work minimal.
+        let mut update = AnalysisUpdate::default();
+        for &node in patch.executor.order() {
+            patch.executor.with_audio_rate_cv_out(node, |port, wave| {
+                update.node = node.0;
+                update.port = port;
+                update.block = block;
+                update.set_samples(wave);
+                self.analysis.push(update);
+            });
         }
     }
 }

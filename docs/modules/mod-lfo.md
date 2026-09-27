@@ -4,11 +4,11 @@
 > regenerate with `python3 tools/module_docs.py`; CI fails on a stale doc (`--check`).
 
 
-*Low-frequency oscillator - four shapes, event phase-reset, unipolar audio-rate cv*
+*Low-frequency oscillator - four shapes, event phase-reset, beat-lock, unipolar cv*
 
 | | |
 |---|---|
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Host API | 1…1 |
 | Category | modulation/lfo |
 | Kind / tier / stability | source · t1 · stable |
@@ -29,6 +29,8 @@
 | 0 | `rate` | Rate | float | Hz | 0.05 | 50 | 1 |
 | 1 | `shape` | Shape (0 sine 1 tri 2 saw 3 sqr) | int | x | 0 | 3 | 0 |
 | 2 | `depth` | Depth | float | ratio | 0 | 1 | 1 |
+| 3 | `sync-mode` | Rate Source (0 Hz 1 beat) | int | x | 0 | 1 | 0 |
+| 4 | `division` | Cycles per Beat | float | x | 0 | 16 | 1 |
 
 Parameter order is the snapshot order: `param(i)` in `process` reads row `i`.
 

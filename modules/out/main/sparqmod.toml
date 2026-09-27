@@ -1,0 +1,81 @@
+# sparq module manifest — out/main (WO-014 increment 5).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The master output — "output with metering hook", the WO's contract stress "device channel
+# mapping". This is the canonical terminus: the node the listener hears. It ships together with
+# the WO-013-side master-handover rule change (canvas `resolve_master` prefers an `out/main`
+# node over the default highest-id-terminus rule) so the MASTER badge never lies: when an
+# out/main is in the patch, IT is the master, explicitly, rather than by a guess about which
+# gain node happens to be last.
+#
+# Why it has an OUTPUT port (an "output" that outputs): the executor renders the MASTER node's
+# FIRST audio output to the device buffer. A pure sink with no audio output would render silence
+# as master. So out/main is a unity-by-default pass-through with a trim: its input is the mix,
+# its output is what the device plays, and — because the executor meters every node — its meter
+# (peak/rms) IS the master meter, which is the "metering hook". Device channel mapping is the
+# declared channel_set: `variable` on the input (it accepts whatever the mix bus is) resolving to
+# the device shape at prepare, stereo on the output (the v0 device target; a multichannel out
+# grows the channel_set when the HAL's channel map does — declared, not faked).
+#
+# v0 state is empty and says so: the trim is the parameter snapshot the project already saves.
+
+[identity]
+id = "sparq/out/main"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Main Out"
+summary = "Master output with trim and the metering hook - the node the listener hears"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "io/output/main"
+top = "out"
+kind = "io"
+tier = "t1"
+stability = "stable"
+
+# `variable` input: accepts the mix bus at whatever width it arrives (mono/stereo/…), resolved
+# at prepare. The output is the device shape (stereo in v0).
+[[ports]]
+id = "in"
+name = "Main In"
+direction = "in"
+type = "audio"
+channel_set = "variable"
+required = false
+
+[[ports]]
+id = "out"
+name = "Main Out"
+direction = "out"
+type = "audio"
+channel_set = "stereo"
+
+[[params]]
+id = "trim"
+name = "Trim"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 1.0
+
+# 0 = pass, 1 = silence the master (the on-stage "cut it now"). A mute that writes exact zeros,
+# never a near-zero, so a muted master is bit-exactly silent and the meter reads 0.
+[[params]]
+id = "mute"
+name = "Mute"
+type = "int"
+unit = "x"
+min = 0.0
+max = 1.0
+default = 0.0
+
+[state]
+schema_id = "sparq/out/main/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "trivial"

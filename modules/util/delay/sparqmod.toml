@@ -1,13 +1,21 @@
-# sparq module manifest — util/delay (WO-014 increment 2).
+# sparq module manifest — util/delay (WO-014 increment 2; tempo-sync in increment 5).
 # Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
 # The latency declaration is PARAMETRIC ("param:time"): the wet path delays by `time`, the dry
 # path by zero, and a mixed delay has no single static number — so the manifest promises the
 # parameter it follows instead of a constant, which is exactly what the parametric form exists
 # for (ValidatedManifest::latency_is_parametric; check_declared_latency respects it).
+#
+# TEMPO-SYNC (0.2.0, the WO-014 increment-5 decision realised): with `tempo-sync` = 1 the delay
+# time is `division` beats, derived module-side from the block-start tick (`bpm = Δtick/ppqn/
+# Δseconds×60`) and applied through `DelayLine::set_tempo_sync` — the once-unreachable DSP path,
+# now reached. No clock enters the context and no contract changes; a tempo edit lands one block
+# late (declared). With no transport feeding a tick, it falls back to the `time` ms parameter, so a
+# tempo-synced delay never collapses to zero. At the defaults (tempo-sync = 0) this is byte-for-byte
+# the increment-2 delay, which its golden pins.
 
 [identity]
 id = "sparq/util/delay"
-version = "0.1.0"
+version = "0.2.0"
 host_api = { min = 1, max = 1 }
 display_name = "Delay"
 summary = "Tempo-syncable feedback delay with damping and dry/wet mix"
@@ -69,6 +77,27 @@ type = "float"
 unit = "ratio"
 min = 0.0
 max = 1.0
+default = 0.5
+
+# 0 = `time` in ms; 1 = beat-locked at `division` beats, derived from the transport tick.
+[[params]]
+id = "tempo-sync"
+name = "Tempo Sync (0 ms 1 beat)"
+type = "int"
+unit = "x"
+min = 0.0
+max = 1.0
+default = 0.0
+
+# Delay time in beats when tempo-sync = 1 (0.25 = a sixteenth, 0.5 = an eighth, 1 = a quarter,
+# 1.5 = a dotted quarter). Ignored in ms mode.
+[[params]]
+id = "division"
+name = "Division (beats)"
+type = "float"
+unit = "x"
+min = 0.0
+max = 16.0
 default = 0.5
 
 [state]

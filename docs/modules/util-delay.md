@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Host API | 1…1 |
 | Category | utility/delay |
 | Kind / tier / stability | processor · t1 · stable |
@@ -30,6 +30,8 @@
 | 1 | `feedback` | Feedback | float | ratio | 0 | 0.95 | 0.3 |
 | 2 | `damp` | Damping | float | ratio | 0 | 1 | 0.5 |
 | 3 | `mix` | Mix | float | ratio | 0 | 1 | 0.5 |
+| 4 | `tempo-sync` | Tempo Sync (0 ms 1 beat) | int | x | 0 | 1 | 0 |
+| 5 | `division` | Division (beats) | float | x | 0 | 16 | 0.5 |
 
 Parameter order is the snapshot order: `param(i)` in `process` reads row `i`.
 

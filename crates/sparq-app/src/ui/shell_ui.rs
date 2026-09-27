@@ -591,8 +591,21 @@ impl ShellUi {
             std::path::Path::new(OUT),
         );
         match result {
-            Ok(ev) => self
-                .push_log(format!("rendered {} s to `{OUT}`: {ev}", crate::bridge::RENDER_SECONDS)),
+            Ok(ev) => {
+                // Live wire levels (WO-013 increment 4): the patch has now really rendered, so
+                // refresh the canvas's per-node levels from the executor's meters. The wires light
+                // with the actual signal — never synthesised from canvas data. A continuous
+                // play-time refresh rides the same field from `SharedEngine::read_meters` when the
+                // live HAL stream routes through it (device track); this is the offline half.
+                match crate::bridge::node_levels(&self.graph, master, &self.modules) {
+                    Ok(levels) => self.canvas.levels = levels,
+                    Err(e) => self.push_log(format!("wire levels unavailable: {e}")),
+                }
+                self.push_log(format!(
+                    "rendered {} s to `{OUT}`: {ev}",
+                    crate::bridge::RENDER_SECONDS
+                ));
+            },
             Err(e) => self.push_log(format!("render REFUSED: {e}")),
         }
     }

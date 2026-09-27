@@ -29,7 +29,14 @@ pub mod connect;
 pub mod inspector;
 pub mod interact;
 pub mod layout;
+pub mod levels;
 pub mod model;
+
+/// The stable id of the master-output module (WO-014 increment 5). The canvas's master-handover
+/// rule keys on it: when a patch contains an `out/main`, THAT node is the master by name, so the
+/// MASTER badge never lies about which node feeds the listener. A named constant, not a literal
+/// scattered through the resolve rule and its tests, so the id and the rule cannot drift apart.
+pub const OUT_MAIN_ID: &str = "sparq/out/main";
 
 pub use browser::{fuzzy_score, rank, BrowserHit, BrowserItem, BrowserState};
 pub use camera::{Camera, Lod};
@@ -37,4 +44,5 @@ pub use connect::{ConnectContext, ConnectOutcome, Rejection};
 pub use inspector::{InspectorLayout, ParamRow};
 pub use interact::{CanvasEvent, CanvasState, Interaction, MenuRow, MenuTarget};
 pub use layout::{CanvasLayout, Hit, NodeLayout, PortLayout, WireEndSide, WireLayout};
+pub use levels::{wire_level, NodeLevels};
 pub use model::{Graph, Node, NodeFlags, NodeId, NodeSpec, Op, PortRef, UndoStack, Wire, WireId};

@@ -10,9 +10,10 @@
 //! The honest limits, declared: parameters come from the NODE'S param state (the inspector,
 //! WO-013 increment 3) — which starts at the manifests' defaults, so an untouched patch renders
 //! exactly what an increment-2 patch did; every canvas wire becomes a `Plain` edge because the
-//! canvas has no delay-edge UI yet; and a patch containing cv/event/data edges is refused by the
-//! executor in words (v0 `AudioCtx` carries audio only) — the refusal surfaces verbatim in the
-//! shell log rather than rendering silence.
+//! canvas has no delay-edge UI yet. Since contract v1 (WO-008 increment 4) the executor CARRIES
+//! `cv` and `event` edges, so a canvas patch that wires them builds and renders for real; a
+//! `data`/`gpu`/`atom` edge is still refused by the executor in words (those payloads do not
+//! travel), and that refusal surfaces verbatim in the shell log rather than rendering silence.
 
 // Without the `ui` feature nothing calls into the bridge — its only consumer (the shell) is
 // ui-gated — but its tests still run in the default build, which is exactly why it is ungated.
@@ -124,6 +125,22 @@ pub fn build(
     master: CanvasNodeId,
     registry: &Registry,
 ) -> Result<(Executor, KernelNodeId), String> {
+    let (ex, k_master, _map) = build_with_map(graph, master, registry)?;
+    Ok((ex, k_master))
+}
+
+/// [`build`], also returning the canvas-node → kernel-node map. The map is what lets a caller read
+/// per-node executor state (meters, taps) back into canvas terms — which is exactly what the live
+/// wire levels need ([`node_levels`]). Kept separate so [`build`]'s signature stays the two things
+/// a renderer wants.
+///
+/// # Errors
+/// Exactly what [`build`] reports.
+pub fn build_with_map(
+    graph: &CanvasGraph,
+    master: CanvasNodeId,
+    registry: &Registry,
+) -> Result<(Executor, KernelNodeId, HashMap<CanvasNodeId, KernelNodeId>), String> {
     let mut kg = KernelGraph::new();
     let mut map: HashMap<CanvasNodeId, KernelNodeId> = HashMap::new();
     for n in graph.nodes() {
@@ -178,12 +195,55 @@ pub fn build(
         block_frames: RENDER_BLOCK,
         device_channels: RENDER_CHANNELS,
         // Raw latency: the canvas render reports what the patch declares, it does not silently
-        // re-time it (ADR-006.6's switch is opt-in; the shell will expose it when it matters).
+        // re-time it (ADR-006.6's switch is opt-in; the shell will expose it when the canvas does).
         latency: LatencyMode::Raw,
         watchdog: Watchdog::default(),
     };
     let ex = Executor::build(kg, builds, cfg).map_err(|e| e.to_string())?;
-    Ok((ex, k_master))
+    Ok((ex, k_master, map))
+}
+
+/// Blocks rendered to freshen the meters before a level read. A wire level is the peak of the most
+/// recent block, so the preview must be long enough for a real signal to have sounded: ~85 ms at
+/// 48 kHz/64 clears a low note's attack and is short enough to feel instant on a UI refresh.
+pub const LEVEL_PREVIEW_BLOCKS: usize = 64;
+
+/// The live wire levels for a patch: render a short preview and read each node's meter, mapping the
+/// executor's kernel nodes back to canvas nodes. This is the ONLY place wire levels come from —
+/// the executor's own peak meter, never a value invented from canvas data (the park note's rule:
+/// animating wires from anything but the real signal would be a lie in motion). The painter maps
+/// the result onto wires with [`sparq_ui::canvas::levels::wire_level`].
+///
+/// The level is the node's PEAK across its audio outputs in the last previewed block: peak is the
+/// honest "is signal flowing right now" reading for a wire glow (rms would under-read transients).
+/// A node with no audio output (an `ana/rms`, a `dsp/scope`) reads 0.0 — at rest — which is true:
+/// it publishes no audio to carry. DECLARED LIMIT: because a node's meter folds its AUDIO outputs,
+/// a `cv` wire out of a cv-only source (`mod/lfo`, `env/ad`, `ana/rms`) reads at rest — the level
+/// animation tracks AUDIO signal flow, not cv magnitudes. Per-port / per-cv meters (the rings can
+/// carry port ids) are the LATER.md item that would light cv wires from their own values; this
+/// increment animates what the meters actually measure, and says so rather than faking a cv level.
+/// When the live HAL stream routes through `SharedEngine`, the same canvas field is filled from
+/// `read_meters` instead of a preview render; the mapping is identical.
+///
+/// # Errors
+/// Exactly what [`build_with_map`] or the render reports.
+pub fn node_levels(
+    graph: &CanvasGraph,
+    master: CanvasNodeId,
+    registry: &Registry,
+) -> Result<sparq_ui::canvas::levels::NodeLevels, String> {
+    let (mut ex, k_master, map) = build_with_map(graph, master, registry)?;
+    let mut out = vec![0.0f32; RENDER_BLOCK * RENDER_CHANNELS];
+    for _ in 0..LEVEL_PREVIEW_BLOCKS {
+        ex.render_block(k_master, &mut out).map_err(|e| format!("level preview failed: {e}"))?;
+    }
+    let mut levels = sparq_ui::canvas::levels::NodeLevels::new();
+    for (canvas_id, kernel_id) in map {
+        if let Some(m) = ex.meter(kernel_id) {
+            levels.set(canvas_id, m.peak);
+        }
+    }
+    Ok(levels)
 }
 
 /// Render the canvas patch to a WAV file. Returns the evidence line for the shell log.
@@ -296,6 +356,65 @@ mod tests {
         assert_eq!(sine.spec.params.len(), 2, "freq + amp travel with the spec");
         assert_eq!(sine.spec.ports.len(), 1);
         assert!(!sine.summary.is_empty() && !sine.category.is_empty(), "row prose is populated");
+    }
+
+    #[test]
+    fn wire_levels_come_from_real_meters_not_from_canvas_data() {
+        let reg = registry();
+        let g = demo_graph(&reg).unwrap();
+        let master = CanvasState::new().resolve_master(&g).unwrap();
+        let levels = super::node_levels(&g, master, &reg).unwrap();
+
+        // The demo is sine(0.5) → gain(1.0) → rms, plus an UNWIRED spare gain. The levels must be
+        // the metered signal: sine and the in-chain gain both carry the 0.5 peak, the rms node
+        // reads at rest (it has no audio output to meter), and the spare — which never rendered
+        // because nothing renders it — reads 0.
+        let by_module = |id: &str| -> Vec<CanvasNodeId> {
+            g.nodes().iter().filter(|n| n.spec.module_id == id).map(|n| n.id).collect()
+        };
+        let sine = by_module("sparq/syn/sine")[0];
+        let rms = by_module("sparq/ana/rms")[0];
+        let gains = by_module("sparq/util/gain");
+        assert!(
+            (levels.get(sine) - 0.5).abs() < 1e-2,
+            "the sine wire is hot at its 0.5 peak: {}",
+            levels.get(sine)
+        );
+        assert_eq!(
+            levels.get(rms),
+            0.0,
+            "an analysis node carries no audio, so its wire is at rest"
+        );
+        let hot = gains.iter().any(|&gid| levels.get(gid) > 0.4);
+        let cold = gains.iter().any(|&gid| levels.get(gid) == 0.0);
+        assert!(
+            hot && cold,
+            "the in-chain gain is hot and the unwired spare is at rest: {gains:?}"
+        );
+    }
+
+    #[test]
+    fn wire_levels_follow_the_signal_when_a_param_changes() {
+        // The "not faked" proof from the other side: turn the gain down and the level it publishes
+        // falls with it. A level synthesised from canvas data could not track the rendered signal.
+        let reg = registry();
+        let mut g = demo_graph(&reg).unwrap();
+        let master = CanvasState::new().resolve_master(&g).unwrap();
+        let gid = g
+            .nodes()
+            .iter()
+            .find(|n| {
+                n.spec.module_id == "sparq/util/gain" && g.wires().iter().any(|w| w.to.node == n.id)
+            })
+            .map(|n| n.id)
+            .unwrap();
+        let before = super::node_levels(&g, master, &reg).unwrap().get(gid);
+        let pidx = g.node(gid).unwrap().spec.params.iter().position(|p| p.id == "gain").unwrap();
+        g.op_set_param(gid, pidx, 0.1).unwrap();
+        let after = super::node_levels(&g, master, &reg).unwrap().get(gid);
+        assert!(before > 0.4, "unity gain is hot: {before}");
+        assert!(after < 0.06, "gain 0.1 over a 0.5 sine peaks near 0.05: {after}");
+        assert!(after < before, "the level FOLLOWS the signal down");
     }
 
     #[test]

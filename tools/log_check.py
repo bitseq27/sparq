@@ -67,14 +67,14 @@ def read_text(path: pathlib.Path) -> str:
 
 # ---------------------------------------------------------------- baseline
 # Measured, not asserted. Every value here came from a gate run recorded in PHASE0-WORKORDERS.md
-# section 2.1 (WO-008 increment 5, 2026-09-27, sandbox). This block MOVES WITH EVERY
-# SEAL - defect #83 was exactly that nobody moved it for two increments, so the device's next
+# section 2.1 (WO-014 increment 5 + WO-013 increment 4, 2026-09-27, sandbox). This block MOVES WITH
+# EVERY SEAL - defect #83 was exactly that nobody moved it for two increments, so the device's next
 # gates run would have hard-failed a perfectly good tree against numbers three increments old.
 BASELINE: dict[str, object] = {
-    "stamp": "src 90f/1842678B",
+    "stamp": "src 91f/1889639B",
     "golden_hash": "ba577186c988db21",
     "tests_failed": 0,
-    "tests_passed": 682,  # workspace suite only - the release golden rerun is scoped out (#72)
+    "tests_passed": 713,  # workspace suite only - the release golden rerun is scoped out (#72)
     "selftest": "PASS",
     "ui_audit": "PASS",
     "allocations": 0,
@@ -288,14 +288,14 @@ def report(found: dict[str, object], logdir: pathlib.Path) -> int:
 
 # ---------------------------------------------------------------- self-test
 SELF_LOGS = {
-    "build.log": "sparq build\n  stamp: src 89f/1782456B\n  rebuilt 12 crates\n",
+    "build.log": "sparq build\n  stamp: src 91f/1889639B\n  rebuilt 12 crates\n",
     "gates.log": (
         "test result: ok. 300 passed; 0 failed; 1 ignored\n"
         "test result: ok. 88 passed; 0 failed; 0 ignored\n"
         "  [PASS] golden reference matches - hash ba577186c988db21 rms 0.177196\n"
         "  [PASS] rt discipline: 0 allocations on the audio path - 0 allocation(s)\n"
         "  [PASS] throughput: 1 min at 96 kHz/64 renders >20x realtime - 940.0x realtime in 63 ms\n"
-        "selftest: PASS (8 gates)\n"
+        "selftest: PASS (9 gates)\n"
         "ui audit: PASS (0 failure(s))\n"
         "reopen-leak: 8 cycles, 0 outstanding allocations\n"
     ),

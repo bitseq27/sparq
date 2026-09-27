@@ -6,31 +6,94 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-09-27 (WO-008 inc 5 built, sealed, zipped — the cross-thread hot-swap
-primitive, the increment the task list called the last one with a proofs burden this heavy. The
-user confirmed 2026-09-26 that ALL bundles through wo009-inc1 are APPLIED on SATURN. TWO
-bundles wait: wo014-inc4, then wo008-inc5 — apply in that order.)
+**Last updated:** 2026-09-27 (session handoff. WO-014 inc 5 + WO-013 inc 4 + the beat-rate
+follow-on were built, sealed as `sync-wo014-inc5+wo013-inc4.zip` (29 entries), and the user
+**confirmed the zip APPLIED 2026-09-27**. The first-party module set is COMPLETE at SEVENTEEN —
+`ana/tap`, `dsp/scope`, `out/main` on the analysis-payload contract that extends d8's ring from
+meters to waveforms; the canvas's live wire levels animate from the executor's real meters (not
+faked); and `mod/lfo` 0.2.0 + `util/delay` 0.2.0 derive bpm module-side (the beat-rate decision,
+shipped). Sandbox-green: 713 tests, every pre-existing golden unchanged, all runnable clippy cells
+clean, selftest 9/9, ui-audit 20 smokes, stamp `src 91f/1889639B`. **The next step is DEVICE
+EVIDENCE, not code** — see the device track below: `test004` (the 🔴 exclusive-acceptance blocker),
+`test006`, and `gates.bat` on SATURN, with the logs wanted back.)
 
 ---
 
 ## Current position
 
-- **Device state:** the user confirmed 2026-09-26 that **all seven sealed bundles are applied on
-  SATURN** (wo013-inc3 → wo006-inc13 → wo008-inc3 → wo014-inc2 → wo008-inc4 → wo014-inc3 →
-  wo009-inc1). TWO new bundles wait, in order: **`../sync-wo014-inc4.zip`** (12 entries), then
-  **`../sync-wo008-inc5.zip`**. The pending device runs now cover five increments of baseline:
-  `test004` (exclusive acceptance — the #79 fix, still the 🔴 blocker), `test006` (canvas window
-  session), `gates.bat` (**expected test count is now 682**, stamp = whatever `SYNC-STAMP.txt`
-  says, `sparq modules --strict` lists **14**, `selftest --golden` prints **PASS (9 gates)** —
-  gate 9 is the hot-swap cell, MSVC-side concurrency evidence; `log_check.py`'s BASELINE moves
-  with every seal since defect #83), and the WO-008 **loaded soak** (200 modules, 30 min) when
-  the HAL and the machine are both free — it now doubles as the paced-real-time half of
-  allowlist entry 6's stress sentence. WO-009's two device boxes: the **30-minute drift
-  measurement** and a **listened tempo sweep**. Evidence artefacts — **defect #85: run them with
-  their pinned durations or the hashes will not match the goldens** (the CLI default renders
-  5 s): `sparq exec --patch drum-demo --seconds 2` (transport-driven, hash `f2303f13aa0cf299`),
-  `--patch mod-demo --seconds 1` (`1621e1f65b1b64e1`), `--patch demo --seconds 2.8`
-  (`53de3b1f3f40e3c9`).
+- **Device state:** the user confirmed 2026-09-26 that the seven bundles through wo009-inc1 were
+  applied on SATURN (wo013-inc3 → wo006-inc13 → wo008-inc3 → wo014-inc2 → wo008-inc4 →
+  wo014-inc3 → wo009-inc1), and **confirmed 2026-09-27 that `sync-wo014-inc5+wo013-inc4.zip`
+  (29 entries) is APPLIED** — which, since the chain stacks in order, means the two waiting
+  predecessors (`sync-wo014-inc4.zip`, `sync-wo008-inc5.zip`) were applied ahead of it. So the
+  whole sealed chain is now on the device and **the next step is EVIDENCE, not code**: the pending
+  device runs cover seven increments of baseline — `test004` (exclusive acceptance — the #79 fix,
+  still the 🔴 blocker), `test006` (canvas window session — **now also: after RENDER WAV the
+  sine/gain wires should light with live levels**), `gates.bat` (**expected test count is now
+  713**, stamp = whatever `SYNC-STAMP.txt` says (`src 91f/1889639B`), `sparq modules --strict`
+  lists **17**, `selftest --golden` prints **PASS (9 gates)**, `ui --audit` **PASS (20 smokes)** —
+  smoke 20 is the live-wire-levels cell; `log_check.py`'s BASELINE moves with every seal since
+  defect #83), and the WO-008 **loaded soak** (200 modules, 30 min) when the HAL and the machine
+  are both free. WO-009's two device boxes: the **30-minute drift measurement** and a **listened
+  tempo sweep**. Evidence artefacts — **defect #85: run them with their pinned durations or the
+  hashes will not match the goldens** (the CLI default renders 5 s): `sparq exec --patch drum-demo
+  --seconds 2` (transport-driven, hash `f2303f13aa0cf299`), `--patch mod-demo --seconds 1`
+  (`1621e1f65b1b64e1`), `--patch demo --seconds 2.8` (`53de3b1f3f40e3c9`).
+- **WO-014 increment 5 is BUILT and sandbox-green — the module set is COMPLETE at seventeen:**
+  the last three modules shipped on the contracts they waited for. **`ana/tap`** (the generic
+  signal tap for displays): audio-rate bipolar `wave` (the mono monitor mix) + block-rate unipolar
+  `peak`/`rms`; its wave golden **`3f325d4f99ca2a01` CROSS-VALIDATES against the `syn/sine` 1 s
+  golden** — the mono mix of a mono-fanned sine is the sine itself bit for bit, so the tap colours
+  nothing (two mechanisms, one bit pattern); `gain` scales the WAVE only, peak/rms report the TRUE
+  signal. **`dsp/scope`** (the first real visual module): the set's only module whose `process` is
+  a deliberate **NO-OP** — zero-audio-thread-cost is architecture, not optimisation, and the proof
+  is a patch-level golden: adding a tap+scope to a render leaves the master output BIT-IDENTICAL,
+  so the scope-rig golden **EQUALS the out/main golden `75bc7f2f18cac9d5`**; two audio-rate bipolar
+  cv inputs (`x`, `y`) are the display BINDING the UI resolves to source taps. **`out/main`** (the
+  master output with the metering hook): a unity-**BIT-EXACT** pass-through with trim + a hard mute
+  writing exact zeros; because the executor meters every node, its peak/rms ARE the master meters;
+  it has an audio OUTPUT because the executor renders the master node's first audio output (a pure
+  sink would render silence). **The analysis-payload contract they waited on** shipped too:
+  `sparq-audio::engine::AnalysisUpdate` extends ADR-009 d8's publication from meters to WAVEFORMS —
+  `AudioEngine::publish_analysis` pushes every audio-rate `cv` output onto a bounded `SpscRing`
+  per block, `SharedEngine::read_analysis` drains it control-side, `Executor::with_audio_rate_cv_out`
+  is the allocation-free hook (`tests/analysis_pub.rs`: the waveform crosses, an absent reader is
+  counted-not-queued, the audio thread allocates nothing). **The LFO beat-rate DECISION** the WO
+  asked for before building: **module-side bpm derivation, NOT a per-frame tick view** — recorded
+  with its reasoning in LATER.md (a contract change to buy sample-accurate tempo almost no module
+  needs, vs reading the block-start tick the executor already carries; one block = 1.3 ms of lag on
+  a tempo EDIT) — **and then SHIPPED the same session**: `mod/lfo` 0.2.0 (`sync-mode` + `division`)
+  and `util/delay` 0.2.0 (`tempo-sync` + `division`, riding the once-unreachable
+  `DelayLine::set_tempo_sync`) both derive bpm from the block-start tick via a shared
+  `TempoFollower`, fall back to their free-running parameter with no transport, and are additive
+  (defaults byte-identical, which the unchanged goldens prove). `tests/tempo_sync.rs` (7 gates):
+  the derived rate is the transport's, it tracks a tempo change, the tempo-synced delay renders
+  BIT-IDENTICAL to a hand-timed 250 ms, beat-locked golden `db4013f41d1fa678`, zero allocs.
+  **713 tests** (was 682), every pre-existing golden re-verified unchanged (stress
+  hash `b42068ec7b206789` in debug AND release), `modules --strict` **17/17**, docs regenerated
+  (17), all runnable clippy cells clean. Sealed in **`sync wo014-inc5+wo013-inc4`**.
+- **WO-013 increment 4 is BUILT and sandbox-green — live wire levels, the "signature sparq image":**
+  the park note said wires drew at rest until the executor taps existed; they do now (WO-008's
+  `Executor::meter` + the cross-thread `SharedEngine::read_meters`), so the painter half shipped —
+  **and does not fake them**. **`sparq-ui::canvas::levels`** (toolkit-independent, computed not
+  drawn): `NodeLevels` (per-node 0..1, clamped, NaN-to-rest, deterministic) + `wire_level` (a wire
+  carries its SOURCE node's level), unit-tested. **`bridge::node_levels`** renders a short preview
+  and reads each node's PEAK meter, mapping kernel nodes back to canvas nodes — the ONLY source of
+  a wire level, never a value invented from canvas data; two bridge tests prove the levels are real
+  AND follow the signal (turn the gain down, the level falls). **The painter** (`canvas_ui.rs`)
+  modulates each wire from its class colour toward its class glow by level plus a soft under-glow —
+  both endpoint colours are tokens, the blend invents nothing. `CanvasState.levels` is a transient
+  (non-undoable) field the shell refreshes from the bridge after RENDER WAV; empty until the first
+  render, so wires draw exactly as before until then. **Audit smoke 20** proves RENDER WAV populates
+  live levels from real meters. **The master handover** (coupled to `out/main`): `resolve_master`
+  now prefers a wired `out/main` node over the default highest-id-terminus rule (an explicit SET
+  MASTER still wins; an unwired out/main does not count), 3 new tests, `OUT_MAIN_ID` a named
+  constant so the rule and the id cannot drift. **DECLARED LIMIT (not faked):** a node's meter folds
+  its AUDIO outputs, so a cv wire out of a cv-only source (lfo/env/rms) reads at rest — the
+  animation tracks AUDIO signal flow; per-port/per-cv meters are the LATER.md item that would light
+  cv wires from their own values. **NOT in this increment** (the task list's "Else" column, declared
+  for the next pass): rename text entry, inspector scrolling, LOD visual iteration vs
+  `design-mode.svg`. Sealed in **`sync wo014-inc5+wo013-inc4`**.
 - **WO-008 increment 5 is BUILT and sandbox-green — the cross-thread hot-swap primitive:** the
   task list's item 3, "the only remaining increment with a proofs burden this heavy", is done.
   **`sparq-kernel::sync::hotswap`** (allowlist entry 6, shipped in `sync/` with the auditor's
@@ -223,26 +286,24 @@ default** (that deletion is gated on this device run — do not do it early).
 
 ## Next session's task list, in order
 
-**Device track (when SATURN is reachable — every bundle is sealed and waiting):**
-1. All bundles through `sync-wo009-inc1.zip` are APPLIED (user-confirmed 2026-09-26); apply
-   `sync-wo014-inc4.zip` and then `sync-wo008-inc5.zip`, in that order; run
-   `scripts\test004.bat` (the exclusive acceptance — pass shape in `WO006-INC13-RUN-SHEET.md`)
-   and `scripts\test006.bat` (the inc-3 window session; step [07] is the mechanical claim:
-   slider edit must change the canvas-render.wav hash). `scripts\gates.bat` now expects
-   **682 passed / 0 failed / 1 ignored**, **14** modules and **selftest PASS (9 gates)** — gate
-   9 is the new two-thread hot-swap cell, so the device's own atomics and scheduler are the
-   evidence — with the stamp `log_check.py` in the bundle already knows (defect #83's fix made
-   moving it a seal step). Wanted evidence, **with the pinned durations** (defect #85: the CLI
-   default renders 5 s and hashes differently from every golden): `sparq exec --patch mod-demo
-   --seconds 1` (`cv wire` line, cutoff > 200 Hz, hash `1621e1f65b1b64e1`), `sparq exec --patch
-   drum-demo --seconds 2` (transport-driven; beat triggers on the 120-BPM grid, hash
-   `f2303f13aa0cf299`), `sparq exec --patch demo --seconds 2.8` (`53de3b1f3f40e3c9`), and —
-   when the HAL is free — the two WO-009 device boxes: a LISTENED tempo sweep and the 30-min
-   drift run. **Before extracting `sync-wo008-inc5.zip`**, copy the device's sealed
-   `crates\sparq-module-api\src\lib.rs` and `tools\sync_check.py` into `logs\` (defect #86
-   forensics — the GitHub rebuild lost bytes from both; the bundle's copies are repaired, but the
-   sealed ones are the only record of what was lost). Wanted back: `test004.log`, `test006.log`,
-   `gates.log`, `logs\ui.log`, and the two saved copies (`lib.rs.sealed`, `sync_check.py.sealed`).
+**Device track (SATURN — the whole sealed chain is APPLIED; the remaining work is EVIDENCE):**
+1. **All bundles are APPLIED** (through `sync-wo009-inc1.zip` user-confirmed 2026-09-26;
+   `sync-wo014-inc4.zip` → `sync-wo008-inc5.zip` → `sync-wo014-inc5+wo013-inc4.zip` applied and
+   user-confirmed 2026-09-27). **Nothing left to apply — run the device gates and send the logs
+   back.** Run `scripts\test004.bat` (the exclusive acceptance — pass shape in
+   `WO006-INC13-RUN-SHEET.md`; the 🔴 blocker) and `scripts\test006.bat` (the inc-3 window session;
+   step [07] is the mechanical claim: slider edit must change the canvas-render.wav hash — **and
+   now, after RENDER WAV, eyeball that the sine/gain wires light with live levels**).
+   `scripts\gates.bat` now expects **713 passed / 0 failed / 1 ignored**, **17** modules,
+   **selftest PASS (9 gates)** and **`ui --audit` PASS (20 smokes)** — smoke 20 is the
+   live-wire-levels cell — with the stamp `log_check.py` in the bundle already knows (defect #83's
+   fix made moving it a seal step). Wanted evidence, **with the pinned durations** (defect #85):
+   `sparq exec --patch mod-demo --seconds 1` (`1621e1f65b1b64e1`), `sparq exec --patch drum-demo
+   --seconds 2` (`f2303f13aa0cf299`), `sparq exec --patch demo --seconds 2.8` (`53de3b1f3f40e3c9`),
+   and — when the HAL is free — the two WO-009 device boxes: a LISTENED tempo sweep and the 30-min
+   drift run. No drift-repair copy step was needed (the pristine clone passes `sync_check --quiet`;
+   defect #86 was repaired in the wo008-inc5 bundle). **Wanted back: `test004.log`, `test006.log`,
+   `gates.log`, `logs\ui.log`** — those close the device boxes the sandbox cannot.
 2. If test004's 2 h soak passes → **WO-006 acceptance closes** → sandbox increment: ADR-008 exit
    (delete the cpal bootstrap, HAL becomes `play`'s default) **plus routing the live HAL stream
    through `SharedEngine`** — the cross-thread halves now exist (inc 5), so `play`'s callback
@@ -253,33 +314,54 @@ default** (that deletion is gated on this device run — do not do it early).
    and since inc 5 also the paced-real-time half of allowlist entry 6's stress sentence.
 
 **Sandbox track (buildable now, in value order):**
-4. **WO-013 increment 4** — live wire levels, **now unblocked from both ends**: the executor
-   taps exist (`node_cv_block`/`node_cv_audio`/`node_events`/`meter`) AND the cross-thread
-   publication does (`SharedEngine::read_meters` drains per-node peak/rms/status + block clock
-   from the audio thread — the painter reads the ring, never the executor); do not fake them.
-   Else rename text entry (shared with the browser's provisional keyboard feed), inspector
-   scrolling, LOD visual iteration vs `design-mode.svg`. Canvas cv wires: the connect layer
-   already delegates cv verdicts to `connect_cv`; drawing the wire class is the increment's UI
-   half.
-5. **WO-014 increment 5 — the last three modules**: `ana/tap` + `dsp/scope` (the rings they
-   wait on SHIPPED in inc 5 — `MeterUpdate` is the shape to extend, per-port meters and
-   analysis payloads are declared in LATER.md; their own contracts are the remaining wait),
-   `out/main` (with the canvas master handover). Plus the LFO beat-rate decision (per-frame tick
-   view vs module-side bpm derivation — LATER.md) which also unlocks the delay's `set_tempo_sync`
-   path — note the cross-thread engine's `SetMusical` command now carries the transport's tick
-   to the audio side, which is the feed a per-frame tick view would extend.
-6. Studio-session evidence still open: real-finger canvas touch-test, DPI matrix walk
+4. ~~**WO-013 increment 4** — live wire levels~~ **DONE (2026-09-27, this session):** the
+   signature sparq image ships — wires animate from the executor's REAL meters (`bridge::node_levels`
+   → `CanvasState.levels` → the painter's class-colour→glow blend), toolkit-independent
+   `canvas::levels` model, audit smoke 20, and the `out/main` master-handover rule. **Remaining
+   from inc 4's "Else" column** (declared, next pass): rename text entry (shared with the browser's
+   provisional keyboard feed), inspector scrolling, LOD visual iteration vs `design-mode.svg`, and
+   per-cv wire levels (needs per-port meters — the rings can carry port ids).
+5. ~~**WO-014 increment 5** — the last three modules~~ **DONE (2026-09-27, this session): the
+   first-party set is COMPLETE at seventeen** — `ana/tap`, `dsp/scope`, `out/main` shipped on the
+   analysis-payload contract (`AnalysisUpdate` extends d8's ring from meters to waveforms), with the
+   two new goldens (`75bc7f2f18cac9d5` out/main == scope rig; `3f325d4f99ca2a01` tap wave == sine)
+   and the LFO beat-rate DECISION — **decided AND shipped**: `mod/lfo` 0.2.0 + `util/delay` 0.2.0
+   derive bpm module-side from the block-start tick (`TempoFollower`), and the delay's
+   `set_tempo_sync` path is now reached (`tests/tempo_sync.rs`, golden `db4013f41d1fa678`).
+   **Remaining from inc 5:** only the <15 %-of-a-core benchmark (stage-machine acceptance — a
+   sandbox CPU ratio does not transfer, so no sandbox number is recorded as evidence).
+6. **The live HAL stream through `SharedEngine`** — after WO-006's exclusive acceptance: `play`'s
+   callback holds `AudioEngine`, the control side stages, and the canvas's `levels` field fills from
+   `read_meters` per frame instead of a preview render (the continuous live-levels half; the offline
+   half shipped in WO-013 inc 4). Then the WO-006 increment 2 backlog (ASIO, duplex, round-trip
+   measurement, STA retry for #75, clock-drift re-derivation per #76).
+7. Studio-session evidence still open: real-finger canvas touch-test, DPI matrix walk
    (WO-012/WO-013), WO-001 hardware sheets, dispatch-bench C/D numbers for ADR-009.
-7. Small, well-specified, declared in LATER.md: mixer's cv merge side (retires the last of the
+8. Small, well-specified, declared in LATER.md: mixer's cv merge side (retires the last of the
    cv-fan-in refusal); `cv_interp = "spline"` (refused at build until implemented); host-side
    `required`-unconnected enforcement (moves stress refusal counters — its own increment on
    purpose); the compat-matrix review packet (`reviewed = false`, defect #82's ordering question
    inside it); loop-relative beat phase for unaligned loop regions (WO-009's declared limit);
-   from inc 5: multi-reader epochs (a second reader of the live patch), per-port meters, and
-   a live-rig command vocabulary beyond the four `EngineCmd`s (state blobs are configure()-side).
+   from inc 5: per-port meters (would light cv wires + a scope's per-channel display), a
+   multi-reader epoch (a second reader of the live patch), and narrowing analysis publication to
+   declared analysis sources if a large rig's ring traffic ever wants it.
 
 ## Done (most recent first)
 
+- [x] **WO-014 inc 5** (2026-09-27, this session) — the module set COMPLETE at seventeen:
+      `ana/tap` (wave golden cross-validates == the sine golden), `dsp/scope` (the no-op display;
+      scope-rig golden == the out/main golden, proving zero-cost bit-transparency), `out/main`
+      (unity-bit-exact master with the metering hook); the `AnalysisUpdate` ring extending d8's
+      publication to waveforms; and the LFO beat-rate decision DECIDED *and* SHIPPED — `mod/lfo`
+      0.2.0 + `util/delay` 0.2.0 derive bpm module-side from the block-start tick (`TempoFollower`),
+      reaching the delay's `set_tempo_sync`, additive so every prior golden is unchanged.
+      713 tests, every golden unchanged, `modules --strict` 17/17, docs 17.
+- [x] **WO-013 inc 4** (2026-09-27, this session) — live wire levels (the signature image):
+      the toolkit-independent `canvas::levels` model, `bridge::node_levels` reading REAL executor
+      meters, the painter's token-colour→glow blend, `CanvasState.levels` refreshed on render,
+      audit smoke 20, and the `out/main` master-handover rule (3 tests). Not faked; the cv-wire
+      level limit + rename/inspector-scroll/LOD declared for the next pass. Sealed together as
+      `sync wo014-inc5+wo013-inc4`.
 - [x] **WO-008 inc 5** (2026-09-27, this session) — the cross-thread hot-swap primitive
       (`sparq-kernel::sync::hotswap`, allowlist entry 6): d3's literal pointer swap, epoch-tagged
       retirement (grace period mechanical, drops control-side), deferral-not-forcing; `Module:
@@ -422,8 +504,13 @@ default** (that deletion is gated on this device run — do not do it early).
   fold a node's outputs (per-port later), `play` still pumps the static WO-005 graph (HAL
   integration waits on WO-006's acceptance)
 - MSVC × `ui-window` clippy cell: never run anywhere (sandbox OOM, no CI cell)
-- Device-side baselines that MOVE with this increment: gates.log test count **682** (log_check
-  already moved — #83's discipline), stamp = whatever `SYNC-STAMP.txt` says, `sparq modules`
-  count **14** (unchanged), `selftest --golden` prints **PASS (9 gates)**, exec has three patch
-  names (`demo`, `mod-demo`, `drum-demo` — the last transport-driven) and its evidence hashes
-  need the pinned `--seconds` (#85)
+- Device-side baselines that MOVE with this increment: gates.log test count **713** (log_check
+  already moved — #83's discipline), stamp **`src 91f/1889639B`**, `sparq modules` count **17**
+  (was 14), `selftest --golden` prints **PASS (9 gates)** (unchanged), `ui --audit` **PASS (20
+  smokes)** (was 19 — smoke 20 is the live-wire-levels cell), exec has three patch names (`demo`,
+  `mod-demo`, `drum-demo` — the last transport-driven) and its evidence hashes need the pinned
+  `--seconds` (#85), and the NEW goldens are `75bc7f2f18cac9d5` (out/main master, and the scope
+  rig), `3f325d4f99ca2a01` (tap wave — which is also the sine golden, by cross-validation), and
+  `db4013f41d1fa678` (beat-locked lfo at 120 bpm). NOTE: `mod/lfo` and `util/delay` are now
+  **v0.2.0** (5 and 6 params) — additive; at their defaults they render byte-identical to v0.1.0,
+  which the unchanged batch-2/batch-4 goldens prove.

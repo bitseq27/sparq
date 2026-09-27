@@ -13,18 +13,22 @@
 # port on a 0.2.0 of this module, additively) is a small increment — declared here so the
 # choice is a decision on the record, not an accident.
 #
-# TRANSPORT SYNC, v0 shape: the `sync` event input resets the phase at the event's exact
-# sample — the transport's beat/bar triggers ARE the clock (WO-009 emits them). Continuous
-# tick-derived phase (rate in beats rather than Hz) needs a per-frame tick view or a
-# module-side bpm derivation from block-start ticks; both are declared in LATER.md rather
-# than approximated here.
+# TRANSPORT SYNC — two mechanisms, both shipped:
+#  * the `sync` EVENT input resets the phase at the event's exact sample (sample-accurate, from
+#    increment 4 — the transport's beat/bar triggers ARE the clock, WO-009 emits them); and
+#  * BEAT-LOCKED RATE (0.2.0, the WO-014 increment-5 decision realised): with `sync-mode` = 1 the
+#    rate is `division` cycles per beat, derived module-side from the block-start tick the executor
+#    already carries (`bpm = Δtick/ppqn/Δseconds×60`) — NOT a per-frame tick view, which would have
+#    been a contract change through every implementor and the api_snapshot pins. A tempo edit lands
+#    one block late (1.3 ms at 96 kHz/64), the declared and measured cost of that choice. With no
+#    transport feeding a tick, beat-lock falls back to the free-running `rate` so it never stops.
 
 [identity]
 id = "sparq/mod/lfo"
-version = "0.1.0"
+version = "0.2.0"
 host_api = { min = 1, max = 1 }
 display_name = "LFO"
-summary = "Low-frequency oscillator - four shapes, event phase-reset, unipolar audio-rate cv"
+summary = "Low-frequency oscillator - four shapes, event phase-reset, beat-lock, unipolar cv"
 authors = ["sparq"]
 license = "MIT"
 
@@ -77,6 +81,27 @@ type = "float"
 unit = "ratio"
 min = 0.0
 max = 1.0
+default = 1.0
+
+# 0 = free-running at `rate` Hz; 1 = beat-locked to the transport at `division` cycles per beat.
+[[params]]
+id = "sync-mode"
+name = "Rate Source (0 Hz 1 beat)"
+type = "int"
+unit = "x"
+min = 0.0
+max = 1.0
+default = 0.0
+
+# Cycles per beat when sync-mode = 1 (0.25 = one cycle per 4 beats, 1 = one per beat, 2 = two per
+# beat). Ignored in Hz mode. A tempo edit reaches it one block late (the header's declared lag).
+[[params]]
+id = "division"
+name = "Cycles per Beat"
+type = "float"
+unit = "x"
+min = 0.0
+max = 16.0
 default = 1.0
 
 [state]

@@ -567,6 +567,15 @@ fn run_gesture_smoke(failures: &mut Vec<String>) {
                 wrote && logged,
                 failures,
             );
+            // Live wire levels (WO-013 inc 4): the render just measured the patch, so the canvas
+            // now carries REAL meter-driven levels — the demo's sine/gain are hot (~0.5 peak) and
+            // the painter will light their wires. Not empty, and not faked: the level is the
+            // executor's peak meter for the signal that actually rendered.
+            check(
+                "RENDER WAV populates live wire levels from the executor's meters (not faked)",
+                !shell.canvas.levels.is_empty() && shell.canvas.levels.max_level() > 0.4,
+                failures,
+            );
         },
         None => failures.push("the empty-canvas menu did not offer RENDER WAV".to_string()),
     }

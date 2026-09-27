@@ -1,0 +1,92 @@
+# sparq module manifest — ana/tap (WO-014 increment 5).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The generic signal tap for displays — "gpu/display plumbing" in the WO's contract-stress
+# column. Where `ana/rms` publishes ONE block-rate level (analysis-as-control-source), `ana/tap`
+# publishes the WAVEFORM itself at audio rate, plus the block's peak and rms, so a display
+# (`dsp/scope`) can render the signal's shape rather than just its loudness. It is the analysis
+# source the display side rides: the audio-rate `wave` port is the payload the cross-thread
+# engine publishes onto the analysis ring (ADR-009 d8's "published, not polled"), and the UI
+# reads it off the ring — never off the audio thread, never off the executor.
+#
+# RANGE DECISIONS, recorded not buried (the mod/lfo precedent):
+# * `wave` is BIPOLAR audio-rate cv — it is the signed signal, and a display wants the sign.
+#   `dsp/scope`'s inputs are bipolar to match (connect_cv bipolar→bipolar is compatible; the
+#   matrix refuses bipolar→unipolar rather than silently rescaling, so the ranges are declared
+#   to line up on purpose).
+# * `peak` and `rms` are UNIPOLAR block-rate cv — magnitudes in 0..1, the same convention
+#   `ana/rms` established, so a tap can drive modulation exactly like an rms follower can.
+#
+# The monitor mix is the input's channels averaged per frame (a stereo signal taps to its mono
+# sum for the waveform); peak/rms fold across every input sample in the block. `gain` scales the
+# WAVEFORM only (a display trim) — peak/rms report the true signal, never the trimmed one, so a
+# tap used for modulation is honest about level while a tap used for a scope can be zoomed.
+#
+# v0 state is empty and says so: a tap is memoryless (no envelope follower, no history) — the
+# waveform it publishes is the block it just processed.
+
+[identity]
+id = "sparq/ana/tap"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Tap"
+summary = "Generic signal tap for displays - waveform at audio rate plus block peak and rms"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "analysis/tap/waveform"
+top = "ana"
+kind = "analysis"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "in"
+name = "Input"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+required = false
+
+# The waveform, per frame, bipolar — the display payload. Published onto the analysis ring.
+[[ports]]
+id = "wave"
+name = "Wave"
+direction = "out"
+type = "cv"
+rate = "audio"
+range = "bipolar"
+
+[[ports]]
+id = "peak"
+name = "Peak"
+direction = "out"
+type = "cv"
+rate = "block"
+range = "unipolar"
+
+[[ports]]
+id = "rms"
+name = "RMS"
+direction = "out"
+type = "cv"
+rate = "block"
+range = "unipolar"
+
+[[params]]
+id = "gain"
+name = "Wave Gain"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 4.0
+default = 1.0
+
+[state]
+schema_id = "sparq/ana/tap/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "trivial"

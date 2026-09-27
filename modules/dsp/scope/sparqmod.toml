@@ -1,0 +1,125 @@
+# sparq module manifest — dsp/scope (WO-014 increment 5).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The first real visual module — "waveform + X/Y display from tokens/colour maps". It is a
+# DISPLAY: it consumes analysis (an `ana/tap`'s waveform, on audio-rate bipolar cv) and renders
+# it, and it does so with ZERO audio-thread cost, which is the WO's acceptance criterion
+# ("dsp/scope renders at ≥ 60 fps alongside audio with zero audio-thread cost"). The zero cost
+# is not an optimisation, it is the architecture: `process` is a NO-OP. The waveform the scope
+# shows is published by its source tap onto the analysis ring (ADR-009 d8) and drawn by the
+# UI/visual thread from the ring; the audio thread never computes a pixel and the scope module
+# never touches the samples. A display that ran its rendering inside `process` would be a lie
+# against its own acceptance box, so it does not.
+#
+# The two cv inputs are the DISPLAY BINDING: `x` is the horizontal-deflection signal (in
+# waveform mode, time; in X/Y mode, the X axis) and `y` the vertical (waveform mode ignores it;
+# X/Y mode plots x against y — a Lissajous figure from two taps). They are declared so the patch
+# GRAPH records what the scope displays; the UI resolves each input wire to its source tap and
+# reads that tap's published waveform. The inputs are `required = false`: an unbound scope shows
+# a flat line, not a crash, and never silence-by-accident elsewhere.
+#
+# Parameters configure the DISPLAY (read by the UI, not by `process`): timebase, mode, trigger
+# level, vertical gain, and a colour-map index. The colour-map index selects from the
+# scope-valid maps in design/tokens/colormaps.toml; index 0 is `scope.trace` (the identity:
+# signal.audio trace on ground.inset, hairline.faint grid) — the map the mockups draw. The
+# index→map table lives with the tokens and the painter resolves it, because a numeric param
+# cannot yet carry an enum's options[] (LATER.md: the manifest schema grows options[] first).
+#
+# v0 state is empty and says so: a scope is memoryless on the audio side (the UI owns any
+# persistence/phosphor-decay buffer, which is display state, not project state).
+
+[identity]
+id = "sparq/dsp/scope"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Scope"
+summary = "Waveform and X/Y display from tokens and colour maps - zero audio-thread cost"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "display/scope"
+top = "dsp"
+kind = "display"
+tier = "t1"
+stability = "stable"
+
+# The horizontal-deflection input: a waveform from an ana/tap (audio-rate bipolar cv).
+[[ports]]
+id = "x"
+name = "X / Wave"
+direction = "in"
+type = "cv"
+rate = "audio"
+range = "bipolar"
+required = false
+
+# The vertical input, used in X/Y mode (a second tap). Waveform mode ignores it.
+[[ports]]
+id = "y"
+name = "Y"
+direction = "in"
+type = "cv"
+rate = "audio"
+range = "bipolar"
+required = false
+
+# Display timebase: how much signal the trace spans. The published payload is one block; the UI
+# accumulates blocks up to the timebase. Declared in ms so it reads like an instrument control.
+[[params]]
+id = "timebase"
+name = "Timebase"
+type = "float"
+unit = "ms"
+min = 1.0
+max = 500.0
+default = 20.0
+
+# 0 = waveform (x vs time), 1 = X/Y (x vs y).
+[[params]]
+id = "mode"
+name = "Mode (0 wave 1 X/Y)"
+type = "int"
+unit = "x"
+min = 0.0
+max = 1.0
+default = 0.0
+
+# Trigger level for the trace's start point (0 = free-run / no trigger).
+[[params]]
+id = "trigger"
+name = "Trigger Level"
+type = "float"
+unit = "ratio"
+min = -1.0
+max = 1.0
+default = 0.0
+
+# Vertical gain (display zoom); does not alter the published signal.
+[[params]]
+id = "gain"
+name = "Vertical Gain"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 8.0
+default = 1.0
+
+# Colour-map index into the scope-valid maps (0 = scope.trace, the identity).
+[[params]]
+id = "colormap"
+name = "Colour Map"
+type = "int"
+unit = "x"
+min = 0.0
+max = 7.0
+default = 0.0
+
+[state]
+schema_id = "sparq/dsp/scope/state"
+schema_version = 1
+
+[resources]
+latency = 0
+# The audio thread does nothing; the display cost is on the UI thread and is the WO's ≥60 fps box.
+cpu_class = "trivial"

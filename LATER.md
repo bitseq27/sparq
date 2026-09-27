@@ -82,7 +82,16 @@ Everything here is a **no** for now. The rule: if an idea isn't in a work order,
 * egui default typeface → the chosen WO-002 faces once `chosen` is filled (sizes already token-correct).
 * `preview.html` / `tokens.css` HC rendering: the COLOR_HC_* constants exist and drive the in-app theme switch, but the static preview emitters still render only the base palette — add an HC swatch section when the preview page is next touched.
 
-## WO-013 increment 3+ (parked from the graph canvas, updated 2026-09-25 — increment 3 shipped the browser, the inspector and wire re-patch)
+## WO-013 increment 4+ (parked from the graph canvas, updated 2026-09-27 — increment 4 shipped live wire levels)
+
+**Shipped in increment 4 (2026-09-27)**: **live wire levels** — the "signature sparq image". Wires
+now animate from the executor's REAL meters: `sparq-ui::canvas::levels` (`NodeLevels` + `wire_level`,
+toolkit-independent and unit-tested), `bridge::node_levels` (reads each node's peak meter after a
+preview render, maps kernel→canvas nodes — the only source of a level, never faked), the painter's
+class-colour→glow blend + under-glow (both endpoint colours are tokens), the transient
+`CanvasState.levels` field the shell refreshes after RENDER WAV, and audit smoke 20. Plus the
+`out/main` **master-handover** rule (`resolve_master` prefers a wired out/main; `OUT_MAIN_ID` a named
+constant). **Not faked** — two bridge tests prove the levels are metered AND follow the signal.
 
 **Shipped in increment 3** (no longer parked): the module browser + fuzzy search (long-press empty
 canvas → ADD MODULE; the catalogue IS the registry, #58 structurally), the inspector with touch
@@ -105,14 +114,21 @@ runs on the post-removal graph; refusals restore byte-exact).
   sheet is modal (no widget, no focus policy); a real text-entry surface replaces it (rename too).
 * **Render length + transport binding** (WO-009): `bridge::render_wav` renders a fixed, stated 5.0 s until transport exists; then RENDER WAV renders the arrangement (or the loop range), and the evidence line says which.
 * **Master handover to `out/main`** (WO-014): SET MASTER + the resolve rule are the bridge-era answer to "which node feeds the listener"; when `out/main` ships, an out node in the patch supersedes the rule and the MASTER badge moves to it.
-* **Live wire levels** (the "signature sparq image"): needs the WO-008 executor's analysis taps + meter ring; until then wires draw in class colour at rest, no level animation.
+* **Live wire levels** ~~(the "signature sparq image")~~ **SHIPPED (increment 4)** for AUDIO
+  signal flow. What stays parked: **cv-wire levels** — a node's meter folds its AUDIO outputs, so a
+  cv wire out of a cv-only source (`mod/lfo`, `env/ad`, `ana/rms`) reads at rest. Lighting cv wires
+  from their own values needs per-port / per-cv meters (the rings can carry port ids) — declared
+  above, not faked here. And the **continuous play-time refresh**: inc 4 fills `CanvasState.levels`
+  from an offline preview render (after RENDER WAV); the per-frame `read_meters` fill rides the
+  live-HAL-through-`SharedEngine` increment (WO-013 inc 4 shipped the offline half and the whole
+  painter path, so that increment only swaps the level SOURCE).
 * **LOD visual iteration against `design-mode.svg`**: the three levels are computed from tokens and switch correctly, but the Simplified/Dot *renderings* are first-pass — the WO risk column ("LOD making the graph unreadable when zoomed out — iterate on the mockup first") is still open.
 * **WM_POINTER contact area → real palm rejection while wiring**: the recogniser's palm path is proven with synthetic areas only (winit reports none); shared with WO-012 increment 2, and the wiring case ("palm resting on the screen while drawing a wire causes zero spurious input") is the acceptance criterion that needs it.
 * **Grid-dot draw cost**: at Full LOD the world-anchored dot grid emits ~1000 circles/frame (the headless frame-logic median is grid-dominated); cache to a tile/texture or cull to the major grid when the Phase 6 rasteriser lands. Correctness is fine; this is a device-fps concern.
 * **Rename / randomise context rows**: need text entry (rename) and the seed tree (randomise, ADR-007) — the `Op::Rename` value and the menu plumbing exist, the rows are deferred until their surfaces do.
 * **Sub-graph / patch nesting** (Phase 1) and **mapping canvas** (Phase 5) remain out of scope per the WO.
 
-## WO-014 increment 4+ (parked from the module set, updated 2026-09-26 — increments 3 AND 4 shipped; three modules remain)
+## WO-014 increment 5+ (parked from the module set, updated 2026-09-27 — increments 3, 4 AND 5 shipped; the set is complete at SEVENTEEN)
 
 **Shipped in increment 2** (no longer parked): `syn/noise`, `syn/polyblep` (aliasing acceptance
 measured at −166.8 dB through the registry build), `flt/svf`, `util/delay` (parametric latency),
@@ -132,18 +148,52 @@ BIT-IDENTICAL to a hand-driven reference) and `mod/clk-div` (divide/multiply/pro
 first event-in-event-out module; the 16ths→÷4→membrane chain golden `914d9063ce9d8a0f` lands
 kicks on exact frames) — **fourteen first-party modules**.
 
-* **The three remaining modules wait on contracts, not on effort:** `ana/tap`, `dsp/scope`
-  waited on the ring publication of ADR-009 d8 — SHIPPED (WO-008 inc 5); their own contracts
-  are the remaining wait. `out/main` ships
-  together with the WO-013-side master-handover rule change so the MASTER badge never lies.
-  A module whose trigger port cannot receive a trigger is a lie with a manifest; these land
-  when their payloads can travel.
-* **LFO rate in BEATS (continuous tick-derived phase)**: `mod/lfo` syncs by event-driven phase
-  reset (sample-exact, shipped). Rate-as-a-beat-division needs the module to see tempo: either a
-  per-frame tick view in `BlockContext` (a contract change) or a module-side bpm derivation from
-  block-start tick deltas (one block of lag on tempo edits — measurable, maybe fine). Decide
-  before building; both doors are open, and the delay's tempo-sync parameter path
-  (`dsp/delay.rs`'s tested-but-unreachable `set_tempo_sync`) rides whichever door opens.
+**Shipped in increment 5 (2026-09-27, the set completes at seventeen)**: `ana/tap` (the generic
+signal tap — audio-rate bipolar `wave` plus block-rate `peak`/`rms`, the analysis source a display
+rides; its wave golden `3f325d4f99ca2a01` CROSS-VALIDATES against the `syn/sine` 1 s golden — the
+mono mix of a mono-fanned sine is the sine itself, bit for bit, so the tap colours nothing),
+`dsp/scope` (the first real visual module — a display whose `process` is a deliberate NO-OP, so
+its zero-audio-thread-cost acceptance is architecture; the proof is that adding a tap+scope to a
+patch leaves the master render BIT-IDENTICAL, the scope-rig golden equalling the out/main golden
+`75bc7f2f18cac9d5`), and `out/main` (the master output with the metering hook — a unity-bit-exact
+pass-through with trim + hard mute, shipping with the WO-013-side master-handover rule so the
+MASTER badge names the output module rather than guessing the last gain). The analysis-payload
+CONTRACT they waited on also shipped: `sparq-audio::engine::AnalysisUpdate` extends ADR-009 d8's
+publication from meters (peak/rms) to WAVEFORMS — `AudioEngine::publish_analysis` pushes every
+audio-rate `cv` output onto a bounded `SpscRing` once per block, and `SharedEngine::read_analysis`
+drains it control-side, so a scope reads signal off the ring and never touches the audio thread
+(`tests/analysis_pub.rs`: the waveform crosses, an absent reader is counted-not-queued, and the
+audio thread allocates nothing while publishing).
+
+* **Analysis publication is GENERIC, not tap-only (a declared choice, not an oversight):**
+  `publish_analysis` publishes every audio-rate `cv` output in the patch — a tap's wave, an
+  `env/ad` envelope, a `mod/lfo` shape. The rule needs no per-node kind storage (the executor does
+  not retain manifests post-build), it is bounded by the ring depth and refuses-and-counts when
+  full, and it means any audio-rate cv signal is scopable. A consumer filters by the `(node, port)`
+  its display is bound to. If a large rig's analysis traffic ever wants narrowing to declared
+  analysis sources, that is a per-node kind flag at build — a small, well-specified change, parked
+  here rather than pre-optimised.
+* **Per-port meters stay folded** (a multi-output node's meter folds its audio outputs): the rings
+  CAN carry port ids when a display needs per-port levels, but nothing in increment 5 does, so the
+  fold stands. Declared, not forgotten.
+* **LFO rate in BEATS — DECIDED *and* SHIPPED (2026-09-27): module-side bpm derivation, NOT a
+  per-frame tick view.** The decision the WO asked for before building, the reasoning, and now the
+  implementation: a per-frame tick view in `BlockContext` is a CONTRACT CHANGE that ripples through
+  all 41 implementors and the `api_snapshot` pins, to buy sample-accurate tempo that almost no
+  module needs; the module-side derivation reads the block-start `tick`/`ppqn` the executor ALREADY
+  carries (WO-009's `set_musical_position` door, and the cross-thread `SetMusical` command that
+  feeds it) and derives `bpm = Δtick / ppqn / Δseconds` from consecutive blocks (`TempoFollower`,
+  a private helper in `sparq-audio::modules`) — no contract change, and the one block of lag on a
+  tempo EDIT is 1.3 ms at 96 kHz/64, below any musical threshold. **SHIPPED:** `mod/lfo` 0.2.0
+  grew `sync-mode` (0 Hz / 1 beat) + `division` (cycles per beat) and `util/delay` 0.2.0 grew
+  `tempo-sync` + `division` (beats) riding the once-unreachable `DelayLine::set_tempo_sync`; both
+  fall back to their free-running parameter when no transport feeds a tick (a beat-locked module
+  never silently stops), and both are additive — at the defaults they are byte-for-byte the prior
+  versions, which the unchanged goldens prove. `tests/tempo_sync.rs` (7 gates): the derived rate is
+  the transport's (not the fallback's), it tracks a tempo change, the fallbacks hold, the
+  tempo-synced delay renders BIT-IDENTICAL to a hand-timed 250 ms, a beat-locked golden
+  (`db4013f41d1fa678`), and zero allocations while deriving. The delay's `set_tempo_sync` path is
+  now reached, closing the last of this item.
 
 ## WO-009 increment 1+ (parked from clocks/transport, 2026-09-26 — the musical half shipped)
 
@@ -221,15 +271,22 @@ watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the det
   determinism world's unwired spare depends on it, and moving refusals mid-stress would move the
   harness counters). Host-side enforcement gets its own increment, with the stress baseline moved
   on purpose and recorded.
-* ~~Cross-thread meter/analysis publication~~ **SHIPPED as WO-008 increment 5 (2026-09-27):**
+* ~~Cross-thread meter/analysis publication~~ **SHIPPED as WO-008 increment 5 (2026-09-27),
+  analysis payloads extended in WO-014 increment 5:**
   `AudioEngine` publishes per-node `MeterUpdate`s (peak/rms/status + the stream's block count)
   into an `SpscRing` every block, and an `EngineCmd` ring carries `Copy` commands the other way
-  (`SetParams`/`SetMusical`/`ClearMusical`/`ClearAutoBypass`) — both refuse-and-count when
-  full. Still parked, in pieces: **per-port meters** (a multi-output node meters folded — the
-  rings can carry port ids when `dsp/scope` needs them), **analysis payloads** (`ana/tap` and
-  `dsp/scope` ride these rings but are their own WO-014 increment-5 contracts), and the **UI
-  consumer wiring** — WO-013's live wire levels now wait on a painter increment, not on the
-  kernel.
+  (`SetParams`/`SetMusical`/`ClearMusical`/`ClearAutoBypass`) — both refuse-and-count when full.
+  **WO-014 inc 5 added the analysis half:** `AnalysisUpdate` (node, port, block, a bounded waveform)
+  rides a sibling `SpscRing`; `AudioEngine::publish_analysis` pushes every audio-rate `cv` output
+  per block via `Executor::with_audio_rate_cv_out`, and `SharedEngine::read_analysis` drains it —
+  the payload `ana/tap` writes and `dsp/scope`'s UI reads (`tests/analysis_pub.rs`). And the
+  **UI consumer wiring shipped as WO-013 inc 4** (live wire levels read the meters). Still parked,
+  in pieces: **per-port meters** (a multi-output node meters folded — the rings can carry port ids
+  when a scope wants per-channel levels or a cv wire wants its own value lit), **narrowing analysis
+  publication** to declared analysis sources (today it publishes every audio-rate cv output —
+  generic, bounded, counted; a per-node kind flag at build would narrow it if a large rig wants),
+  and a **continuous play-time refresh** (WO-013 inc 4 refreshes levels from an offline preview
+  render; the per-frame `read_meters` fill rides the live-HAL-through-`SharedEngine` increment).
 * **Watchdog → UI flag**: `auto_bypassed(node)` is readable and the journal exists; the canvas's
   red hairline + BYPASS-WATCHDOG badge (ADR-009 d6) is a WO-013-side painter increment.
 * **The degradation ladder beyond auto-bypass** (plan §5.2: FFT size → display refresh → voice

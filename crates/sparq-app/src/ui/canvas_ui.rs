@@ -40,7 +40,7 @@ pub fn draw(
     audit: &mut Vec<InteractiveElement>,
 ) {
     draw_grid(p, pal, canvas, view);
-    draw_wires(p, pal, canvas, layout);
+    draw_wires(p, pal, graph, canvas, layout);
     draw_pending_wire(p, pal, graph, canvas, layout, ctx);
     draw_repatch(p, pal, graph, canvas, layout, ctx);
     // The resolved master (explicit or the documented default rule) wears a MASTER badge: the
@@ -122,6 +122,22 @@ fn pos(v: Vec2) -> Pos2 {
     Pos2::new(v.x, v.y)
 }
 
+/// Blend two token colours by `t` (0..1), per channel. The live-wire-level modulation uses this to
+/// fade a wire from its class colour (at rest) toward its class glow (hot) without inventing a
+/// third colour — egui's `Color32` has no built-in lerp, so the two-endpoint blend lives here.
+fn lerp_colour(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let mix = |x: u8, y: u8| -> u8 {
+        (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round().clamp(0.0, 255.0) as u8
+    };
+    Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+}
+
+/// The same token colour at an explicit alpha — the under-glow's transparency, scaled by level.
+fn with_alpha(c: Color32, a: f32) -> Color32 {
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (a.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
 // --------------------------------------------------------------------- grid
 
 fn draw_grid(p: &Painter, pal: &Palette, canvas: &CanvasState, view: Rect) {
@@ -169,15 +185,47 @@ fn parse_encoding(enc: &str) -> (Option<(f32, f32)>, bool) {
     (pattern, double)
 }
 
-fn draw_wires(p: &Painter, pal: &Palette, canvas: &CanvasState, layout: &CanvasLayout) {
+fn draw_wires(
+    p: &Painter,
+    pal: &Palette,
+    graph: &Graph,
+    canvas: &CanvasState,
+    layout: &CanvasLayout,
+) {
+    // Live wire levels (WO-013 increment 4): when the bridge has supplied meter-driven levels, a
+    // wire carrying signal brightens from its class colour toward its class glow and grows a soft
+    // under-glow, in proportion to the level. The levels come from the executor's meters (never
+    // faked); an empty level set (nothing rendered yet) leaves every wire exactly at rest, so this
+    // is purely additive over the increment-3 rendering. Both colours are tokens — the modulation
+    // interpolates between two token colours and never invents a third.
+    let live = !canvas.levels.is_empty();
     for w in &layout.wires {
         let selected = canvas.selection.wires.contains(&w.id);
         let enc = class_encoding(w.class);
         let (pattern, double) = parse_encoding(enc);
+        let level = if live {
+            sparq_ui::canvas::levels::wire_level(graph, &canvas.levels, w.id)
+        } else {
+            0.0
+        };
         let width = if selected { LAYOUT_STROKE_EMPHASIS as f32 } else { class_width(w.class) };
-        let colour = if selected { class_glow(w.class, pal) } else { class_colour(w.class, pal) };
+        let colour = if selected {
+            class_glow(w.class, pal)
+        } else if level > 0.0 {
+            lerp_colour(class_colour(w.class, pal), class_glow(w.class, pal), level)
+        } else {
+            class_colour(w.class, pal)
+        };
         let stroke = Stroke::new(width, colour);
         let pts: Vec<Pos2> = w.points.iter().copied().map(pos).collect();
+
+        // The under-glow: a wider, low-alpha pass in the class glow, drawn first so the crisp
+        // stroke sits on top. Alpha scales with the level, so a hot wire visibly "energises".
+        if level > 0.02 && layout.lod != Lod::Dot {
+            let glow = with_alpha(class_glow(w.class, pal), 0.15 + 0.45 * level);
+            let under = Stroke::new(width + LAYOUT_SPACE_1 as f32 * (0.5 + level), glow);
+            p.line(pts.clone(), under);
+        }
 
         if let Some((on, off)) = pattern {
             draw_dashed(p, &pts, on, off, stroke);
