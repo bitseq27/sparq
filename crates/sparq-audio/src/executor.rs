@@ -572,7 +572,7 @@ pub struct MeterReading {
     pub status: BlockStatus,
 }
 
-fn status_to_u8(s: BlockStatus) -> u8 {
+pub(crate) fn status_to_u8(s: BlockStatus) -> u8 {
     match s {
         BlockStatus::Ok => 0,
         BlockStatus::Silenced => 1,
@@ -581,7 +581,7 @@ fn status_to_u8(s: BlockStatus) -> u8 {
     }
 }
 
-fn status_from_u8(v: u8) -> BlockStatus {
+pub(crate) fn status_from_u8(v: u8) -> BlockStatus {
     match v {
         1 => BlockStatus::Silenced,
         2 => BlockStatus::Overrun,

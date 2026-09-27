@@ -17,12 +17,18 @@ Miri runs nightly over every allowlisted module.
 
 ## Allowlisted modules
 
-**Phase 0 shipping status:** entries **3**, **4** and **5** exist; **1** ships with WO-006
+**Phase 0 shipping status:** entries **3**, **4**, **5** and **6** exist; **1** ships with WO-006
 increment 1 (`hal/wasapi.rs`, Windows-only: `cfg(windows)` + the `hal-wasapi` feature — the auditor
 scans it on every platform because the discipline is textual, not conditional). Entry 4 ships at
-`sparq-kernel/src/alloc.rs` (the ADR names its final home, `src/rt/alloc.rs`); the auditor knows the
-alias. Entries 2 and 6–10 are approved-but-unwritten: an entry here is permission to write the code,
-not a claim that it exists (ASIO is WO-006 increment 2).
+`sparq-kernel/src/alloc.rs` (the ADR names its final home, `src/rt/alloc.rs`); entry 6 ships at
+`sparq-kernel/src/sync/hotswap.rs` (the ADR names `src/graph/hotswap.rs`, but the primitive is
+payload-generic — the kernel cannot name the executor type that lives above it — so the swap
+belongs with the rings); the auditor knows both aliases. Entry 6's named test split honestly: the
+sandbox half (order, tearing, deferral, drop hygiene, Miri) ships in-file plus
+`sparq-audio/tests/cross_thread.rs`'s 10 000-mutation-while-playing stress; the *paced zero-xrun*
+half of "while playing" is the HAL's loaded soak and stays device-track. Entries 2 and 7–10 are
+approved-but-unwritten: an entry here is permission to write the code, not a claim that it exists
+(ASIO is WO-006 increment 2).
 
 | # | Path | Why `unsafe` is required | Invariant that must hold | Test that proves it |
 |---|---|---|---|---|

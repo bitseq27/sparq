@@ -593,7 +593,21 @@ impl<'a> AudioCtx<'a> {
 /// is affordable at block granularity (1.65–1.95 µs for 100 modules × 64 samples, 10× under budget)
 /// and unaffordable per sample (27–36 µs against the same 20 µs budget). So `process` may be called
 /// through `Box<dyn Module>`, and nothing inside it may be.
-pub trait Module {
+///
+/// # `Send` (WO-008 increment 5)
+///
+/// `Module: Send` is part of the contract, not an implementation detail: a module is BUILT on the
+/// control thread (`prepare`/`activate`), RENDERED on the audio thread (one thread at a time —
+/// the executor holds `&mut`), and RETIRED back on the control thread. The cross-thread handover
+/// (ADR-009 decision 3's hot swap) moves the whole executor between those threads, so every
+/// module inside it must be movable. Data-only modules — everything the contract's "no
+/// allocator, clock, filesystem or lock in `AudioCtx`" discipline produces — are `Send`
+/// automatically; a module holding thread-affine state (an `Rc`, a raw handle to a
+/// control-thread-only API) would fail to compile here, which is the contract refusing an
+/// unprovable module rather than discovering it as a race on stage. `Sync` is deliberately NOT
+/// required: a module is never touched by two threads at once, and demanding `Sync` would
+/// forbid ordinary interior-mutability-free designs for no benefit.
+pub trait Module: Send {
     /// The module's stable id, e.g. `sparq/util/gain`. Must match the manifest's `identity.id`.
     fn id(&self) -> &str;
 

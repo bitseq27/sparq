@@ -376,6 +376,17 @@ fn the_module_trait_is_object_safe_so_the_executor_can_hold_modules_in_a_vec() {
     let _ = make::<ProbeModule> as fn(ProbeModule) -> Box<dyn Module>;
 }
 
+#[test]
+fn a_module_trait_object_is_send_because_the_cross_thread_engine_moves_it() {
+    // WO-008 increment 5's contract change, pinned: a module is built on the control thread,
+    // rendered on the audio thread and retired back on the control thread, so `Module: Send` is
+    // part of the contract (ADR-009 decision 3's hot swap). `Sync` is deliberately NOT pinned:
+    // a module is never touched by two threads at once, and the executor's `&mut` proves it.
+    fn assert_send<T: Send>() {}
+    assert_send::<Box<dyn Module>>();
+    assert_send::<ProbeModule>();
+}
+
 /// The smallest possible module, so the trait bound above has something to instantiate.
 struct ProbeModule;
 

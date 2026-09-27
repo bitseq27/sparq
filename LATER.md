@@ -133,7 +133,8 @@ first event-in-event-out module; the 16ths→÷4→membrane chain golden `914d90
 kicks on exact frames) — **fourteen first-party modules**.
 
 * **The three remaining modules wait on contracts, not on effort:** `ana/tap`, `dsp/scope`
-  need the ring publication of ADR-009 d8 (the kernel hot-swap increment). `out/main` ships
+  waited on the ring publication of ADR-009 d8 — SHIPPED (WO-008 inc 5); their own contracts
+  are the remaining wait. `out/main` ships
   together with the WO-013-side master-handover rule change so the MASTER badge never lies.
   A module whose trigger port cannot receive a trigger is a lie with a manifest; these land
   when their payloads can travel.
@@ -196,10 +197,20 @@ hand-computed reference graphs) + the raw/compensated switch (per-edge fan-in al
 watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the determinism harness
 (`sparq_audio::determinism`, scripted replay with hash equality).
 
-* **The cross-thread hot-swap primitive** — ADR-009 d3's literal pointer swap with an epoch-based
-  grace period, as allowlisted-`unsafe` kernel work (`sparq-kernel::sync`) with its own proofs.
-  The `Engine` is single-owner until it lands; the boundary semantics are proven by interleaved
-  stress, the concurrency by nothing yet — declared, not hidden.
+* ~~The cross-thread hot-swap primitive~~ **SHIPPED as WO-008 increment 5 (2026-09-27):**
+  `sparq-kernel::sync::hotswap` (allowlist entry 6 — d3's literal pointer swap, epoch-tagged
+  retirement slots, deferral-not-forcing under slot exhaustion, Miri in CI) and the
+  cross-thread `SharedEngine`/`AudioEngine` over it, proven by `tests/cross_thread.rs`'s
+  10 000-mutation two-thread stress (zero failed blocks, zero audio-thread allocations, every
+  retirement reclaimed and dropped exactly once). What stays parked is the shape around it:
+  * **Multi-reader epochs** — the primitive's invariants are written for one control + one
+    audio thread. A second reader (a visual analysis thread tapping the same live patch) needs
+    per-reader quiescent states; the epoch machinery is ready for it, the second reader is not.
+  * **The paced zero-xrun proof** — the allowlist's stress sentence ends "zero xruns", which is
+    a real-time claim: it rides the loaded soak on SATURN, like every other device-track box.
+  * **HAL integration** — `sparq play` still pumps the static WO-005 graph; routing a live
+    device stream through `SharedEngine` (WASAPI callback = the audio half) is the increment
+    that makes the rig live, gated behind WO-006's exclusive acceptance.
 * ~~Multi-port `AudioCtx` (contract v1)~~ **SHIPPED as WO-008 increment 4 (2026-09-26):**
   audio/cv/event payloads travel (data/gpu/atom still refuse in words, now per type); the executor's
   refusals, the merge order and the rate conversions are all measured in `tests/contract_v1.rs`.
@@ -210,9 +221,15 @@ watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the det
   determinism world's unwired spare depends on it, and moving refusals mid-stress would move the
   harness counters). Host-side enforcement gets its own increment, with the stress baseline moved
   on purpose and recorded.
-* **Cross-thread meter/analysis publication** (decision 8's lock-free rings): meters are relaxed
-  atomics readable from any thread holding a reference; the ring publication the UI consumes
-  arrives with (or after) the hot-swap increment. Live wire levels (WO-013) wait on this.
+* ~~Cross-thread meter/analysis publication~~ **SHIPPED as WO-008 increment 5 (2026-09-27):**
+  `AudioEngine` publishes per-node `MeterUpdate`s (peak/rms/status + the stream's block count)
+  into an `SpscRing` every block, and an `EngineCmd` ring carries `Copy` commands the other way
+  (`SetParams`/`SetMusical`/`ClearMusical`/`ClearAutoBypass`) — both refuse-and-count when
+  full. Still parked, in pieces: **per-port meters** (a multi-output node meters folded — the
+  rings can carry port ids when `dsp/scope` needs them), **analysis payloads** (`ana/tap` and
+  `dsp/scope` ride these rings but are their own WO-014 increment-5 contracts), and the **UI
+  consumer wiring** — WO-013's live wire levels now wait on a painter increment, not on the
+  kernel.
 * **Watchdog → UI flag**: `auto_bypassed(node)` is readable and the journal exists; the canvas's
   red hairline + BYPASS-WATCHDOG badge (ADR-009 d6) is a WO-013-side painter increment.
 * **The degradation ladder beyond auto-bypass** (plan §5.2: FFT size → display refresh → voice

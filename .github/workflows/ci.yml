@@ -212,8 +212,9 @@ jobs:
     name: sanitizers & miri (nightly)
     needs: rust
     runs-on: ubuntu-latest
-    # The SPSC ring is the only `unsafe` concurrency in Phase 0; Miri over it is the highest-value
-    # check in the repo (docs/unsafe-allowlist.md entry 5).
+    # The sync module is the only `unsafe` concurrency in Phase 0; Miri over it is the
+    # highest-value check in the repo (docs/unsafe-allowlist.md entries 5 + 6: the SPSC ring and
+    # the WO-008 inc 5 hot-swap slot — the hot-swap suite scales itself down under `cfg!(miri)`).
     continue-on-error: true   # nightly tooling moves; do not block merges on it, but do watch it
     steps:
       - uses: actions/checkout@v4
@@ -221,7 +222,7 @@ jobs:
         with:
           components: miri
       - uses: Swatinem/rust-cache@v2
-      - name: Miri over the lock-free ring
-        run: cargo +nightly miri test -p sparq-kernel --lib sync::rings
+      - name: Miri over the lock-free sync modules (ring + hot-swap)
+        run: cargo +nightly miri test -p sparq-kernel --lib sync::
         env:
           MIRIFLAGS: "-Zmiri-strict-provenance"

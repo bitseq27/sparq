@@ -166,6 +166,80 @@ pub fn run(with_golden: bool) -> Result<ExitCode, String> {
         );
     }
 
+    // ---- gate 9: the kernel hot-swap crosses threads (WO-008 inc 5, ADR-009 d3) ------
+    // The live rig hands finished patches from the control thread to the audio thread through
+    // this primitive; the sandbox proves it on Linux, this cell proves it on THIS machine's
+    // threads and atomics (MSVC included). 64 paced swaps, a real second thread, exact ledger:
+    // every staged payload consumed, every retirement reclaimed, nothing deferred, nothing torn.
+    {
+        use sparq_kernel::sync::HotSwap;
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::sync::Arc;
+        const SWAPS: u64 = 64;
+        let (control, audio) = HotSwap::split(0u64);
+        let stop = Arc::new(AtomicBool::new(false));
+        let tears = Arc::new(AtomicU64::new(0));
+        let audio_thread = {
+            let stop = Arc::clone(&stop);
+            let tears = Arc::clone(&tears);
+            std::thread::spawn(move || {
+                let mut audio = audio;
+                let mut expected = 1u64;
+                let mut swaps = 0u64;
+                while !stop.load(Ordering::Acquire) {
+                    if audio.boundary(|incoming, outgoing| {
+                        // The stream's clock, inherited at the swap point: the chain advances
+                        // by exactly one per swap. A torn handover would break it.
+                        *incoming = *outgoing + 1;
+                    }) {
+                        swaps += 1;
+                        if *audio.live() != expected {
+                            tears.fetch_add(1, Ordering::Relaxed);
+                        }
+                        expected += 1;
+                    }
+                }
+                let _ = audio.shutdown();
+                swaps
+            })
+        };
+        let mut reclaimed = 0u64;
+        for id in 1..=SWAPS {
+            control.stage(Box::new(id * 1000)); // the staged VALUE is replaced by the hook's chain
+            while control.stats().swaps + control.stats().superseded < id {
+                std::hint::spin_loop();
+            }
+            while control.reclaim().is_some() {
+                reclaimed += 1;
+            }
+        }
+        stop.store(true, Ordering::Release);
+        let joined = audio_thread.join();
+        while control.reclaim().is_some() {
+            reclaimed += 1;
+        }
+        let stats = control.stats();
+        let ok = joined.is_ok()
+            && tears.load(Ordering::Relaxed) == 0
+            && stats.swaps == SWAPS
+            && stats.superseded == 0
+            && stats.deferred == 0
+            && reclaimed == SWAPS;
+        check(
+            &mut failures,
+            "kernel hot-swap: 64 paced swaps across two threads (WO-008 inc 5)",
+            ok,
+            format!(
+                "swaps {} · reclaimed {} · superseded {} · deferred {} · torn {}",
+                stats.swaps,
+                reclaimed,
+                stats.superseded,
+                stats.deferred,
+                tears.load(Ordering::Relaxed)
+            ),
+        );
+    }
+
     // ---- gate 7: golden reference ---------------------------------------------------
     if with_golden {
         match golden_check() {
@@ -181,7 +255,7 @@ pub fn run(with_golden: bool) -> Result<ExitCode, String> {
     println!("  hash    {ha}");
     println!("  peak    {:.1} dB", db(ra.samples.iter().fold(0.0f32, |m, &s| m.max(s.abs()))));
     if failures.is_empty() {
-        println!("\nselftest: PASS ({} gates)", 7 + usize::from(with_golden));
+        println!("\nselftest: PASS ({} gates)", 8 + usize::from(with_golden));
         Ok(ExitCode::SUCCESS)
     } else {
         println!("\nselftest: FAIL");

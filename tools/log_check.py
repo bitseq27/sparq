@@ -67,14 +67,14 @@ def read_text(path: pathlib.Path) -> str:
 
 # ---------------------------------------------------------------- baseline
 # Measured, not asserted. Every value here came from a gate run recorded in PHASE0-WORKORDERS.md
-# section 2.1 (WO-014 increment 4, 2026-09-26, sandbox). This block MOVES WITH EVERY
+# section 2.1 (WO-008 increment 5, 2026-09-27, sandbox). This block MOVES WITH EVERY
 # SEAL - defect #83 was exactly that nobody moved it for two increments, so the device's next
 # gates run would have hard-failed a perfectly good tree against numbers three increments old.
 BASELINE: dict[str, object] = {
-    "stamp": "src 89f/1782456B",
+    "stamp": "src 90f/1842678B",
     "golden_hash": "ba577186c988db21",
     "tests_failed": 0,
-    "tests_passed": 665,  # workspace suite only - the release golden rerun is scoped out (#72)
+    "tests_passed": 682,  # workspace suite only - the release golden rerun is scoped out (#72)
     "selftest": "PASS",
     "ui_audit": "PASS",
     "allocations": 0,

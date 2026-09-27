@@ -68,6 +68,50 @@ interrupt, and the first paced-null run proved the distinction is real (defect #
 itself was the noisy party). Ratification waits for the stage-machine numbers (2 h soak, latency
 table) per the review trigger below.
 
+## Addendum — WO-008 increment 5 (2026-09-27): decisions 3 and 8 ship as sandbox mechanics
+
+**Decision 3's swap is now a kernel primitive** (`sparq-kernel::sync::hotswap`, allowlist
+entry 6): the control thread stages a *complete* boxed patch into one atomic slot; the audio
+thread's once-per-block `boundary` takes it with a single pointer `swap` — the literal swap
+this decision named — runs the caller's inherit hook at the swap point (the transport clock
+crosses here, not at stage time), and publishes the outgoing patch into a fixed array of
+**epoch-tagged retirement slots**. The grace period is mechanical, not argued: the boundary
+stores `epoch + 1` with Release *after* publishing, and the controller may only convert a
+retirement back into a `Box` once its Acquire-loaded epoch exceeds the slot's tag — a retired
+patch becomes droppable only after the audio thread has demonstrably passed the boundary that
+let it go, and the drop happens control-side, so module deactivation never runs inside a
+device callback. When every retirement slot is occupied the swap is **deferred and counted**,
+never forced: the audio thread's fallback is always "keep rendering the live patch". No locks,
+no allocation after construction, no blocking, single control + single audio thread.
+
+Decision 3's verification sentence is scored honestly against the sandbox: the
+**10 000-iteration random-mutation-while-playing stress** ran with two real threads
+(`sparq-audio/tests/cross_thread.rs`: 10 000 seeded mutations staged from a control thread
+while the audio thread rendered continuously — 7 400 consumed swaps, 2 600 refusals, ~43 000
+rendered blocks, zero failed blocks, zero audio-thread allocations under the counting
+allocator, every retirement reclaimed and dropped exactly once, clock never regressing) plus
+the kernel-level suite (handoff order, the epoch gate white-boxed, deferral under slot
+exhaustion, teardown drop hygiene, a paced two-thread exchange stress) with Miri over the
+`sync::` modules in CI. The **zero-xrun** half of the sentence is a real-time claim and stays
+device-track: the loaded soak (200 modules, 30 min, SATURN) is where a clock exists to miss.
+
+**Decision 8's first consumer ships with it:** the cross-thread engine publishes per-node
+meter snapshots (`peak`/`rms`/`status` + the stream's block count) into a lock-free
+`SpscRing` at the end of every block, and a second ring carries `Copy` commands the other way
+(param snapshots — `ParamSet` was made `Copy` for exactly this trip — musical position,
+bypass clears), applied to the patch that renders the block they precede. Both rings
+refuse-and-count when full; the audio thread never waits for a reader. This is the
+publication `ana/tap`, `dsp/scope` and WO-013's live wire levels wait on; their own increments
+consume it.
+
+**Scope declared, not hidden:** one control thread + one audio thread (the slot's invariants
+are written for that pair; multi-reader epochs are a later shape); per-node meters fold a
+node's audio outputs (per-port meters ride the same rings later); a patch swap still does not
+carry module state (that is WO-011's state protocol — unchanged); and the primitive ships at
+`sparq-kernel/src/sync/hotswap.rs` rather than this ADR's `graph/hotswap.rs` sketch, because
+the swap is payload-generic — the kernel cannot name the executor type that lives above it.
+The allowlist and its auditor carry the alias, as they do for the arena allocator.
+
 ## Review trigger
 
 End of WO-006 and WO-008 (ratify with measured numbers), then at Phase 1 hot reload (which stresses the RCU swap), and at Phase 7 (aggregator).

@@ -88,14 +88,19 @@ pub struct ScriptRun {
 
 /// The control-side world the script mutates: the kernel graph plus what the graph cannot know
 /// (each node's module kind and gain value). Node ids are the kernel's — stable, never reused.
-struct World {
-    graph: Graph,
-    kinds: HashMap<NodeId, &'static str>,
-    gains: HashMap<NodeId, f32>,
+pub struct World {
+    /// The structural graph (kernel vocabulary): stable, never-reused node ids.
+    pub graph: Graph,
+    /// Each node's module kind — what the graph cannot know.
+    pub kinds: HashMap<NodeId, &'static str>,
+    /// Each gain node's scripted param-0 value.
+    pub gains: HashMap<NodeId, f32>,
 }
 
 impl World {
-    fn initial() -> Self {
+    /// The reference chain the scripts mutate over: sine → gain → rms, plus one unwired spare.
+    #[must_use]
+    pub fn initial() -> Self {
         let mut graph = Graph::new();
         let sine = graph.add_node(0);
         let gain = graph.add_node(0);
@@ -115,7 +120,7 @@ impl World {
 
     /// The master: the highest-id node with an audio output (sine or gain — rms's output is
     /// cv). Node 0 (the sine) is never removed, so this always exists.
-    fn master(&self) -> NodeId {
+    pub fn master(&self) -> NodeId {
         self.graph
             .nodes()
             .iter()
@@ -142,93 +147,23 @@ impl World {
         }
     }
 
-    /// Build the executor for this world from the registry: manifest defaults for every param,
-    /// with the scripted gain value overriding param 0 of gain nodes.
-    fn build(&self, registry: &Registry, cfg: ExecConfig) -> Result<Executor, String> {
-        let mut builds = Vec::with_capacity(self.graph.node_count());
-        for n in self.graph.nodes() {
-            let kind = self.kinds.get(&n.id).copied().ok_or("a node without a kind")?;
-            let reg = registry
-                .get(kind)
-                .ok_or_else(|| format!("module `{kind}` is not in the registry (#58)"))?;
-            let mut values: Vec<f32> = reg
-                .manifest()
-                .manifest()
-                .params
-                .iter()
-                .map(|p| p.default.unwrap_or(0.0) as f32)
-                .collect();
-            if kind == KIND_GAIN {
-                if let Some(g) = self.gains.get(&n.id) {
-                    if let Some(v) = values.first_mut() {
-                        *v = *g;
-                    }
-                }
-            }
-            let params = ParamSet::new(0, &values)
-                .ok_or_else(|| format!("module `{kind}` exceeds MAX_PARAMS"))?;
-            builds.push((
-                n.id,
-                NodeBuild { module: reg.create(), manifest: reg.manifest().clone(), params },
-            ));
-        }
-        Executor::build(self.graph.clone(), builds, cfg).map_err(|e| e.to_string())
-    }
-}
-
-/// Play `script` against `registry`, rendering every block into `out` (one block's worth:
-/// `cfg.block_frames × cfg.device_channels` floats). Returns the run's evidence.
-///
-/// # Errors
-/// A sentence when the registry lacks a built-in module or the INITIAL build fails — both are
-/// build bugs, not script states. Per-mutation refusals are counted in [`ScriptRun::refused`],
-/// never errors.
-pub fn run_script(
-    registry: &Registry,
-    cfg: ExecConfig,
-    script: &Script,
-    out: &mut [f32],
-) -> Result<ScriptRun, String> {
-    let frames = cfg.block_frames;
-    if out.len() != frames * cfg.device_channels {
-        return Err(format!(
-            "out holds {} floats, need {} (block_frames × device_channels)",
-            out.len(),
-            frames * cfg.device_channels
-        ));
-    }
-    let mut world = World::initial();
-    let first = world.build(registry, cfg)?;
-    let mut engine = Engine::new(first);
-
-    let mut samples: Vec<f32> =
-        Vec::with_capacity((script.mutations + 1) * frames * cfg.device_channels);
-    let mut rng = SplitMix64::new(script.seed);
-    let mut refused = 0u64;
-    let mut alloc_violations = 0u64;
-
-    for _ in 0..=script.mutations {
-        // ---- render one block (the opening pass has no mutation before it)
-        let master = world.master();
-        if script.alloc_gate {
-            let base = start_counting();
-            engine.render_block(master, out).map_err(|e| format!("render failed: {e}"))?;
-            let made = allocation_count().saturating_sub(base);
-            stop_counting();
-            alloc_violations += made;
-        } else {
-            engine.render_block(master, out).map_err(|e| format!("render failed: {e}"))?;
-        }
-        samples.extend_from_slice(out);
-
-        // ---- attempt one mutation (skipped on the final block, which only renders)
-        if samples.len() >= (script.mutations + 1) * frames * cfg.device_channels {
-            break;
-        }
+    /// One seeded mutation attempt, returning the CANDIDATE world without committing it.
+    ///
+    /// Split out of [`run_script`] for WO-008 increment 5 so the cross-thread stress can drive
+    /// the same schedule from a control thread. The split is behaviour-preserving on purpose:
+    /// the caller commits the candidate only after the executor build succeeds, exactly as the
+    /// inline code did, so a refusal (mutation-level OR build-level) still leaves the live
+    /// world untouched and the RNG draw order identical — the stress hash does not move.
+    ///
+    /// # Errors
+    /// A sentence naming the mutation-level refusal (node cap, nothing removable, no
+    /// connectable pair, a kernel cycle/duplicate refusal, ...). Build-level refusals are the
+    /// caller's to count, as before.
+    pub fn candidate_mutation(&self, rng: &mut SplitMix64) -> Result<World, String> {
         let roll = rng.next_below(100);
-        let mut candidate = world.graph.clone();
-        let mut kinds = world.kinds.clone();
-        let mut gains = world.gains.clone();
+        let mut candidate = self.graph.clone();
+        let mut kinds = self.kinds.clone();
+        let mut gains = self.gains.clone();
         let accepted: Result<(), String> = match roll {
             // add a module (capped at 8 nodes — the stress graph stays small so 10 000
             // iterations cost seconds; scale is the HAL soak's job)
@@ -326,12 +261,101 @@ pub fn run_script(
                 }
             },
         };
+        accepted.map(|()| World { graph: candidate, kinds, gains })
+    }
 
-        if accepted.is_err() {
-            refused += 1;
-            continue; // a refusal leaves no trace — the live patch renders on
+    /// Build the executor for this world from the registry: manifest defaults for every param,
+    /// with the scripted gain value overriding param 0 of gain nodes.
+    pub fn build(&self, registry: &Registry, cfg: ExecConfig) -> Result<Executor, String> {
+        let mut builds = Vec::with_capacity(self.graph.node_count());
+        for n in self.graph.nodes() {
+            let kind = self.kinds.get(&n.id).copied().ok_or("a node without a kind")?;
+            let reg = registry
+                .get(kind)
+                .ok_or_else(|| format!("module `{kind}` is not in the registry (#58)"))?;
+            let mut values: Vec<f32> = reg
+                .manifest()
+                .manifest()
+                .params
+                .iter()
+                .map(|p| p.default.unwrap_or(0.0) as f32)
+                .collect();
+            if kind == KIND_GAIN {
+                if let Some(g) = self.gains.get(&n.id) {
+                    if let Some(v) = values.first_mut() {
+                        *v = *g;
+                    }
+                }
+            }
+            let params = ParamSet::new(0, &values)
+                .ok_or_else(|| format!("module `{kind}` exceeds MAX_PARAMS"))?;
+            builds.push((
+                n.id,
+                NodeBuild { module: reg.create(), manifest: reg.manifest().clone(), params },
+            ));
         }
-        let next_world = World { graph: candidate, kinds, gains };
+        Executor::build(self.graph.clone(), builds, cfg).map_err(|e| e.to_string())
+    }
+}
+
+/// Play `script` against `registry`, rendering every block into `out` (one block's worth:
+/// `cfg.block_frames × cfg.device_channels` floats). Returns the run's evidence.
+///
+/// # Errors
+/// A sentence when the registry lacks a built-in module or the INITIAL build fails — both are
+/// build bugs, not script states. Per-mutation refusals are counted in [`ScriptRun::refused`],
+/// never errors.
+pub fn run_script(
+    registry: &Registry,
+    cfg: ExecConfig,
+    script: &Script,
+    out: &mut [f32],
+) -> Result<ScriptRun, String> {
+    let frames = cfg.block_frames;
+    if out.len() != frames * cfg.device_channels {
+        return Err(format!(
+            "out holds {} floats, need {} (block_frames × device_channels)",
+            out.len(),
+            frames * cfg.device_channels
+        ));
+    }
+    let mut world = World::initial();
+    let first = world.build(registry, cfg)?;
+    let mut engine = Engine::new(first);
+
+    let mut samples: Vec<f32> =
+        Vec::with_capacity((script.mutations + 1) * frames * cfg.device_channels);
+    let mut rng = SplitMix64::new(script.seed);
+    let mut refused = 0u64;
+    let mut alloc_violations = 0u64;
+
+    for _ in 0..=script.mutations {
+        // ---- render one block (the opening pass has no mutation before it)
+        let master = world.master();
+        if script.alloc_gate {
+            let base = start_counting();
+            engine.render_block(master, out).map_err(|e| format!("render failed: {e}"))?;
+            let made = allocation_count().saturating_sub(base);
+            stop_counting();
+            alloc_violations += made;
+        } else {
+            engine.render_block(master, out).map_err(|e| format!("render failed: {e}"))?;
+        }
+        samples.extend_from_slice(out);
+
+        // ---- attempt one mutation (skipped on the final block, which only renders)
+        if samples.len() >= (script.mutations + 1) * frames * cfg.device_channels {
+            break;
+        }
+        // One mutation attempt, then (if it was accepted) a build and a stage. The candidate
+        // world is committed only when the build succeeds, so a refusal leaves no trace.
+        let next_world = match world.candidate_mutation(&mut rng) {
+            Ok(w) => w,
+            Err(_) => {
+                refused += 1;
+                continue; // a refusal leaves no trace — the live patch renders on
+            },
+        };
         match next_world.build(registry, cfg) {
             Ok(next) => {
                 engine.stage(next);

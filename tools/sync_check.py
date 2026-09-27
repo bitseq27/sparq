@@ -108,18 +108,30 @@ MANIFEST = "SYNC-STAMP.txt"
 # into the binary), `scripts/build.bat`'s `:stamp_check` (which recomputes it in cmd), and here.
 # Defect #68 was exactly that mirror drifting - build.rs walked five roots while build.bat walked
 # four, and the guard would have condemned every fresh binary for a whole increment.
+# SIX roots, mirroring build.rs and build.bat exactly (defect #68's rule: the three definitions
+# change together). sparq-music joined when WO-009 gave the crate contents; a copy of this file
+# that lost the entry produced a stamp whose `fp` line the device's build.bat could never
+# reproduce (defect #86) - the covered set and the fingerprint both count the music crate.
 FP_ROOTS = [
     "crates/sparq-kernel/src",
     "crates/sparq-audio/src",
     "crates/sparq-ui/src",
     "crates/sparq-module-api/src",
+    "crates/sparq-music/src",
     "crates/sparq-app/src",
 ]
 
 # Files whose difference is reported but does not fail the build.
 SOFT = {"Cargo.lock"}
 
-CRATE_DIRS = ["sparq-kernel", "sparq-audio", "sparq-ui", "sparq-module-api", "sparq-app"]
+CRATE_DIRS = [
+    "sparq-kernel",
+    "sparq-audio",
+    "sparq-ui",
+    "sparq-module-api",
+    "sparq-music",
+    "sparq-app",
+]
 CONFIG_FILES = ["Cargo.toml", "rust-toolchain.toml", "clippy.toml", "rustfmt.toml"]
 
 
@@ -409,7 +421,7 @@ def self_test() -> int:
     results: list[tuple[str, bool, str]] = []
     global CRATE_DIRS
     saved_crates = CRATE_DIRS
-    CRATE_DIRS = ["sparq-ui"]  # the synthetic tree below has one crate, not five
+    CRATE_DIRS = ["sparq-ui"]  # the synthetic tree below has one crate, not six
 
     def build_tree(base: pathlib.Path) -> None:
         (base / "crates" / "sparq-ui" / "src" / "canvas").mkdir(parents=True)

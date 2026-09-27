@@ -113,6 +113,10 @@ def load_allowlist() -> tuple[set[str], dict[str, str]]:
         # entry 4 is `sparq-kernel/src/rt/alloc.rs` in the ADR; Phase 0 ships it as `alloc.rs`
         "sparq-kernel/src/alloc.rs": "sparq-kernel/src/rt/alloc.rs",
         # entry 5 is `sparq-kernel/src/sync/rings.rs` — exact match, no alias needed
+        # entry 6 is `sparq-kernel/src/graph/hotswap.rs` in the ADR; WO-008 inc 5 ships it as
+        # `sync/hotswap.rs` — the primitive is payload-generic (the executor type lives above
+        # the kernel), so the swap belongs with the rings, not with the graph module
+        "sparq-kernel/src/sync/hotswap.rs": "sparq-kernel/src/graph/hotswap.rs",
     }
     for alias, canonical in aliases.items():
         if canonical in paths:

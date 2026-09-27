@@ -6,10 +6,10 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-09-26 (WO-014 inc 4 built, sealed, zipped — the fourth increment today.
-The user confirmed ALL previous bundles are APPLIED on SATURN: wo013-inc3, wo006-inc13,
-wo008-inc3, wo014-inc2, wo008-inc4, wo014-inc3, wo009-inc1. One bundle waits: wo014-inc4.)
-wo006-inc13, wo008-inc3, wo014-inc2)
+**Last updated:** 2026-09-27 (WO-008 inc 5 built, sealed, zipped — the cross-thread hot-swap
+primitive, the increment the task list called the last one with a proofs burden this heavy. The
+user confirmed 2026-09-26 that ALL bundles through wo009-inc1 are APPLIED on SATURN. TWO
+bundles wait: wo014-inc4, then wo008-inc5 — apply in that order.)
 
 ---
 
@@ -17,15 +17,65 @@ wo006-inc13, wo008-inc3, wo014-inc2)
 
 - **Device state:** the user confirmed 2026-09-26 that **all seven sealed bundles are applied on
   SATURN** (wo013-inc3 → wo006-inc13 → wo008-inc3 → wo014-inc2 → wo008-inc4 → wo014-inc3 →
-  wo009-inc1). ONE new bundle waits: **`../sync-wo014-inc4.zip`** (12 entries). The pending
-  device runs are unchanged and now cover four increments of baseline: `test004` (exclusive
-  acceptance — the #79 fix, still the 🔴 blocker), `test006` (canvas window session),
-  `gates.bat` (**expected test count is now 665**, stamp = whatever `SYNC-STAMP.txt` says,
-  `sparq modules --strict` lists **14**; `log_check.py`'s BASELINE moves with every seal since
-  defect #83), and the WO-008 **loaded soak** (200 modules, 30 min) when the HAL and the machine
-  are both free. WO-009's two device boxes: the **30-minute drift measurement** and a **listened
-  tempo sweep**. Evidence artefacts: `sparq exec --patch drum-demo` (transport-driven, hash
-  `f2303f13aa0cf299`) and `--patch mod-demo` (`1621e1f65b1b64e1`).
+  wo009-inc1). TWO new bundles wait, in order: **`../sync-wo014-inc4.zip`** (12 entries), then
+  **`../sync-wo008-inc5.zip`**. The pending device runs now cover five increments of baseline:
+  `test004` (exclusive acceptance — the #79 fix, still the 🔴 blocker), `test006` (canvas window
+  session), `gates.bat` (**expected test count is now 682**, stamp = whatever `SYNC-STAMP.txt`
+  says, `sparq modules --strict` lists **14**, `selftest --golden` prints **PASS (9 gates)** —
+  gate 9 is the hot-swap cell, MSVC-side concurrency evidence; `log_check.py`'s BASELINE moves
+  with every seal since defect #83), and the WO-008 **loaded soak** (200 modules, 30 min) when
+  the HAL and the machine are both free — it now doubles as the paced-real-time half of
+  allowlist entry 6's stress sentence. WO-009's two device boxes: the **30-minute drift
+  measurement** and a **listened tempo sweep**. Evidence artefacts — **defect #85: run them with
+  their pinned durations or the hashes will not match the goldens** (the CLI default renders
+  5 s): `sparq exec --patch drum-demo --seconds 2` (transport-driven, hash `f2303f13aa0cf299`),
+  `--patch mod-demo --seconds 1` (`1621e1f65b1b64e1`), `--patch demo --seconds 2.8`
+  (`53de3b1f3f40e3c9`).
+- **WO-008 increment 5 is BUILT and sandbox-green — the cross-thread hot-swap primitive:** the
+  task list's item 3, "the only remaining increment with a proofs burden this heavy", is done.
+  **`sparq-kernel::sync::hotswap`** (allowlist entry 6, shipped in `sync/` with the auditor's
+  alias like entry 4's): `HotSwap::split` → `HotSwapControl` (stage complete boxed payloads,
+  reclaim retired ones, counters) + `HotSwapAudio` (`boundary(inherit)` once per block — d3's
+  LITERAL pointer swap, one `AtomicPtr::swap` per side). **Epoch retirement:** the boundary
+  publishes the outgoing payload into one of 8 epoch-tagged slots and stores `epoch+1` Release;
+  the controller may re-box a retirement only when its Acquire-loaded epoch exceeds the tag —
+  the grace period is mechanical, and the drop lands control-side, so module deactivation never
+  runs in a device callback. Slot exhaustion DEFERS the swap (counted) — the audio thread's
+  every fallback is "keep rendering the live patch". **The contract grew one bound:
+  `Module: Send`** (built control-side, rendered audio-side, retired control-side; additive,
+  all 41 implementors satisfy it automatically, pinned in api_snapshot; `Sync` deliberately not
+  required). **The cross-thread engine** (`sparq-audio::engine`): `LivePatch {executor, master}`
+  payloads, `SharedEngine` (stage / `set_params` / `set_musical_position` / reclaim /
+  `read_meters` / stats) + `AudioEngine` (per block: boundary swap with `inherit_runtime` at
+  the swap point → `EngineCmd` ring drain → render → meter publication). **Decision 8's first
+  consumer:** per-node `MeterUpdate`s (peak/rms/status + block clock) ride an `SpscRing` out;
+  `Copy` commands ride one in; both refuse-and-count, never block, never grow. The
+  single-owner `Engine` stays untouched — the determinism harness keeps its vehicle and the
+  stress hash `b42068ec7b206789` its meaning (the `World::candidate_mutation` extraction that
+  lets the cross-thread stress reuse the seeded schedule preserved the RNG draw order exactly —
+  verified in debug AND release). **The proofs:** 9 kernel tests (epoch gate white-boxed in its
+  three states, deferral without drops, teardown hygiene both orders, a paced 5 000-payload
+  two-thread exchange with tearing checks; `cfg!(miri)` scales it to 200) + 7 audio tests
+  (`tests/cross_thread.rs`) + **the acceptance: 10 000 seeded mutations staged from a control
+  thread while the audio thread plays** — 7 400 swaps, 2 600 refusals that left no trace,
+  ~43 000 rendered blocks, ZERO failed blocks, ZERO audio-thread allocations under the counting
+  allocator, `deferred == superseded == 0`, retirements == swaps == reclaimed, clock never
+  regressing; no golden hash ON PURPOSE (which block a mutation lands on is a scheduling fact —
+  a golden over scheduling is a flake generator). **selftest gate 9** (64 paced swaps across two
+  threads in-process) gives SATURN MSVC-side evidence; CI's Miri cell widened `sync::rings` →
+  `sync::` (the sandbox cannot run Miri — nightly sysroot build OOM-killed at 1 GB, tried
+  twice; environment, same class as MSVC×ui-window). **682 tests** (was 665), every
+  pre-existing golden re-verified unchanged, `selftest --golden` 9/9, audit PASS 19 smokes,
+  `modules --strict` 14/14, all clippy cells clean. **Defect #85** logged: the exec evidence
+  hashes were recorded without their durations (the CLI default renders 5 s; the goldens are
+  the 2.8 s/1 s/2 s renders) — the standing order now carries explicit `--seconds`. Sealed as
+  **`sync wo008-inc5`**. Unblocked and waiting: `ana/tap` + `dsp/scope` (WO-014 inc 5), WO-013's
+  live wire levels (inc 4), and — after WO-006's exclusive acceptance — routing the live HAL
+  stream through `SharedEngine`. **Device note:** the pristine clone FAILED `sync_check
+  --quiet` against its own committed stamp (defect #86 — the git history rebuild lost 230B of
+  `sparq-module-api/src/lib.rs` and sparq-music from `sync_check.py`'s roots); the bundle
+  carries both files as declared drift repairs, and the run sheet starts with two `copy`
+  commands that save SATURN's sealed versions to `logs\` before overwriting.
 - **WO-014 increment 4 is BUILT and sandbox-green — the clocks' first consumers:** the module
   set reaches **fourteen** with the two `mod`-family modules defect #84's taxonomy fix existed
   for. **`mod/lfo`**: four shapes mapped into 0..1, audio-rate UNIPOLAR cv out (the range
@@ -150,6 +200,11 @@ wo006-inc13, wo008-inc3, wo014-inc2)
 - MSVC × `ui-window` cell: **still unrunnable anywhere** — the `windows` crate's rustc is
   OOM-killed at 1 GB (environment, not code; CI has no such cell either). The native
   `ui-window`/gles cell builds clean at `-j 1` with dev debuginfo off.
+- **Miri is CI-only** (observed 2026-09-27): `cargo +nightly miri` needs a custom sysroot whose
+  `core` build is OOM-killed at 1 GB — tried twice. The `sanitizers` CI job (continue-on-error)
+  runs `sync::` under `-Zmiri-strict-provenance`; the hotswap suite scales itself down via
+  `cfg!(miri)` so the cell stays usable. Nightly installs with `rustup toolchain install nightly
+  --profile minimal --component miri` if a future sandbox has the memory.
 
 ## 🔴 THE BLOCKER (device track — waiting on SATURN, not on code)
 
@@ -170,60 +225,80 @@ default** (that deletion is gated on this device run — do not do it early).
 
 **Device track (when SATURN is reachable — every bundle is sealed and waiting):**
 1. All bundles through `sync-wo009-inc1.zip` are APPLIED (user-confirmed 2026-09-26); apply
-   `sync-wo014-inc4.zip`; run `scripts\test004.bat` (the exclusive acceptance — pass shape in
-   `WO006-INC13-RUN-SHEET.md`) and `scripts\test006.bat` (the inc-3 window session; step [07]
-   is the mechanical claim: slider edit must change the canvas-render.wav hash).
-   `scripts\gates.bat` now expects **665 passed / 0 failed / 1 ignored** and **14** modules,
-   with the stamp `log_check.py` in the bundle already knows (defect #83's fix made moving it a
-   seal step). Wanted evidence: `sparq exec --patch mod-demo` (`cv wire` line, cutoff > 200 Hz,
-   hash `1621e1f65b1b64e1`), `sparq exec --patch drum-demo` (transport-driven; beat triggers on
-   the 120-BPM grid, hash `f2303f13aa0cf299`), and — when the HAL is free — the two WO-009
-   device boxes: a LISTENED tempo sweep and the 30-min drift run. Wanted back: `test004.log`,
-   `test006.log`, `gates.log`, `logs\ui.log`.
+   `sync-wo014-inc4.zip` and then `sync-wo008-inc5.zip`, in that order; run
+   `scripts\test004.bat` (the exclusive acceptance — pass shape in `WO006-INC13-RUN-SHEET.md`)
+   and `scripts\test006.bat` (the inc-3 window session; step [07] is the mechanical claim:
+   slider edit must change the canvas-render.wav hash). `scripts\gates.bat` now expects
+   **682 passed / 0 failed / 1 ignored**, **14** modules and **selftest PASS (9 gates)** — gate
+   9 is the new two-thread hot-swap cell, so the device's own atomics and scheduler are the
+   evidence — with the stamp `log_check.py` in the bundle already knows (defect #83's fix made
+   moving it a seal step). Wanted evidence, **with the pinned durations** (defect #85: the CLI
+   default renders 5 s and hashes differently from every golden): `sparq exec --patch mod-demo
+   --seconds 1` (`cv wire` line, cutoff > 200 Hz, hash `1621e1f65b1b64e1`), `sparq exec --patch
+   drum-demo --seconds 2` (transport-driven; beat triggers on the 120-BPM grid, hash
+   `f2303f13aa0cf299`), `sparq exec --patch demo --seconds 2.8` (`53de3b1f3f40e3c9`), and —
+   when the HAL is free — the two WO-009 device boxes: a LISTENED tempo sweep and the 30-min
+   drift run. **Before extracting `sync-wo008-inc5.zip`**, copy the device's sealed
+   `crates\sparq-module-api\src\lib.rs` and `tools\sync_check.py` into `logs\` (defect #86
+   forensics — the GitHub rebuild lost bytes from both; the bundle's copies are repaired, but the
+   sealed ones are the only record of what was lost). Wanted back: `test004.log`, `test006.log`,
+   `gates.log`, `logs\ui.log`, and the two saved copies (`lib.rs.sealed`, `sync_check.py.sealed`).
 2. If test004's 2 h soak passes → **WO-006 acceptance closes** → sandbox increment: ADR-008 exit
-   (delete the cpal bootstrap, HAL becomes `play`'s default), then WO-006 increment 2 backlog
+   (delete the cpal bootstrap, HAL becomes `play`'s default) **plus routing the live HAL stream
+   through `SharedEngine`** — the cross-thread halves now exist (inc 5), so `play`'s callback
+   can hold `AudioEngine` and the control side can stage; then WO-006 increment 2 backlog
    (ASIO, duplex, round-trip measurement, STA retry for the #75 property-store `E_ACCESSDENIED`,
    clock-drift re-derivation per #76).
+3. The WO-008 **loaded soak** (200 modules, 30 min, zero xruns) — the WO's hardware acceptance,
+   and since inc 5 also the paced-real-time half of allowlist entry 6's stress sentence.
 
 **Sandbox track (buildable now, in value order):**
-3. **Kernel hot-swap primitive** (ADR-009 d3's literal pointer swap, epoch retirement) — the
-   allowlisted-`unsafe` increment (`sparq-kernel::sync`, `docs/unsafe-allowlist.md`) that makes
-   `Engine` cross-thread and publishes meters/analysis through the lock-free rings (decision 8)
-   — which then unblocks the LAST module-side waits: `ana/tap`, `dsp/scope`, and WO-013's live
-   wire levels. The only remaining increment with a proofs burden this heavy; everything after it
-   is modules and UI.
-4. **WO-013 increment 4** — live wire levels **only with** the executor taps (do not fake them;
-   the per-port readers `node_cv_block`/`node_cv_audio`/`node_events`/`meter` exist now); else
-   rename text entry (shared with the browser's provisional keyboard feed), inspector scrolling,
-   LOD visual iteration vs `design-mode.svg`. Canvas cv wires: the connect layer already
-   delegates cv verdicts to `connect_cv`; drawing the wire class is the increment's UI half.
-5. **WO-014 increment 5 — the last three modules** when their contracts land: `ana/tap` +
-   `dsp/scope` (after the rings), `out/main` (with the canvas master handover). Plus the LFO
-   beat-rate decision (per-frame tick view vs module-side bpm derivation — LATER.md) which also
-   unlocks the delay's `set_tempo_sync` path.
+4. **WO-013 increment 4** — live wire levels, **now unblocked from both ends**: the executor
+   taps exist (`node_cv_block`/`node_cv_audio`/`node_events`/`meter`) AND the cross-thread
+   publication does (`SharedEngine::read_meters` drains per-node peak/rms/status + block clock
+   from the audio thread — the painter reads the ring, never the executor); do not fake them.
+   Else rename text entry (shared with the browser's provisional keyboard feed), inspector
+   scrolling, LOD visual iteration vs `design-mode.svg`. Canvas cv wires: the connect layer
+   already delegates cv verdicts to `connect_cv`; drawing the wire class is the increment's UI
+   half.
+5. **WO-014 increment 5 — the last three modules**: `ana/tap` + `dsp/scope` (the rings they
+   wait on SHIPPED in inc 5 — `MeterUpdate` is the shape to extend, per-port meters and
+   analysis payloads are declared in LATER.md; their own contracts are the remaining wait),
+   `out/main` (with the canvas master handover). Plus the LFO beat-rate decision (per-frame tick
+   view vs module-side bpm derivation — LATER.md) which also unlocks the delay's `set_tempo_sync`
+   path — note the cross-thread engine's `SetMusical` command now carries the transport's tick
+   to the audio side, which is the feed a per-frame tick view would extend.
 6. Studio-session evidence still open: real-finger canvas touch-test, DPI matrix walk
-   (WO-012/WO-013), WO-001 hardware sheets, dispatch-bench C/D numbers for ADR-009, and the
-   WO-008 **loaded soak** (200 modules, 30 min, zero xruns — the WO's hardware acceptance).
+   (WO-012/WO-013), WO-001 hardware sheets, dispatch-bench C/D numbers for ADR-009.
 7. Small, well-specified, declared in LATER.md: mixer's cv merge side (retires the last of the
    cv-fan-in refusal); `cv_interp = "spline"` (refused at build until implemented); host-side
    `required`-unconnected enforcement (moves stress refusal counters — its own increment on
    purpose); the compat-matrix review packet (`reviewed = false`, defect #82's ordering question
-   inside it); loop-relative beat phase for unaligned loop regions (WO-009's declared limit).
+   inside it); loop-relative beat phase for unaligned loop regions (WO-009's declared limit);
+   from inc 5: multi-reader epochs (a second reader of the live patch), per-port meters, and
+   a live-rig command vocabulary beyond the four `EngineCmd`s (state blobs are configure()-side).
 
 ## Done (most recent first)
 
-- [x] **WO-014 inc 4** (2026-09-26, this session) — `mod/lfo` + `mod/clk-div` (14 modules),
+- [x] **WO-008 inc 5** (2026-09-27, this session) — the cross-thread hot-swap primitive
+      (`sparq-kernel::sync::hotswap`, allowlist entry 6): d3's literal pointer swap, epoch-tagged
+      retirement (grace period mechanical, drops control-side), deferral-not-forcing; `Module:
+      Send` (pinned); `SharedEngine`/`AudioEngine` + d8's meter ring + the `EngineCmd` ring; the
+      two-thread 10 000-mutation acceptance (0 failed blocks, 0 audio-thread allocs, ledger
+      exact); selftest gate 9; CI miri cell widened to `sync::`; defect #85. 682 tests, every
+      golden unchanged (stress hash in debug AND release). Sealed `sync wo008-inc5`.
+- [x] **WO-014 inc 4** (2026-09-26) — `mod/lfo` + `mod/clk-div` (14 modules),
       lfo→svf bit-identical sweep, 16ths→÷4→membrane chain golden `914d9063ce9d8a0f`, seeded
       probability reproducibility, binary-exact-rate arithmetic gates. 665 tests, all goldens
       unchanged. Sealed `sync wo014-inc4`.
-- [x] **WO-009 inc 1** (2026-09-26, this session) — piecewise kernel Clock (ramps + exact
+- [x] **WO-009 inc 1** (2026-09-26) — piecewise kernel Clock (ramps + exact
       bisection), `sparq-music` (broker + transport + zero-alloc queue), the executor's musical
       door, transport-driven drum-demo == the batch-3 golden, ±0-sample acceptance vs an
       independent integral, ADR-006 addendum. 655 tests. Sealed `sync wo009-inc1`.
-- [x] **WO-014 inc 3** (2026-09-26, this session) — membrane + env/ad + mixer (12 modules),
+- [x] **WO-014 inc 3** (2026-09-26) — membrane + env/ad + mixer (12 modules),
       drum-demo golden with kicks on exact frames, defect #84 (TOPS table-first), 627 tests,
       goldens unchanged. Sealed `sync wo014-inc3`.
-- [x] **WO-008 inc 4 — CONTRACT V1** (2026-09-26, this session) — multi-port `AudioCtx`,
+- [x] **WO-008 inc 4 — CONTRACT V1** (2026-09-26) — multi-port `AudioCtx`,
       cv/event payloads travel, rms→filter acceptance bit-exact, drift gate + defects #80–#83,
       toml nested-AoT fix, log_check baseline moved. 614 tests, goldens unchanged, stress hash
       unchanged. Sealed `sync wo008-inc4`.
@@ -255,7 +330,10 @@ default** (that deletion is gated on this device run — do not do it early).
 - **`.git` is NOT durable in this workspace** (observed three times now: 2026-09-25 twice,
   2026-09-26 the clone arrived without history and was re-inited). Do not rely on git for state;
   the integrity tool is `sync_check.py` (content hashes) and the seal is the zip. Re-init for
-  in-session diffs if useful, expect it gone next session.
+  in-session diffs if useful, expect it gone next session. **And the pushed tree can drift from
+  the sealed one** (defect #86, found 2026-09-27): run `sync_check.py --quiet` against the
+  PRISTINE clone at session start — if it fails, the drift list IS the repair list, and the
+  bundle must carry the repairs plus the device-side forensics step.
 - Toolchain wipes **between and mid-sessions** (again 2026-09-26: `/opt` arrived empty — rustup,
   cargo, gcc and the apt packages all reinstalled from scratch in ~3 min with warm apt). Lives in
   `/opt`, deliberately outside the snapshot. Restore:
@@ -313,6 +391,18 @@ default** (that deletion is gated on this device run — do not do it early).
   both copies while Appendix B's ids and WO-014's artefact paths name them — `env/ad` could not
   declare its own top. Fixed table-first (TOPS 16 → 18) with the field table's first drift pin
   (`the_tops_vocabulary_matches_the_field_table`).
+- **#85 — FIXED (WO-008 inc 5):** the exec evidence hashes were recorded without their
+  durations — the CLI default renders 5 s (`drum-demo` → `de216da86b2a1869`) while the goldens
+  are the 2.8 s/1 s/2 s renders; all three reproduce EXACTLY at their pinned durations (verified
+  debug == release). The standing order now carries explicit `--seconds` everywhere the hashes
+  appear, so a device operator compares like with like.
+- **#86 — FIXED-IN-BUNDLE (WO-008 inc 5): the GitHub tree drifted from the sealed tree.** The
+  pristine clone fails `sync_check --quiet` against its own stamp: module-api's lib.rs is 230B
+  smaller than sealed and sync_check.py lost sparq-music from its covered/fingerprint roots (86f
+  vs the stamped 89f). The history rebuild dropped bytes; the zips are truth. Repaired:
+  sync_check.py restored to the six-root definition, and the inc-5 bundle carries BOTH files as
+  declared drift repairs — **the device must copy its sealed versions to `logs\` BEFORE
+  extracting** (the run sheet says so) and send them back for the diff of what the rebuild lost.
 - #69 — `build.bat` cmd-parser death: probe ships, culprit statement not yet named (stays open)
 - compat-matrix mirror in `port.rs` vs `docs/api/compat-matrix.toml` — **re-worded (contract
   v1):** the drift gate pins the two together; full deletion waits on restructuring the table's
@@ -323,13 +413,17 @@ default** (that deletion is gated on this device run — do not do it early).
 - WO-013 inc 3 v0 limits (all parked in `LATER.md` with reasons): no numeric param entry, no
   inspector scrolling, no enum/text/blob editing (manifest v1 `options[]` first), single-selection
   inspector only, provisional keyboard feed for the browser, no browser scroll gesture
-- WO-008 declared limits (parked in `LATER.md` §WO-008): single-owner Engine until the kernel
-  hot-swap primitive lands; compensation aligns PLAIN audio fan-in arms only; `required`-
-  unconnected inputs not host-enforced (deliberate — the stress baseline moves with that change);
-  `spline` interp refused until implemented; watchdog→UI red hairline is a WO-013-side painter
-  increment; meters not yet ring-published cross-thread
+- WO-008 declared limits (parked in `LATER.md` §WO-008): ~~single-owner Engine until the kernel
+  hot-swap primitive lands~~ and ~~meters not yet ring-published cross-thread~~ both SHIPPED
+  (inc 5); remaining: compensation aligns PLAIN audio fan-in arms only; `required`-unconnected
+  inputs not host-enforced (deliberate — the stress baseline moves with that change); `spline`
+  interp refused until implemented; watchdog→UI red hairline is a WO-013-side painter increment;
+  new from inc 5: one control + one audio thread (multi-reader epochs later), per-node meters
+  fold a node's outputs (per-port later), `play` still pumps the static WO-005 graph (HAL
+  integration waits on WO-006's acceptance)
 - MSVC × `ui-window` clippy cell: never run anywhere (sandbox OOM, no CI cell)
-- Device-side baselines that MOVE with this increment: gates.log test count **665** (log_check
+- Device-side baselines that MOVE with this increment: gates.log test count **682** (log_check
   already moved — #83's discipline), stamp = whatever `SYNC-STAMP.txt` says, `sparq modules`
-  count **14**, exec has three patch names (`demo`, `mod-demo`, `drum-demo` — the last
-  transport-driven)
+  count **14** (unchanged), `selftest --golden` prints **PASS (9 gates)**, exec has three patch
+  names (`demo`, `mod-demo`, `drum-demo` — the last transport-driven) and its evidence hashes
+  need the pinned `--seconds` (#85)

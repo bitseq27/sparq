@@ -12,10 +12,13 @@
 //!
 //! WO-008 increment 1 adds [`graph`]: the structural patch graph — nodes, edges, the
 //! `unit_delay`/`block_delay` cycle vocabulary of plan §5.4, the topology version, and the
-//! cached deterministic topological order of ADR-009 decision 1. Deliberately absent until
-//! their work orders (or their increments): the executor loop, buffer pool and RCU swap
-//! (WO-008 tasks 2–7), the journal (WO-011), the ASIO backend (WO-006 increment 2), arenas and
-//! the watchdog.
+//! cached deterministic topological order of ADR-009 decision 1. Increment 5 adds
+//! [`sync::hotswap`]: decision 3's cross-thread boundary swap — the control thread stages a
+//! complete payload, the audio thread takes it at a block boundary, and the outgoing payload
+//! retires through an epoch-gated grace period to be dropped control-side. Deliberately absent
+//! until their work orders (or their increments): the journal (WO-011), the ASIO backend
+//! (WO-006 increment 2), the pre-reserved arenas of ADR-009 decision 4 (the executor
+//! pre-allocates plain buffers today) and the degradation ladder beyond auto-bypass (Phase 1).
 
 #![allow(
     clippy::missing_docs_in_private_items,
