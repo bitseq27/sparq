@@ -48,7 +48,7 @@ USAGE
                 [--backend offline|null|wasapi-exclusive|wasapi-shared] [--heavy N]
   sparq devices [--backend NAME] [--caps] [--conformance]
   sparq modules [--root DIR] [--strict]     discover modules/ and report every refusal verbatim
-  sparq exec    [--out FILE] [--seconds N] [--rate HZ] [--block N] [--patch demo]
+  sparq exec    [--out FILE] [--seconds N] [--rate HZ] [--block N] [--patch demo|mod-demo|drum-demo]
                 [--format f32|pcm16|pcm24|pcm32]
                 render a patch through the WO-008 executor: registry → graph → WAV, no device
   sparq golden-values        print the hash/rms/peak lines for the golden manifest

@@ -156,9 +156,9 @@ fn noise_is_seeded_resettable_and_colour_dependent() {
     let (mut oa, mut ob) = (vec![0.0f32; FRAMES], vec![0.0f32; FRAMES]);
     let mut first: Vec<f32> = Vec::new();
     for i in 0..10 {
-        let mut ca = AudioCtx { block: &ctxb, params: &params, input: &[], output: &mut oa };
+        let mut ca = AudioCtx::single(&ctxb, &params, &[], &mut oa);
         a.process(&mut ca);
-        let mut cb = AudioCtx { block: &ctxb, params: &params, input: &[], output: &mut ob };
+        let mut cb = AudioCtx::single(&ctxb, &params, &[], &mut ob);
         b.process(&mut cb);
         assert_eq!(oa, ob, "one seed, one stream");
         if i == 0 {
@@ -168,7 +168,7 @@ fn noise_is_seeded_resettable_and_colour_dependent() {
     // reset restarts the stream from the seed — the reproducibility promise
     a.message(b"reset").unwrap();
     let mut oa2 = vec![0.0f32; FRAMES];
-    let mut c2 = AudioCtx { block: &ctxb, params: &params, input: &[], output: &mut oa2 };
+    let mut c2 = AudioCtx::single(&ctxb, &params, &[], &mut oa2);
     a.process(&mut c2);
     assert_eq!(oa2, first, "reset replays the stream from the seed");
     // a different seed is a different stream
@@ -176,7 +176,7 @@ fn noise_is_seeded_resettable_and_colour_dependent() {
     c.prepare(&res()).unwrap();
     c.configure(&9u64.to_le_bytes()).unwrap();
     let mut oc = vec![0.0f32; FRAMES];
-    let mut c3 = AudioCtx { block: &ctxb, params: &params, input: &[], output: &mut oc };
+    let mut c3 = AudioCtx::single(&ctxb, &params, &[], &mut oc);
     c.process(&mut c3);
     assert_ne!(oc, first, "different seeds diverge");
     // colours differ from each other (same seed, same stream of white underneath)
@@ -433,12 +433,12 @@ fn every_batch2_module_makes_zero_allocations_in_process() {
         let ps = ParamSet::new(0, params).unwrap();
         let inp: &[f32] = if needs_input { &input } else { &[] };
         {
-            let mut c = AudioCtx { block: &ctxb, params: &ps, input: inp, output: &mut out };
+            let mut c = AudioCtx::single(&ctxb, &ps, inp, &mut out);
             m.process(&mut c);
         }
         let made = measure(|| {
             for _ in 0..5_000 {
-                let mut c = AudioCtx { block: &ctxb, params: &ps, input: inp, output: &mut out };
+                let mut c = AudioCtx::single(&ctxb, &ps, inp, &mut out);
                 m.process(&mut c);
             }
         });
@@ -472,7 +472,7 @@ impl Module for Impulse {
         Ok(())
     }
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
-        for (i, s) in ctx.output.iter_mut().enumerate() {
+        for (i, s) in ctx.output().iter_mut().enumerate() {
             *s = if !self.fired && i == 0 { 1.0 } else { 0.0 };
         }
         self.fired = true;

@@ -112,30 +112,77 @@ runs on the post-removal graph; refusals restore byte-exact).
 * **Rename / randomise context rows**: need text entry (rename) and the seed tree (randomise, ADR-007) — the `Op::Rename` value and the menu plumbing exist, the rows are deferred until their surfaces do.
 * **Sub-graph / patch nesting** (Phase 1) and **mapping canvas** (Phase 5) remain out of scope per the WO.
 
-## WO-014 increment 2+ (parked from the module set, updated 2026-09-26 — the audio-domain six shipped)
+## WO-014 increment 4+ (parked from the module set, updated 2026-09-26 — increments 3 AND 4 shipped; three modules remain)
 
 **Shipped in increment 2** (no longer parked): `syn/noise`, `syn/polyblep` (aliasing acceptance
 measured at −166.8 dB through the registry build), `flt/svf`, `util/delay` (parametric latency),
 `fx/bitcrush`, `util/panner` — nine first-party modules total, docs generated from manifests
 (`tools/module_docs.py --check` gates staleness in CI).
 
-* **The eight remaining modules wait on contracts, not on effort:** `syn/membrane`, `env/ad`,
-  `mod/lfo`, `mod/clk-div` (event/trigger ports — need the multi-port `AudioCtx`, contract v1, and
-  `mod/*` additionally need WO-009's clocks); `util/mixer` (N×M needs multi-port); `ana/tap`,
-  `dsp/scope` (data/gpu plumbing needs the ring publication of ADR-009 d8); `out/main` (device
-  channel mapping + the canvas master handover — ship it together with the WO-013-side rule
-  change so the MASTER badge never lies). A module whose trigger port cannot receive a trigger is
-  a lie with a manifest; these land when their payloads can travel.
+**Shipped in increment 3 (2026-09-26, contract v1's first consumers)**: `syn/membrane` (the
+Phase-B kick topology promoted — trigger at sample 37 starts the hit AT sample 37, measured),
+`env/ad` (event in → audio-rate cv out, no audio ports at all; loop semantics measured against
+the wrapped AdEnv's epsilon-arrival decay, not assumed), `util/mixer` (4×4 stereo matrix, the
+explicit merge; identity default is a bit-exact wire) — the drum-demo golden (`f2303f13aa0cf299`)
+exercising host-trigger → membrane → mixer end to end.
+
+**Shipped in increment 4 (2026-09-26, WO-009's first consumers)**: `mod/lfo` (four shapes,
+audio-rate unipolar cv, event phase-reset on the exact sample; the lfo→svf sweep renders
+BIT-IDENTICAL to a hand-driven reference) and `mod/clk-div` (divide/multiply/probability, the
+first event-in-event-out module; the 16ths→÷4→membrane chain golden `914d9063ce9d8a0f` lands
+kicks on exact frames) — **fourteen first-party modules**.
+
+* **The three remaining modules wait on contracts, not on effort:** `ana/tap`, `dsp/scope`
+  need the ring publication of ADR-009 d8 (the kernel hot-swap increment). `out/main` ships
+  together with the WO-013-side master-handover rule change so the MASTER badge never lies.
+  A module whose trigger port cannot receive a trigger is a lie with a manifest; these land
+  when their payloads can travel.
+* **LFO rate in BEATS (continuous tick-derived phase)**: `mod/lfo` syncs by event-driven phase
+  reset (sample-exact, shipped). Rate-as-a-beat-division needs the module to see tempo: either a
+  per-frame tick view in `BlockContext` (a contract change) or a module-side bpm derivation from
+  block-start tick deltas (one block of lag on tempo edits — measurable, maybe fine). Decide
+  before building; both doors are open, and the delay's tempo-sync parameter path
+  (`dsp/delay.rs`'s tested-but-unreachable `set_tempo_sync`) rides whichever door opens.
+
+## WO-009 increment 1+ (parked from clocks/transport, 2026-09-26 — the musical half shipped)
+
+* **External sync — the slave PLL (ADR-006 rule 3)**: Phase 4, per the WO's out-of-scope list.
+  `ClockBroker::observe_wall` is the door a rate+phase estimator will knock on; the stiffness
+  parameter is a musical decision that wants real Link/MIDI hardware in front of it.
+* **The 30-minute drift measurement** (the WO's third acceptance box, hardware half): the
+  estimator is shipped and synthetic-verified (+1000 ppm → ±2); the HAL pump feeding
+  `observe_wall` between blocks on SATURN, against an independent measurement, closes it.
+* **Loop-relative beat phase for unaligned regions**: beats ride the absolute tick grid (exact);
+  a loop whose span is not beat-aligned keeps the global grid rather than restarting the phase.
+  The proportional-placement alternative was measured putting boundary beats one sample early —
+  the transport header records it. A correct folded-domain map (or sub-block transport) is the
+  fix, not a clamp.
+* **Sub-block transport positions**: loops fold at block granularity — the same §16 Q2 boundary
+  as sub-block processing, with the same remedy (a smaller host block).
+* **Tempo as a full automation stream**: every change is already a map segment (the interface
+  allows it, as the WO demanded); what's missing is an automation-lane UI and journal
+  integration (WO-011/WO-013 territory), not clock math.
+* **Metric modulation UI + per-track time signatures + count-in/metronome/recording**: out of
+  the WO's scope by name; `Clock::reanchored` is the primitive metric modulation will use.
+* **`util/mixer`'s cv merge side**: the module ships as the AUDIO 4×4 matrix; the compat-matrix's
+  cv-fan-in cell names `util/mixer` as the merge, so the executor's refusal now says exactly that
+  — the audio side shipped, the cv side did not. Adding cv-in/cv-out ports to the mixer (or a
+  dedicated `util/cv-mix`) is a small increment; until then cv fan-in stays refused in words.
+* **`util/mixer` is 4×4, not 8×8**: 16 cells + 4 trims = 20 of the 32 snapshot parameters. The
+  matrix grows when `MAX_PARAMS` does (its manifest header says so).
 * **Per-module example patches**: WO-015's study is the example patch that matters, and a `.sparq`
   project file needs WO-011's format writer — parked until then rather than inventing a format.
-* **The rms→filter modulation demo** (analysis-as-control-source, end to end): needs cv edges to
-  carry samples = contract v1. The principle is proven today at the executor level (the rms tap
-  value agrees with the master's metered rms to the bit); the *audible* demo waits for the payload.
+* ~~The rms→filter modulation demo~~ **SHIPPED with contract v1 (2026-09-26):**
+  `sparq exec --patch mod-demo` renders it, and `tests/contract_v1.rs` proves it with arithmetic —
+  the cv-wired filter renders BIT-IDENTICAL to a hand-driven reference set per block to the
+  declared value, golden `1621e1f65b1b64e1` checked in.
 * **The <15 %-of-a-core benchmark at 96 kHz/64**: stage-machine acceptance — sandbox CPU ratios
   do not transfer (2-core virtualised), so no sandbox number is recorded as evidence.
 * **Allocation-free parameter TRANSITIONS**: polyblep's partial-table rebuild on a freq change
-  allocates when the table grows; steady-state `process` is measured zero. Control-rate parameter
-  design (contract v1) is where smoothed, allocation-free transitions land.
+  allocates when the table grows; steady-state `process` is measured zero. Contract v1 shipped the
+  cv wire (block-rate cv IS a control-rate path, and `flt/svf`'s modulation input proves it
+  allocation-free per block), but param *smoothing* and table-rebuild-without-growth remain open —
+  they need the arena/growth-policy design, not another port type.
 * **`syn/polyblep` the per-sample oscillator**: the id keeps its promise when the real PolyBLEP
   (or BLIT/wavetable) lands from a reference derivation with the same aliasing gate — the osc.rs
   module docs and LATER's Phase-B entry both carry the derivation debt; the additive interim is
@@ -153,8 +200,16 @@ watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the det
   grace period, as allowlisted-`unsafe` kernel work (`sparq-kernel::sync`) with its own proofs.
   The `Engine` is single-owner until it lands; the boundary semantics are proven by interleaved
   stress, the concurrency by nothing yet — declared, not hidden.
-* **Multi-port `AudioCtx` (contract v1)** so cv/event/data payloads travel — until then a
-  non-audio edge is REFUSED at build in words, never silently ignored (the v0 shape stands).
+* ~~Multi-port `AudioCtx` (contract v1)~~ **SHIPPED as WO-008 increment 4 (2026-09-26):**
+  audio/cv/event payloads travel (data/gpu/atom still refuse in words, now per type); the executor's
+  refusals, the merge order and the rate conversions are all measured in `tests/contract_v1.rs`.
+* **`cv_interp = "spline"`** is declared in the vocabulary and REFUSED at build until the host
+  implements it (hold and linear ship). Implementing it is a small, well-specified increment;
+  faking it with a hold is exactly the silent transformation the refusal exists to prevent.
+* **`required`-unconnected inputs are not refused at build** (v0 behaviour kept deliberately: the
+  determinism world's unwired spare depends on it, and moving refusals mid-stress would move the
+  harness counters). Host-side enforcement gets its own increment, with the stress baseline moved
+  on purpose and recorded.
 * **Cross-thread meter/analysis publication** (decision 8's lock-free rings): meters are relaxed
   atomics readable from any thread holding a reference; the ring publication the UI consumes
   arrives with (or after) the hot-swap increment. Live wire levels (WO-013) wait on this.

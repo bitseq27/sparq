@@ -244,7 +244,7 @@ REM failure, not as staleness: cargo just built from these sources, so they exis
 setlocal EnableDelayedExpansion
 set CNT=0
 set BYTES=0
-for /f "delims=" %%F in ('dir /s /b /a-d "crates\sparq-kernel\src\*.rs" "crates\sparq-audio\src\*.rs" "crates\sparq-ui\src\*.rs" "crates\sparq-app\src\*.rs" "crates\sparq-module-api\src\*.rs" 2^>nul') do (
+for /f "delims=" %%F in ('dir /s /b /a-d "crates\sparq-kernel\src\*.rs" "crates\sparq-audio\src\*.rs" "crates\sparq-ui\src\*.rs" "crates\sparq-app\src\*.rs" "crates\sparq-module-api\src\*.rs" "crates\sparq-music\src\*.rs" 2^>nul') do (
     set /a CNT+=1
     set /a BYTES+=%%~zF
 )

@@ -1,0 +1,89 @@
+# sparq module manifest — mod/clk-div (WO-014 increment 4).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The first event-PROCESSING module: an event input AND an event output, the contract-v1 wire
+# proven from the consuming end. "Event ports, transport as source" is the WO's contract stress
+# for it — the transport's beat triggers are the intended clock, but any event producer works.
+#
+# SEMANTICS, stated exactly because the golden pins them:
+# * DIVIDE: counts qualifying input events (value > 0) from the first; an output fires on
+#   inputs 1, 1+N, 1+2N, … (N = `divide`). The first input always passes at divide=1, and a
+#   divider never swallows the downbeat of its own count.
+# * MULTIPLY: each passing input also schedules M−1 sub-triggers evenly spaced across the
+#   interval to the NEXT input — measured from the previous arrival (the first input has no
+#   interval yet and passes through alone). Sub-triggers land on exact samples in later blocks
+#   from a bounded internal schedule (32 slots; overflow is dropped and counted internally —
+#   a multiplier over a trigger stream faster than its own capacity is a patching error, and
+#   the module degrades by dropping, never by growing on the audio thread).
+# * PROBABILITY: each candidate output passes an independent seeded draw (xorshift64 from the
+#   state blob's seed — ADR-007: the same seed replays the same decisions; `reset` replays).
+#
+# State is the 8-byte seed ONLY: the input count, the pending schedule and the rng position are
+# performance state, declared exactly like `syn/membrane`'s hit memory — a save/restore restarts
+# the stream from the seed, which is the reproducibility promise and nothing more.
+
+[identity]
+id = "sparq/mod/clk-div"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Clock Divider"
+summary = "Event clock divider/multiplier with a seeded probability gate - triggers out"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "modulation/clock-divider"
+top = "mod"
+kind = "processor"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "in"
+name = "Clock In"
+direction = "in"
+type = "event"
+event_kinds = ["trigger", "clock", "gate"]
+required = false
+
+[[ports]]
+id = "out"
+name = "Trig Out"
+direction = "out"
+type = "event"
+event_kinds = ["trigger"]
+
+[[params]]
+id = "divide"
+name = "Divide"
+type = "int"
+unit = "x"
+min = 1.0
+max = 16.0
+default = 1.0
+
+[[params]]
+id = "multiply"
+name = "Multiply"
+type = "int"
+unit = "x"
+min = 1.0
+max = 8.0
+default = 1.0
+
+[[params]]
+id = "probability"
+name = "Probability"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 1.0
+default = 1.0
+
+[state]
+schema_id = "sparq/mod/clk-div/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "trivial"

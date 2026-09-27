@@ -1,9 +1,11 @@
-# sparq module manifest — flt/svf (WO-014 increment 2).
+# sparq module manifest — flt/svf (WO-014 increment 2; contract-v1 modulation input added by
+# WO-008 increment 4 — an additive change: the port is optional and the depth defaults to 0, so
+# every existing patch and golden renders bit-identically).
 # Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
 
 [identity]
 id = "sparq/flt/svf"
-version = "0.1.0"
+version = "0.2.0"
 host_api = { min = 1, max = 1 }
 display_name = "SVF"
 summary = "State-variable filter, ZDF trapezoidal, five modes"
@@ -31,6 +33,19 @@ direction = "out"
 type = "audio"
 channel_set = "stereo"
 
+# Contract v1: the cutoff modulation input. Block-rate (one value per block — the parameter
+# discipline this batch declares), unipolar (a level, never a swing), optional (an unconnected
+# mod input is an explicit signal, and `mod = 0` makes it moot either way). The formula the
+# module applies is documented in its generated doc and its source: cutoff · 2^(2·mod·cv).
+[[ports]]
+id = "cutoff-mod"
+name = "Cutoff Mod"
+direction = "in"
+type = "cv"
+rate = "block"
+range = "unipolar"
+required = false
+
 [[params]]
 id = "cutoff"
 name = "Cutoff"
@@ -56,6 +71,17 @@ type = "int"
 unit = "x"
 min = 0.0
 max = 4.0
+default = 0.0
+
+# Appended LAST on purpose: the parameter snapshot order is the manifest order, so params 0–2
+# keep their indices and every checked-in golden keeps its bits.
+[[params]]
+id = "mod"
+name = "Cutoff Mod Depth"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 1.0
 default = 0.0
 
 [state]

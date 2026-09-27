@@ -1,6 +1,7 @@
 # sparq module API — v1 draft (v0.1)
 
-**Status:** draft for WO-007. **Freeze target:** end of Phase 1 as `v1.0-rc`, then `v1.0`.
+**Status:** draft for WO-007; the runtime surface described here is **implemented as contract v1**
+(WO-008 increment 4, 2026-09-26 — see §17). **Freeze target:** end of Phase 1 as `v1.0-rc`, then `v1.0`.
 **Governing ADRs:** 002 (tiers) · 005 (port types) · 006 (clocks/latency) · 007 (determinism) · 009 (executor/HAL).
 **Rule of this document:** everything here must be expressible by a *granular cloud*, a *partitioned convolution reverb*, an *HOA encoder*, a *MIDI 2.0 MPE input*, a *camera optical-flow analyser*, a *CSV player* and a *DNA-tree mutation module* — without inventing a new port type. §14 runs that test.
 
@@ -295,3 +296,45 @@ If any step needs engine knowledge, the contract has failed and this document ge
 Each answer is recorded here and, where architectural, in the ADR-005 addendum. The machine-readable
 form of every connection rule — the table host validation and the canvas affordance layer both read
 — is `docs/api/compat-matrix.toml`.
+
+---
+
+## 17. Implementation status — contract v1 (WO-008 increment 4, 2026-09-26)
+
+What the engine actually presents today, so this document cannot drift from the code silently (the
+drift gate for the connection table is `sparq-module-api/tests/compat_matrix.rs`; the drift gate for
+the Rust surface is `tests/api_snapshot.rs`):
+
+* **`AudioCtx` is multi-port** (§2/§3's port model, carried): per-type port views in manifest order
+  — `audio_in/audio_out` (≤ 8 per class, `MAX_PORTS_PER_CLASS`), `cv_in/cv_out` (block value or
+  audio-rate buffer, always at the RECEIVER's declared rate — the host performs §16 Q3's
+  `cv_reduce`/`cv_interp` before the module sees a value), `events_in/events_out` (§9's guarantee
+  is mechanical: merged pre-sorted by sample offset, ties stable by host-rank → connection id →
+  insertion order; sinks bounded at `EVENTS_PER_BLOCK` = 64 with counted, never-grown overflow).
+  Multi-output modules use the `take_*` accessors (documented in the author guide §8.1).
+* **`cv` edges execute** with every matrix rule enforced at build: range mismatch refused (G2,
+  naming `util/range` and its phase), fan-in refused (naming `util/mixer`), fan-out free,
+  `spline` refused until implemented — refusals in words, never silent no-ops.
+* **`event` edges execute**; the producer's `event_kinds` must be a subset the consumer accepts
+  (the default cell's rule, `E-EVENTKIND-UNACCEPTED`'s sentence). Host-side event injection exists
+  as the executor's control-thread door; scheduling BY TICK is WO-009's clock broker and is
+  deliberately not pre-empted here.
+* **`data`/`gpu`/`atom` payloads are still not carried**; their edges refuse at build with
+  type-specific sentences (§4's schema machinery and the ring publication have not shipped;
+  `atom` is the control-thread `message()` door by design, never a wire payload).
+* **`Resources`** now carries the per-port resolved channel counts §2's cascade rule needs.
+* The **rms→filter acceptance** (WO-014) is proven with arithmetic, not adjectives:
+  `tests/contract_v1.rs` renders a cv-wired `flt/svf` **bit-identical** to a hand-driven reference
+  whose cutoff is set per block to the value the contract declares — and `sparq exec --patch
+  mod-demo` is the audible artefact.
+* **The musical clock is live (WO-009, 2026-09-26):** `ctx.block.tick`/`ppqn` carry the
+  transport's position for the block — the transport computes (the piecewise map of ADR-006),
+  the executor carries (`set_musical_position`), and a driver that never calls it renders the
+  static `tick = 0` the goldens were built against. Transport triggers reach modules through the
+  same `event` ports and the same host-event door as any other producer; a scheduled tick fires
+  at its exact sample (±0, measured against an independent implementation of the map).
+* Still declared open: audio-only delay edges, single-pass `variable` channel-set resolution,
+  unenforced `required`-unconnected inputs (the module sees the explicit unconnected signal and
+  answers with its status; host-side enforcement is a declared open item so the determinism
+  harness's refusal counters stay comparable), and sub-block transport positions (module-api
+  §16 Q2's forbidden territory — loops fold at block granularity for the same reason).

@@ -774,6 +774,22 @@ impl<'a> Parser<'a> {
             };
             cur = match &mut cur.entries[idx].value {
                 Value::Table(t) => t,
+                // `[[a.b]]` beneath `[[a]]`: the nested array-of-tables lives inside the LAST
+                // element of its parent array — standard TOML, and the shape of the compat
+                // matrix's `[[same_type.cases]]` cells. This arm was the parser's gap (defect
+                // #82): without it, the first code consumer of the matrix could not read it.
+                Value::Array(a) => match a.last_mut() {
+                    Some(Value::Table(t)) => t,
+                    _ => {
+                        return Err(TomlError {
+                            line,
+                            message: format!(
+                                "`{part}` is an array that does not end in a table, so \
+                                 `[[{joined}]]` has nowhere to live"
+                            ),
+                        })
+                    },
+                },
                 _ => {
                     return Err(TomlError {
                         line,
@@ -1166,5 +1182,57 @@ b = 1
         let e = parse("a = { b.c = 1 }\n").unwrap_err();
         assert!(e.message.contains("dotted keys"), "{e}");
         assert!(parse("a = { b = { c = 1 } }\n").is_ok(), "the nested form is the supported one");
+    }
+
+    #[test]
+    fn a_nested_array_of_tables_lands_inside_its_own_parent_element() {
+        // The shape of docs/api/compat-matrix.toml: `[[same_type.cases]]` under `[[same_type]]`.
+        // Each nested entry must land in the LAST element of its parent array — not in a shared
+        // root-level list, which would silently merge every parent's cases together. This was
+        // the parser's gap until the matrix's first code consumer (tests/compat_matrix.rs) hit it.
+        let doc = r#"
+[[fruit]]
+name = "apple"
+
+[[fruit.seeds]]
+id = "s1"
+
+[[fruit.seeds]]
+id = "s2"
+
+[[fruit]]
+name = "banana"
+
+[[fruit.seeds]]
+id = "s3"
+"#;
+        let root = parse(doc).unwrap();
+        let fruit = root.tables("fruit").unwrap();
+        assert_eq!(fruit.len(), 2);
+        let apple_seeds = fruit[0].tables("seeds").unwrap();
+        let banana_seeds = fruit[1].tables("seeds").unwrap();
+        assert_eq!(apple_seeds.len(), 2, "apple keeps its own two seeds");
+        assert_eq!(banana_seeds.len(), 1, "banana's seed did NOT merge into apple's list");
+        assert_eq!(apple_seeds[0].get("id").and_then(Value::as_str), Some("s1"));
+        assert_eq!(apple_seeds[1].get("id").and_then(Value::as_str), Some("s2"));
+        assert_eq!(banana_seeds[0].get("id").and_then(Value::as_str), Some("s3"));
+        // Keys after a nested header still land in the nested element, and a parent-level key
+        // after the child block is refused rather than misfiled (TOML's own rule: once
+        // `[[fruit.seeds]]` opened, bare keys belong to it until a new header moves the cursor).
+        assert_eq!(fruit[0].get("name").and_then(Value::as_str), Some("apple"));
+    }
+
+    #[test]
+    fn the_compat_matrix_itself_parses() {
+        // The table WO-007 wrote "as data, to be consumed by code" — pinned where the claim is
+        // made. If a future edit to the matrix breaks the subset parser, this fails HERE, with
+        // the line number, instead of surfacing as a mystery in the drift gate.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/api/compat-matrix.toml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let root = parse(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert_eq!(root.tables("same_type").unwrap().len(), 6, "six port types");
+        assert!(root.get("cross_type").is_some());
+        assert!(root.get("gaps").is_some());
     }
 }

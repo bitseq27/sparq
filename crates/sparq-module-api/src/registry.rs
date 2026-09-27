@@ -247,7 +247,7 @@ mod tests {
         }
         fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
             self.gained = true;
-            for s in ctx.output.iter_mut() {
+            for s in ctx.output().iter_mut() {
                 *s = 0.5;
             }
             BlockStatus::Ok
@@ -333,7 +333,7 @@ latency = 0
         let params = crate::params::ParamSet::zeroed();
         let mut out = vec![0.0f32; 64];
         {
-            let mut ctx = AudioCtx { block: &block, params: &params, input: &[], output: &mut out };
+            let mut ctx = AudioCtx::single(&block, &params, &[], &mut out);
             assert_eq!(m.process(&mut ctx), BlockStatus::Ok);
         }
         assert!(out.iter().all(|v| *v == 0.5), "the registered module really ran");

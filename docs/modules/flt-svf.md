@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Host API | 1…1 |
 | Category | filter/svf |
 | Kind / tier / stability | processor · t1 · stable |
@@ -21,6 +21,7 @@
 |---|---|---|---|---|---|---|---|
 | `in` | Input | in | audio | channel set: stereo | — | — | 0 |
 | `out` | Output | out | audio | channel set: stereo | — | — | 0 |
+| `cutoff-mod` | Cutoff Mod | in | cv | rate: block, range: unipolar | no | — | 0 |
 
 ## Parameters
 
@@ -29,6 +30,7 @@
 | 0 | `cutoff` | Cutoff | float | Hz | 10 | 20000 | 1000 |
 | 1 | `resonance` | Resonance | float | ratio | 0 | 1 | 0.2 |
 | 2 | `mode` | Mode (0 lp 1 hp 2 bp 3 notch 4 peak) | int | x | 0 | 4 | 0 |
+| 3 | `mod` | Cutoff Mod Depth | float | ratio | 0 | 1 | 0 |
 
 Parameter order is the snapshot order: `param(i)` in `process` reads row `i`.
 

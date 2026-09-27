@@ -19,7 +19,9 @@ use sparq_kernel::block::BlockContext;
 use sparq_module_api::manifest::{
     Classification, Identity, Manifest, ParamSpec, PortSpec, ResourceDecl, StateDecl,
 };
-use sparq_module_api::module::{AudioCtx, BlockStatus, Module, ModuleError, Resources};
+use sparq_module_api::module::{
+    AudioCtx, BlockStatus, CvIn, CvOut, Module, ModuleError, Resources,
+};
 use sparq_module_api::params::{ParamBus, ParamSet};
 use sparq_module_api::port::{ChannelSet, CvRange, CvRate, Direction, PortType};
 
@@ -69,12 +71,15 @@ impl Module for Gain {
         if !ctx.has_input() {
             // An unconnected input is an explicit signal, never silence-by-accident: the status
             // says so, and the buffer is still written.
-            for s in ctx.output.iter_mut() {
+            for s in ctx.output().iter_mut() {
                 *s = 0.0;
             }
             return BlockStatus::Silenced;
         }
-        for (o, i) in ctx.output.iter_mut().zip(ctx.input.iter()) {
+        // Contract v1's borrow discipline: the input view is taken first (it escapes with the
+        // context's own lifetime), so the output borrow taken second cannot conflict with it.
+        let input = ctx.input();
+        for (o, i) in ctx.output().iter_mut().zip(input.iter()) {
             *o = *i * self.gain;
         }
         BlockStatus::Ok
@@ -132,8 +137,10 @@ impl Module for Sine {
         let freq = f64::from(ctx.param(0));
         let amp = ctx.param(1);
         self.inc = freq / f64::from(self.rate);
-        let frames = ctx.frames().min(ctx.output.len());
-        for s in ctx.output.iter_mut().take(frames) {
+        let block_frames = ctx.frames();
+        let out = ctx.output();
+        let frames = block_frames.min(out.len());
+        for s in out.iter_mut().take(frames) {
             *s = ((self.phase * std::f64::consts::TAU).sin() * f64::from(amp)) as f32;
             self.phase += self.inc;
             if self.phase >= 1.0 {
@@ -157,6 +164,10 @@ impl Module for Sine {
 /// RMS analysis, published as a `cv` value. The analysis-as-control-source principle in its smallest
 /// form: parameter 0 is a floor below which the output is exactly zero, so a silent patch does not
 /// modulate anything with denormal dust.
+///
+/// Contract v1: the value travels on the module's declared block-rate `cv` output port — the v0
+/// convention of riding in `output[0]` of an audio buffer the manifest never declared is gone,
+/// because a manifest that says `cv` and a payload that travels as `audio` is a lie in two places.
 struct Rms;
 
 impl Module for Rms {
@@ -173,26 +184,36 @@ impl Module for Rms {
     }
 
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
-        for s in ctx.output.iter_mut() {
-            *s = 0.0;
+        let level = if !ctx.has_input() {
+            0.0
+        } else {
+            let mut sum = 0.0f64;
+            let mut n = 0usize;
+            for (i, v) in ctx.input().iter().enumerate() {
+                let x = f64::from(*v);
+                sum += x * x;
+                n = i + 1;
+            }
+            if n == 0 {
+                0.0
+            } else {
+                let rms = (sum / n as f64).sqrt();
+                let floor = f64::from(ctx.param(0));
+                if rms < floor {
+                    0.0
+                } else {
+                    rms as f32
+                }
+            }
+        };
+        if let Some(mut cv) = ctx.cv_out(0) {
+            cv.set(level);
         }
-        if !ctx.has_input() {
-            return BlockStatus::Silenced;
+        if ctx.has_input() {
+            BlockStatus::Ok
+        } else {
+            BlockStatus::Silenced
         }
-        let mut sum = 0.0f64;
-        let mut n = 0usize;
-        for (i, v) in ctx.input.iter().enumerate() {
-            let x = f64::from(*v);
-            sum += x * x;
-            n = i + 1;
-        }
-        if n == 0 {
-            return BlockStatus::Ok;
-        }
-        let rms = (sum / n as f64).sqrt();
-        let floor = f64::from(ctx.param(0));
-        ctx.output[0] = if rms < floor { 0.0 } else { rms as f32 };
-        BlockStatus::Ok
     }
 
     fn message(&mut self, _payload: &[u8]) -> Result<(), ModuleError> {
@@ -347,7 +368,7 @@ fn render(module: &mut dyn Module, params: &ParamSet, input: &[f32]) -> Vec<f32>
     let ctx = block();
     let mut out = vec![0.0f32; FRAMES * CHANS];
     {
-        let mut a = AudioCtx { block: &ctx, params, input, output: &mut out };
+        let mut a = AudioCtx::single(&ctx, params, input, &mut out);
         let status = module.process(&mut a);
         assert!(
             status == BlockStatus::Ok || status == BlockStatus::Silenced,
@@ -421,13 +442,9 @@ fn an_unconnected_input_is_reported_not_silenced_by_accident() {
     let ctx = block();
     let mut out = vec![9.0f32; FRAMES * CHANS];
     let status;
+    let unity = ParamSet::new(1, &[1.0]).unwrap();
     {
-        let mut a = AudioCtx {
-            block: &ctx,
-            params: &ParamSet::new(1, &[1.0]).unwrap(),
-            input: &[],
-            output: &mut out,
-        };
+        let mut a = AudioCtx::single(&ctx, &unity, &[], &mut out);
         status = g.process(&mut a);
     }
     assert_eq!(status, BlockStatus::Silenced, "the module must say it produced silence");
@@ -463,7 +480,7 @@ fn sine_stays_in_range_is_deterministic_and_wraps_its_phase() {
     let ctx = BlockContext::offline(48_000, FRAMES, 1);
     let mut out = vec![0.0f32; FRAMES];
     for _ in 0..periods {
-        let mut a = AudioCtx { block: &ctx, params: &exact, input: &[], output: &mut out };
+        let mut a = AudioCtx::single(&ctx, &exact, &[], &mut out);
         long_run.process(&mut a);
         for v in &out {
             sum += f64::from(*v);
@@ -478,27 +495,55 @@ fn sine_stays_in_range_is_deterministic_and_wraps_its_phase() {
     );
 }
 
+/// Runs one block of an analysis module, returning the value it published on its block-rate
+/// `cv` output — contract v1's real payload path, not a ride in an audio buffer.
+fn render_cv(module: &mut dyn Module, params: &ParamSet, input: &[f32]) -> f32 {
+    let ctx = block();
+    let mut cell = f32::NAN; // NAN so an unwritten cell fails loudly rather than reading as 0.0
+    {
+        let mut a =
+            AudioCtx::new(&ctx, params).with_audio_in(input).with_cv_out(CvOut::Block(&mut cell));
+        let status = module.process(&mut a);
+        assert!(
+            status == BlockStatus::Ok || status == BlockStatus::Silenced,
+            "unexpected {status:?}"
+        );
+    }
+    cell
+}
+
 #[test]
 fn rms_of_a_known_signal_matches_the_analytic_value() {
     let mut r = Rms;
     r.prepare(&resources()).unwrap();
     let constant = vec![0.5f32; FRAMES * CHANS];
-    let out = render(&mut r, &ParamSet::new(1, &[0.0]).unwrap(), &constant);
-    assert!(
-        (f64::from(out[0]) - 0.5).abs() < 1e-6,
-        "rms of a constant is that constant: {}",
-        out[0]
-    );
-    assert!(out[1..].iter().all(|v| *v == 0.0), "only the cv slot is written");
+    let v = render_cv(&mut r, &ParamSet::new(1, &[0.0]).unwrap(), &constant);
+    assert!((f64::from(v) - 0.5).abs() < 1e-6, "rms of a constant is that constant: {v}");
 
     let silence = vec![0.0f32; FRAMES * CHANS];
-    let out = render(&mut r, &ParamSet::new(1, &[0.0]).unwrap(), &silence);
-    assert_eq!(out[0], 0.0);
+    let v = render_cv(&mut r, &ParamSet::new(1, &[0.0]).unwrap(), &silence);
+    assert_eq!(v, 0.0);
 
     // The floor turns denormal dust into an exact zero.
     let dust = vec![1e-9f32; FRAMES * CHANS];
-    let out = render(&mut r, &ParamSet::new(1, &[1e-6]).unwrap(), &dust);
-    assert_eq!(out[0], 0.0, "below the floor means exactly zero");
+    let v = render_cv(&mut r, &ParamSet::new(1, &[1e-6]).unwrap(), &dust);
+    assert_eq!(v, 0.0, "below the floor means exactly zero");
+}
+
+#[test]
+fn an_unconnected_cv_input_is_an_explicit_signal_not_a_silent_zero() {
+    // The contract's rule for optional inputs, on the cv side: a module can tell "nothing is
+    // connected" (Unconnected) from "connected and quiet" (Block(0.0)) — the two render
+    // differently and must never be collapsed by the host.
+    let unconnected = CvIn::Unconnected;
+    assert!(!unconnected.is_connected());
+    assert_eq!(unconnected.block(), None);
+    let quiet = CvIn::Block(0.0);
+    assert!(quiet.is_connected(), "connected and silent is a value, not an absence");
+    assert_eq!(quiet.block(), Some(0.0));
+    let ramp = CvIn::Audio(&[0.0, 0.5, 1.0]);
+    assert_eq!(ramp.at(1), 0.5);
+    assert_eq!(ramp.block(), None, "an audio-rate port has no single block value");
 }
 
 #[test]
@@ -531,8 +576,8 @@ fn a_param_change_during_a_block_reaches_process_only_at_the_next_boundary() {
     assert!(bus.publish(ParamSet::new(1, &[1.0]).unwrap()));
     slot.begin_block();
     {
-        let mut a =
-            AudioCtx { block: &ctx, params: &slot.current(), input: &input, output: &mut out };
+        let snapshot = slot.current();
+        let mut a = AudioCtx::single(&ctx, &snapshot, &input, &mut out);
         g.process(&mut a);
     }
     assert_eq!(out[0], 1.0, "block 1 at unity");
@@ -540,8 +585,8 @@ fn a_param_change_during_a_block_reaches_process_only_at_the_next_boundary() {
     // The write lands mid-block; the block still sees version 1.
     assert!(bus.publish(ParamSet::new(2, &[0.5]).unwrap()));
     {
-        let mut a =
-            AudioCtx { block: &ctx, params: &slot.current(), input: &input, output: &mut out };
+        let snapshot = slot.current();
+        let mut a = AudioCtx::single(&ctx, &snapshot, &input, &mut out);
         g.process(&mut a);
     }
     assert_eq!(out[0], 1.0, "a mid-block write must not be visible in this block");
@@ -550,8 +595,8 @@ fn a_param_change_during_a_block_reaches_process_only_at_the_next_boundary() {
     slot.begin_block();
     assert_eq!(slot.current().version(), 2, "the boundary is where the swap happens");
     {
-        let mut a =
-            AudioCtx { block: &ctx, params: &slot.current(), input: &input, output: &mut out };
+        let snapshot = slot.current();
+        let mut a = AudioCtx::single(&ctx, &snapshot, &input, &mut out);
         g.process(&mut a);
     }
     assert_eq!(out[0], 0.5, "block 2 sees the new value");
@@ -570,12 +615,16 @@ fn process_makes_zero_allocations() {
     for m in &mut modules {
         m.prepare(&res).unwrap();
     }
+    // The rms module's declared cv port is part of the measured shape: contract v1's port views
+    // must be as allocation-free to present as the v0 pair of buffers was.
+    let mut cell = 0.0f32;
 
     // Warm up un-measured: the harness performs one-shot lazy initialisations on a thread's first
     // assert/print, and measuring cold would count the harness rather than the audio path.
     for _ in 0..2_000 {
         for m in &mut modules {
-            let mut a = AudioCtx { block: &ctx, params: &params, input: &input, output: &mut out };
+            let mut a = AudioCtx::single(&ctx, &params, &input, &mut out)
+                .with_cv_out(CvOut::Block(&mut cell));
             m.process(&mut a);
         }
     }
@@ -583,8 +632,8 @@ fn process_makes_zero_allocations() {
     let made = measure(|| {
         for _ in 0..5_000 {
             for m in &mut modules {
-                let mut a =
-                    AudioCtx { block: &ctx, params: &params, input: &input, output: &mut out };
+                let mut a = AudioCtx::single(&ctx, &params, &input, &mut out)
+                    .with_cv_out(CvOut::Block(&mut cell));
                 m.process(&mut a);
             }
         }
@@ -606,18 +655,25 @@ fn the_block_level_trait_object_path_is_the_one_the_executor_uses() {
     let params = ParamSet::new(1, &[440.0, 0.5]).unwrap();
     let ctx = block();
     // One buffer per module. Sharing a single buffer here was this test's first bug: ana/rms
-    // zeroes its output before reporting Silenced, so the assertion was checking whichever module
-    // happened to run last rather than the one it claimed to check.
+    // zeroed the shared output before reporting Silenced, so the assertion was checking whichever
+    // module happened to run last rather than the one it claimed to check.
     let mut buffers: Vec<Vec<f32>> =
         (0..modules.len()).map(|_| vec![0.0f32; FRAMES * CHANS]).collect();
-    for (m, out) in modules.iter_mut().zip(buffers.iter_mut()) {
-        let mut a = AudioCtx { block: &ctx, params: &params, input: &[], output: out };
+    // One cv cell per module, NAN-filled: contract v1's rule that a module writes only the ports
+    // it declared is only observable if an unwritten cell stays observably unwritten.
+    let mut cells: Vec<f32> = vec![f32::NAN; modules.len()];
+    for (i, (m, out)) in modules.iter_mut().zip(buffers.iter_mut()).enumerate() {
+        let mut a =
+            AudioCtx::single(&ctx, &params, &[], out).with_cv_out(CvOut::Block(&mut cells[i]));
         m.process(&mut a);
         m.deactivate();
     }
     assert!(buffers[0].iter().all(|v| *v == 0.0), "gain with no input writes silence");
+    assert!(cells[0].is_nan(), "gain has no cv port and must not touch the cv cell");
     assert!(buffers[1].iter().any(|v| *v != 0.0), "the sine wrote something through the dyn path");
-    assert!(buffers[2].iter().all(|v| *v == 0.0), "rms with no input writes silence");
+    assert!(cells[1].is_nan(), "sine has no cv port either");
+    assert!(buffers[2].iter().all(|v| *v == 0.0), "rms never touches an audio buffer in v1");
+    assert_eq!(cells[2], 0.0, "rms with no input publishes an explicit 0.0 on its cv port");
 }
 
 #[test]

@@ -97,7 +97,8 @@ impl Module for ZeroEditProbe {
 
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
         let bias = ctx.param(0);
-        for (o, i) in ctx.output.iter_mut().zip(ctx.input.iter()) {
+        let input = ctx.input();
+        for (o, i) in ctx.output().iter_mut().zip(input.iter()) {
             *o = *i + bias;
         }
         BlockStatus::Ok
@@ -138,7 +139,7 @@ fn a_new_module_registers_from_text_and_runs() {
     let input = vec![1.0f32; 64];
     let mut out = vec![0.0f32; 64];
     {
-        let mut ctx = AudioCtx { block: &block, params: &params, input: &input, output: &mut out };
+        let mut ctx = AudioCtx::single(&block, &params, &input, &mut out);
         assert_eq!(module.process(&mut ctx), BlockStatus::Ok);
     }
     assert!(out.iter().all(|v| (*v - 1.25).abs() < 1e-6), "input 1.0 + bias 0.25: {out:?}");

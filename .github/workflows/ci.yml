@@ -196,6 +196,7 @@ jobs:
       - name: Clippy default features for x86_64-pc-windows-msvc
         run: |
           cargo clippy --target x86_64-pc-windows-msvc -p sparq-module-api --all-targets -- -D warnings
+          cargo clippy --target x86_64-pc-windows-msvc -p sparq-music --all-targets -- -D warnings
           cargo clippy --target x86_64-pc-windows-msvc -p sparq-kernel --all-targets -- -D warnings
           cargo clippy --target x86_64-pc-windows-msvc -p sparq-app --all-targets -- -D warnings
 

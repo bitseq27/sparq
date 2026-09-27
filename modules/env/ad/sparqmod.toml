@@ -1,0 +1,94 @@
+# sparq module manifest — env/ad (WO-014 increment 3).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The attack/decay envelope: event-driven, sample-accurate start, loopable. A contract-v1
+# module in the purest sense — an event input, an audio-rate cv output, no audio at all.
+# `env` is one of the two taxonomy families defect #84 added to the closed TOPS domain.
+
+[identity]
+id = "sparq/env/ad"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "AD Envelope"
+summary = "Attack/decay envelope - event-driven, sample-accurate, loopable"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "modulation/envelope/ad"
+top = "env"
+kind = "source"
+tier = "t1"
+stability = "stable"
+
+# Any event with value > 0 starts a cycle at that event's exact sample offset. `gate` events are
+# accepted and behave like triggers on the rising message; a gate-off (value 0) is ignored — this
+# is AD, not ADSR: nothing is held, and the manifest says so rather than pretending. (AdsrEnv,
+# the primitive, exists; a gate-holding `env/adsr` is a later module, not a hidden mode.)
+[[ports]]
+id = "trig"
+name = "Trigger"
+direction = "in"
+type = "event"
+event_kinds = ["trigger", "gate"]
+required = false
+
+# Audio-rate unipolar cv: the envelope IS per-sample shape, and a block-rate envelope could not
+# be sample-accurate — the whole point of the module.
+[[ports]]
+id = "out"
+name = "Envelope"
+direction = "out"
+type = "cv"
+rate = "audio"
+range = "unipolar"
+
+[[params]]
+id = "attack"
+name = "Attack"
+type = "float"
+unit = "ms"
+min = 0.1
+max = 2000.0
+default = 2.0
+
+[[params]]
+id = "decay"
+name = "Decay"
+type = "float"
+unit = "ms"
+min = 1.0
+max = 4000.0
+default = 200.0
+
+# 0 = one-shot (a cycle per trigger), 1 = loop (retriggers itself when the cycle ends — a
+# free-running AD oscillator for when no event source exists yet, WO-009's clocks included).
+[[params]]
+id = "loop"
+name = "Loop"
+type = "int"
+unit = "x"
+min = 0.0
+max = 1.0
+default = 0.0
+
+# 0 = exponential (the analogue-like default of the wrapped primitive), 1 = linear.
+[[params]]
+id = "curve"
+name = "Curve (0 exp 1 lin)"
+type = "int"
+unit = "x"
+min = 0.0
+max = 1.0
+default = 0.0
+
+[state]
+schema_id = "sparq/env/ad/state"
+schema_version = 1
+
+[resources]
+latency = 0
+# Attack + decay ceilings at the 48 kHz reference (2000 + 4000 ms): how long the cv keeps
+# moving after the last trigger, with loop off.
+tail_samples = 288000
+cpu_class = "trivial"

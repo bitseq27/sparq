@@ -24,19 +24,30 @@
 //! and it was proven failable by changing a signature on purpose and watching this file fail to
 //! compile (build log, WO-007 increment 3).
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
+// type_complexity is allowed ON PURPOSE: this file's whole job is pinning exact higher-ranked
+// fn-pointer types, and "factor into a type alias" would hide the signature the pin exists to
+// freeze — an alias can be edited without the pin noticing, which defeats the gate.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::type_complexity,
+    dead_code
+)]
 
 use sparq_kernel::block::BlockContext;
 use sparq_module_api::decode::manifest_from;
 use sparq_module_api::error::{CodeKind, ValidationError, ValidationReport};
+use sparq_module_api::event::{Event, EventBuf, EventKind, EventSink, EVENTS_PER_BLOCK};
 use sparq_module_api::manifest::{Manifest, ParamKind, ValidatedManifest};
 use sparq_module_api::module::{
-    AudioCtx, BlockStatus, Module, ModuleError, Oversampling, Resources,
+    AudioCtx, BlockStatus, CvIn, CvOut, Module, ModuleError, Oversampling, Resources,
+    MAX_PORTS_PER_CLASS,
 };
 use sparq_module_api::params::{ParamBus, ParamSet, ParamSlot, MAX_PARAMS};
 use sparq_module_api::port::{
-    connect_audio, connect_cross, connect_cv, Adapter, ChannelSet, ChannelSetError, CvRange,
-    CvRate, Direction, Multiplicity, Phase, PortType, Verdict,
+    connect_audio, connect_cross, connect_cv, Adapter, ChannelSet, ChannelSetError, CvInterp,
+    CvRange, CvRate, CvReduce, Direction, Multiplicity, Phase, PortType, Verdict,
 };
 use sparq_module_api::registry::{Factory, RegisterError, Registration, Registry};
 use sparq_module_api::toml::{self, Table, TomlError, Value};
@@ -60,6 +71,12 @@ const _: fn(ChannelSet) -> Option<usize> = ChannelSet::channels;
 const _: fn(ChannelSet) -> bool = ChannelSet::is_spatial;
 const _: fn(&str) -> Option<CvRate> = CvRate::parse;
 const _: fn(&str) -> Option<CvRange> = CvRange::parse;
+const _: fn(&str) -> Option<CvReduce> = CvReduce::parse;
+const _: fn(CvReduce) -> &'static str = CvReduce::as_str;
+const _: fn(CvReduce, &[f32]) -> f32 = CvReduce::apply;
+const _: fn(&str) -> Option<CvInterp> = CvInterp::parse;
+const _: fn(CvInterp) -> &'static str = CvInterp::as_str;
+const _: fn(CvInterp, f32, f32, &mut [f32]) = CvInterp::expand;
 const _: fn(&str) -> Option<Direction> = Direction::parse;
 const _: fn(&str) -> Option<Multiplicity> = Multiplicity::parse;
 const _: fn(Adapter) -> &'static str = Adapter::module_id;
@@ -117,19 +134,161 @@ const _: fn(&ParamSlot) -> usize = ParamSlot::pending;
 const _: fn(&BlockContext) -> Resources = Resources::from_block;
 const _: fn(&str) -> Option<Oversampling> = Oversampling::parse;
 const _: fn(Oversampling) -> usize = Oversampling::factor;
-// `AudioCtx` is generic over a lifetime, and rustc will not coerce one of its methods to a
-// higher-ranked fn pointer ("one type is more general than the other"). These three are pinned by a
-// typed call site instead: the annotations fail to compile if a return type changes, if a method
-// starts taking `&mut self`, or if it disappears. Weaker than a fn-pointer pin in one respect — it
-// does not pin the receiver's lifetime — and recorded as such rather than left looking equivalent.
+
+// ---------------------------------------------------------------- event payloads (contract v1)
+const _: fn(&str) -> Option<EventKind> = EventKind::parse;
+const _: fn(EventKind) -> &'static str = EventKind::as_str;
+const _: fn(u32, f32) -> Event = Event::trigger;
+const _: fn(u32, f32) -> Event = Event::gate;
+const _: fn(u32) -> Event = Event::clock;
+const _: fn() -> EventBuf = EventBuf::new;
+const _: fn(&mut EventBuf) = EventBuf::clear;
+const _: fn(&EventBuf) -> &[Event] = EventBuf::as_slice;
+const _: fn(&EventBuf) -> usize = EventBuf::len;
+const _: fn(&EventBuf) -> bool = EventBuf::is_empty;
+const _: fn(&EventBuf) -> usize = EventBuf::capacity;
+const _: fn(&EventBuf) -> u64 = EventBuf::dropped;
+const _: fn(&EventBuf) -> u64 = EventBuf::dropped_total;
+// `EventSink`'s methods are lifetime-generic on the receiver, so they get the typed-call-site
+// treatment the header describes rather than fn-pointer coercions rustc refuses.
 const _: () = {
-    fn pin_audio_ctx<'b>(ctx: &AudioCtx<'b>) -> (usize, bool, f32) {
+    fn pin_sink_push<'a, 'b>(s: &'a mut EventSink<'b>, e: Event) -> bool {
+        let pushed: bool = s.push(e);
+        pushed
+    }
+    let _: for<'a, 'b> fn(&'a mut EventSink<'b>, Event) -> bool = pin_sink_push;
+    fn pin_sink_len<'a, 'b>(s: &'a EventSink<'b>) -> usize {
+        let n: usize = s.len();
+        n
+    }
+    let _: for<'a, 'b> fn(&'a EventSink<'b>) -> usize = pin_sink_len;
+    fn pin_sink_capacity<'a, 'b>(s: &'a EventSink<'b>) -> usize {
+        let n: usize = s.capacity();
+        n
+    }
+    let _: for<'a, 'b> fn(&'a EventSink<'b>) -> usize = pin_sink_capacity;
+};
+const _: () = assert!(EVENTS_PER_BLOCK == 64);
+
+// `AudioCtx` and its port views are generic over a lifetime, and rustc will not coerce one of
+// their methods to a higher-ranked fn pointer ("one type is more general than the other"). These
+// are pinned by typed call sites instead: the annotations fail to compile if a return type
+// changes, if a method's receiver changes, or if it disappears. Weaker than a fn-pointer pin in
+// one respect — it does not pin the receiver's lifetime — and recorded as such rather than left
+// looking equivalent. **Contract v1 (WO-008 increment 4) changed this surface deliberately**: the
+// v0 `input`/`output` fields became the `input()`/`output()` first-port views of a multi-port
+// context, and the cv/event accessors are new. This file failing to compile on that edit is the
+// gate doing its job; the pins below are the reviewed v1 shape.
+const _: () = {
+    fn pin_audio_ctx<'b>(ctx: &AudioCtx<'b>) -> (usize, bool, f32, &'b [f32]) {
         let frames: usize = ctx.frames();
         let has_input: bool = ctx.has_input();
         let param: f32 = ctx.param(0);
-        (frames, has_input, param)
+        let input: &'b [f32] = ctx.input();
+        (frames, has_input, param, input)
     }
-    let _: fn(&AudioCtx<'static>) -> (usize, bool, f32) = pin_audio_ctx;
+    let _: for<'b> fn(&AudioCtx<'b>) -> (usize, bool, f32, &'b [f32]) = pin_audio_ctx;
+
+    fn pin_audio_ports<'b, 'c>(
+        ctx: &'b mut AudioCtx<'c>,
+    ) -> (Option<&'c [f32]>, Option<&'b mut [f32]>) {
+        let inp: Option<&'c [f32]> = ctx.audio_in(0);
+        let out: Option<&'b mut [f32]> = ctx.audio_out(0);
+        (inp, out)
+    }
+    let _: for<'b, 'c> fn(&'b mut AudioCtx<'c>) -> (Option<&'c [f32]>, Option<&'b mut [f32]>) =
+        pin_audio_ports;
+
+    fn pin_cv_in<'b>(ctx: &AudioCtx<'b>) -> Option<CvIn<'b>> {
+        let cv: Option<CvIn<'b>> = ctx.cv_in(0);
+        cv
+    }
+    let _: for<'b> fn(&AudioCtx<'b>) -> Option<CvIn<'b>> = pin_cv_in;
+
+    fn pin_cv_out<'b, 'c>(ctx: &'b mut AudioCtx<'c>) -> Option<CvOut<'b>> {
+        let cv: Option<CvOut<'b>> = ctx.cv_out(0);
+        cv
+    }
+    let _: for<'b, 'c> fn(&'b mut AudioCtx<'c>) -> Option<CvOut<'b>> = pin_cv_out;
+
+    fn pin_events_in<'b>(ctx: &AudioCtx<'b>) -> Option<&'b [Event]> {
+        let evs: Option<&'b [Event]> = ctx.events_in(0);
+        evs
+    }
+    let _: for<'b> fn(&AudioCtx<'b>) -> Option<&'b [Event]> = pin_events_in;
+
+    fn pin_event_out<'b, 'c>(ctx: &'b mut AudioCtx<'c>) -> Option<EventSink<'b>> {
+        let sink: Option<EventSink<'b>> = ctx.event_out(0);
+        sink
+    }
+    let _: for<'b, 'c> fn(&'b mut AudioCtx<'c>) -> Option<EventSink<'b>> = pin_event_out;
+
+    // The take_* variants move views out with the CONTEXT's lifetime — the multi-port pattern.
+    fn pin_take_audio_out<'b, 'c>(ctx: &'b mut AudioCtx<'c>) -> Option<&'c mut [f32]> {
+        let out: Option<&'c mut [f32]> = ctx.take_audio_out(0);
+        out
+    }
+    let _: for<'b, 'c> fn(&'b mut AudioCtx<'c>) -> Option<&'c mut [f32]> = pin_take_audio_out;
+
+    fn pin_take_cv_out<'b, 'c>(ctx: &'b mut AudioCtx<'c>) -> Option<CvOut<'c>> {
+        let cv: Option<CvOut<'c>> = ctx.take_cv_out(0);
+        cv
+    }
+    let _: for<'b, 'c> fn(&'b mut AudioCtx<'c>) -> Option<CvOut<'c>> = pin_take_cv_out;
+
+    fn pin_take_event_out<'b, 'c>(ctx: &'b mut AudioCtx<'c>) -> Option<EventSink<'c>> {
+        let sink: Option<EventSink<'c>> = ctx.take_event_out(0);
+        sink
+    }
+    let _: for<'b, 'c> fn(&'b mut AudioCtx<'c>) -> Option<EventSink<'c>> = pin_take_event_out;
+
+    fn pin_v0_output<'b, 'c>(ctx: &'b mut AudioCtx<'c>) -> &'b mut [f32] {
+        let out: &'b mut [f32] = ctx.output();
+        out
+    }
+    let _: for<'b, 'c> fn(&'b mut AudioCtx<'c>) -> &'b mut [f32] = pin_v0_output;
+};
+
+// The cv view enums, pinned by typed call sites (CvIn is Copy and lifetime-generic; CvOut borrows).
+const _: () = {
+    fn pin_cv_in_views<'b>(cv: CvIn<'b>) -> (bool, Option<f32>, Option<&'b [f32]>, f32) {
+        let connected: bool = cv.is_connected();
+        let block: Option<f32> = cv.block();
+        let audio: Option<&'b [f32]> = cv.audio();
+        let at: f32 = cv.at(0);
+        (connected, block, audio, at)
+    }
+    let _: for<'b> fn(CvIn<'b>) -> (bool, Option<f32>, Option<&'b [f32]>, f32) = pin_cv_in_views;
+
+    fn pin_cv_out_views<'b>(mut cv: CvOut<'b>) {
+        cv.set(0.5);
+        let _block: Option<&f32> = cv.as_block();
+        let _audio: Option<&mut [f32]> = cv.as_audio();
+    }
+    let _: for<'b> fn(CvOut<'b>) = pin_cv_out_views;
+};
+
+// Constructors and builders: the host-side assembly surface of contract v1.
+const _: fn(&'static BlockContext, &'static ParamSet) -> AudioCtx<'static> = AudioCtx::new;
+const _: fn(
+    &'static BlockContext,
+    &'static ParamSet,
+    &'static [f32],
+    &'static mut [f32],
+) -> AudioCtx<'static> = AudioCtx::single;
+const _: fn(AudioCtx<'static>, &'static [f32]) -> AudioCtx<'static> = AudioCtx::with_audio_in;
+const _: fn(AudioCtx<'static>, &'static mut [f32]) -> AudioCtx<'static> = AudioCtx::with_audio_out;
+const _: fn(AudioCtx<'static>, CvIn<'static>) -> AudioCtx<'static> = AudioCtx::with_cv_in;
+const _: fn(AudioCtx<'static>, CvOut<'static>) -> AudioCtx<'static> = AudioCtx::with_cv_out;
+const _: fn(AudioCtx<'static>, &'static [Event]) -> AudioCtx<'static> = AudioCtx::with_events_in;
+const _: fn(AudioCtx<'static>, &'static mut EventBuf) -> AudioCtx<'static> =
+    AudioCtx::with_event_out;
+const _: () = {
+    fn pin_sink_new<'a>(b: &'a mut EventBuf) -> EventSink<'a> {
+        let sink: EventSink<'a> = EventSink::new(b);
+        sink
+    }
+    let _: for<'a> fn(&'a mut EventBuf) -> EventSink<'a> = pin_sink_new;
 };
 
 // ---------------------------------------------------------------- registry + discovery
@@ -180,6 +339,15 @@ const _: fn(&Value) -> &'static str = Value::type_name;
 const _: () = assert!(std::mem::size_of::<ParamSet>() == 8 + 4 * MAX_PARAMS);
 const _: () = assert!(std::mem::size_of::<Factory>() == std::mem::size_of::<usize>());
 const _: () = assert!(MAX_PARAMS == 32);
+// Contract v1's fixed capacities: the context is assembled per node per block on the audio thread,
+// and the event storage is a fixed array — both sizes are load-bearing, so both are pinned.
+const _: () = assert!(MAX_PORTS_PER_CLASS == 8);
+const _: () = assert!(std::mem::size_of::<Event>() <= 64);
+const _: () = assert!(std::mem::size_of::<EventBuf>() <= 64 * std::mem::size_of::<Event>() + 32);
+const _: () = assert!(
+    std::mem::size_of::<AudioCtx<'static>>()
+        <= 24 * std::mem::size_of::<usize>() * MAX_PORTS_PER_CLASS
+);
 
 fn assert_copy<T: Copy>() {}
 fn assert_send_sync<T: Send + Sync>() {}

@@ -1,0 +1,97 @@
+# sparq module manifest — syn/membrane (WO-014 increment 3).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The drum-membrane voice: the Phase-B kick topology (patch.rs — sine body with a fast pitch
+# envelope, gated noise-burst click, amplitude AD, lowpass) promoted to a trigger-driven module.
+# The recipe is measured, not invented: it is the kick inside the phase-b demo golden.
+
+[identity]
+id = "sparq/syn/membrane"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Membrane"
+summary = "Drum-membrane voice - pitched sine drop plus noise burst, the techno kick"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "synth/drum/membrane"
+top = "syn"
+kind = "source"
+tier = "t1"
+stability = "stable"
+
+# Contract v1: a real event port. Triggers start a hit at their exact sample offset (the host
+# delivers the block's events pre-sorted; the module consumes them inside the frame loop).
+# `gate` is accepted and behaves like `trigger` on any event with value > 0; a gate-off (value 0)
+# is ignored — this is a one-shot voice, not a sustained one, and the manifest says so rather
+# than pretending to hold.
+[[ports]]
+id = "trig"
+name = "Trigger"
+direction = "in"
+type = "event"
+event_kinds = ["trigger", "gate"]
+required = false
+
+[[ports]]
+id = "out"
+name = "Output"
+direction = "out"
+type = "audio"
+channel_set = "mono"
+
+[[params]]
+id = "pitch"
+name = "Pitch"
+type = "float"
+unit = "Hz"
+min = 20.0
+max = 200.0
+default = 50.0
+
+[[params]]
+id = "punch"
+name = "Punch (transient pitch rise)"
+type = "float"
+unit = "Hz"
+min = 0.0
+max = 400.0
+default = 130.0
+
+[[params]]
+id = "decay"
+name = "Decay"
+type = "float"
+unit = "ms"
+min = 20.0
+max = 1000.0
+default = 260.0
+
+[[params]]
+id = "noise"
+name = "Noise Burst"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 1.0
+default = 0.5
+
+[[params]]
+id = "damp"
+name = "Damp (body lowpass)"
+type = "float"
+unit = "Hz"
+min = 80.0
+max = 2000.0
+default = 320.0
+
+[state]
+schema_id = "sparq/syn/membrane/state"
+schema_version = 1
+
+[resources]
+latency = 0
+# One second at the 48 kHz reference: the decay ceiling (1000 ms) plus lowpass ring-out.
+tail_samples = 48000
+cpu_class = "light"

@@ -829,6 +829,9 @@ mod tests {
             channel_set_variable: false,
             cv_rate: None,
             cv_range: None,
+            cv_reduce: Default::default(),
+            cv_interp: Default::default(),
+            event_kinds: Vec::new(),
             multiplicity: Multiplicity::Single,
             latency_contribution: 0,
         }

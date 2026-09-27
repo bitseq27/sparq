@@ -17,7 +17,7 @@
 //! check saw "old" sources and skipped the build, and the top-level-only stamp agreed with the
 //! stale binary. `build.bat` now recomputes this same fingerprint (recursively, in PowerShell)
 //! and refuses to proceed on a mismatch — the definition of the fingerprint therefore lives in
-//! BOTH files and must be changed in both: every `*.rs` under the five `src` roots, count + total
+//! BOTH files and must be changed in both: every `*.rs` under the six `src` roots, count + total
 //! bytes, rendered `Nf/NB`.
 
 fn main() {
@@ -27,6 +27,7 @@ fn main() {
         "../sparq-audio/src",
         "../sparq-ui/src",
         "../sparq-module-api/src",
+        "../sparq-music/src",
         "src",
     ] {
         println!("cargo:rerun-if-changed={d}");
@@ -37,6 +38,7 @@ fn main() {
         "../sparq-audio/src",
         "../sparq-ui/src",
         "../sparq-module-api/src",
+        "../sparq-music/src",
         "src",
     ];
     let mut files = 0usize;

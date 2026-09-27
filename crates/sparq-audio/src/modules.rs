@@ -14,13 +14,19 @@
 //! each batch behind the same gate: manifest validates → identity matches → golden checked in →
 //! zero allocations measured.
 //!
-//! **Increment 2 (batch 2) ships the six AUDIO-domain modules**: `syn/noise`, `syn/polyblep`,
+//! **Increment 2 (batch 2) shipped the six AUDIO-domain modules**: `syn/noise`, `syn/polyblep`,
 //! `flt/svf`, `util/delay`, `fx/bitcrush`, `util/panner` — each a contract-conforming wrapper of
-//! a Phase-B DSP primitive that already earned its measurements. The remaining eight
-//! (`syn/membrane`, `env/ad`, `mod/lfo`, `mod/clk-div`, `util/mixer`, `ana/tap`, `dsp/scope`,
-//! `out/main`) are event/cv/multi-port/display domain: they wait for the multi-port `AudioCtx`
-//! (contract v1) and WO-009's clocks, declared rather than faked — a module whose trigger port
-//! cannot receive a trigger is a lie with a manifest.
+//! a Phase-B DSP primitive that already earned its measurements.
+//!
+//! **Contract v1 (WO-008 increment 4) migrated the batch and made two of them honest**: `ana/rms`
+//! publishes on its declared `cv` port instead of riding in an audio buffer its manifest never
+//! declared, and `flt/svf` grew the block-rate cv modulation input that the rms→filter acceptance
+//! demo drives. **Increment 3 shipped the three the contract unblocked** (`syn/membrane`,
+//! `env/ad`, `util/mixer`), and **increment 4 ships the two the clocks unblocked** (`mod/lfo`,
+//! `mod/clk-div` — the first event-PROCESSING module: events in, events out). Four remain:
+//! `ana/tap`, `dsp/scope` wait on the ring publication (ADR-009 d8), `out/main` on the canvas
+//! master handover. Declared rather than faked: a module whose trigger port cannot receive a
+//! trigger is a lie with a manifest.
 //!
 //! The v0 parameter discipline, stated once for the batch: parameters are read once per block
 //! (zipper-free at block granularity, like `syn/sine`), `process` is allocation-free **at steady
@@ -53,6 +59,16 @@ pub const DELAY_MANIFEST: &str = include_str!("../../../modules/util/delay/sparq
 pub const BITCRUSH_MANIFEST: &str = include_str!("../../../modules/fx/bitcrush/sparqmod.toml");
 /// The `util/panner` manifest — the on-disk file, compiled in.
 pub const PANNER_MANIFEST: &str = include_str!("../../../modules/util/panner/sparqmod.toml");
+/// The `syn/membrane` manifest — the on-disk file, compiled in.
+pub const MEMBRANE_MANIFEST: &str = include_str!("../../../modules/syn/membrane/sparqmod.toml");
+/// The `env/ad` manifest — the on-disk file, compiled in.
+pub const ENV_AD_MANIFEST: &str = include_str!("../../../modules/env/ad/sparqmod.toml");
+/// The `util/mixer` manifest — the on-disk file, compiled in.
+pub const MIXER_MANIFEST: &str = include_str!("../../../modules/util/mixer/sparqmod.toml");
+/// The `mod/lfo` manifest — the on-disk file, compiled in.
+pub const LFO_MANIFEST: &str = include_str!("../../../modules/mod/lfo/sparqmod.toml");
+/// The `mod/clk-div` manifest — the on-disk file, compiled in.
+pub const CLK_DIV_MANIFEST: &str = include_str!("../../../modules/mod/clk-div/sparqmod.toml");
 
 // --------------------------------------------------------------------------- syn/sine
 
@@ -107,8 +123,10 @@ impl Module for Sine {
         let freq = f64::from(ctx.param(0));
         let amp = ctx.param(1);
         let inc = freq / f64::from(self.rate);
-        let frames = ctx.frames().min(ctx.output.len());
-        for s in ctx.output.iter_mut().take(frames) {
+        let block_frames = ctx.frames();
+        let out = ctx.output();
+        let frames = block_frames.min(out.len());
+        for s in out.iter_mut().take(frames) {
             *s = ((self.phase * std::f64::consts::TAU).sin() * f64::from(amp)) as f32;
             self.phase += inc;
             if self.phase >= 1.0 {
@@ -183,12 +201,15 @@ impl Module for Gain {
         if !ctx.has_input() {
             // An unconnected input is an explicit signal, never silence-by-accident: the status
             // says so, and the buffer is still written.
-            for s in ctx.output.iter_mut() {
+            for s in ctx.output().iter_mut() {
                 *s = 0.0;
             }
             return BlockStatus::Silenced;
         }
-        for (o, i) in ctx.output.iter_mut().zip(ctx.input.iter()) {
+        // Contract v1 borrow discipline: the input view escapes with the context's lifetime, so
+        // taking it before the output borrow is not a workaround — it is the documented two-step.
+        let input = ctx.input();
+        for (o, i) in ctx.output().iter_mut().zip(input.iter()) {
             *o = *i * self.gain;
         }
         BlockStatus::Ok
@@ -212,9 +233,12 @@ pub fn create_gain() -> Box<dyn Module> {
 // --------------------------------------------------------------------------- ana/rms
 
 /// RMS follower as a cv source — the analysis-as-control-source principle in its smallest form.
-/// Parameter 0 is a floor: below it the output is zero (a gate, not a squeeze). The value rides
-/// in `output[0]` per block (the v0 convention the contract reference established); peak
-/// following and the `data` port arrive in a later batch.
+/// Parameter 0 is a floor: below it the output is zero (a gate, not a squeeze).
+///
+/// Contract v1: the value travels on the module's declared block-rate `cv` output port
+/// (`level`) — the v0 convention of riding in `output[0]` of an audio buffer the manifest never
+/// declared is gone, because a wire that says `cv` and a payload that travels as `audio` is a
+/// lie in two places. Peak following and the `data` port arrive in a later batch.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Rms;
 
@@ -240,26 +264,39 @@ impl Module for Rms {
     }
 
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
-        for s in ctx.output.iter_mut() {
-            *s = 0.0;
+        let level = if !ctx.has_input() {
+            0.0
+        } else {
+            let mut sum = 0.0f64;
+            let mut n = 0usize;
+            for (i, v) in ctx.input().iter().enumerate() {
+                let x = f64::from(*v);
+                sum += x * x;
+                n = i + 1;
+            }
+            if n == 0 {
+                0.0
+            } else {
+                let rms = (sum / n as f64).sqrt();
+                let floor = f64::from(ctx.param(0));
+                if rms < floor {
+                    0.0
+                } else {
+                    rms as f32
+                }
+            }
+        };
+        // The declared port carries the value; a host that did not present it (a module run
+        // outside its manifest's shape — tests do this) gets the number nowhere, and the status
+        // still tells the truth about the input.
+        if let Some(mut cv) = ctx.cv_out(0) {
+            cv.set(level);
         }
-        if !ctx.has_input() {
-            return BlockStatus::Silenced;
+        if ctx.has_input() {
+            BlockStatus::Ok
+        } else {
+            BlockStatus::Silenced
         }
-        let mut sum = 0.0f64;
-        let mut n = 0usize;
-        for (i, v) in ctx.input.iter().enumerate() {
-            let x = f64::from(*v);
-            sum += x * x;
-            n = i + 1;
-        }
-        if n == 0 {
-            return BlockStatus::Ok;
-        }
-        let rms = (sum / n as f64).sqrt();
-        let floor = f64::from(ctx.param(0));
-        ctx.output[0] = if rms < floor { 0.0 } else { rms as f32 };
-        BlockStatus::Ok
     }
 
     fn message(&mut self, _payload: &[u8]) -> Result<(), ModuleError> {
@@ -332,8 +369,10 @@ impl Module for Noise {
             4 => NoiseColour::Violet,
             _ => NoiseColour::White,
         };
-        let frames = ctx.frames().min(ctx.output.len());
-        self.inner.process(&mut ctx.output[..frames]);
+        let block_frames = ctx.frames();
+        let out = ctx.output();
+        let frames = block_frames.min(out.len());
+        self.inner.process(&mut out[..frames]);
         BlockStatus::Ok
     }
 
@@ -427,8 +466,10 @@ impl Module for PolyBlep {
             self.applied = (freq, shape, pw, partials);
         }
         self.inner.amp = amp;
-        let frames = ctx.frames().min(ctx.output.len());
-        self.inner.process(&mut ctx.output[..frames]);
+        let block_frames = ctx.frames();
+        let out = ctx.output();
+        let frames = block_frames.min(out.len());
+        self.inner.process(&mut out[..frames]);
         BlockStatus::Ok
     }
 
@@ -452,8 +493,17 @@ pub fn create_polyblep() -> Box<dyn Module> {
 /// The state-variable filter (ZDF trapezoidal, Cytomic derivation — the Phase-B primitive whose
 /// defect #11 caught "every filter silently a 1 Hz lowpass" and pinned the fix with a test).
 /// Parameters: 0 cutoff (Hz) · 1 resonance (0..1) · 2 mode (0 lp · 1 hp · 2 bp · 3 notch ·
-/// 4 peak). Stereo: one filter state per channel, ticked per sample — no de-interleave scratch,
-/// so `process` stays allocation-free.
+/// 4 peak) · 3 mod (0..1, the depth of the cv modulation input). Stereo: one filter state per
+/// channel, ticked per sample — no de-interleave scratch, so `process` stays allocation-free.
+///
+/// **Contract v1 modulation input** (`cutoff-mod`, block-rate unipolar cv, optional): when
+/// connected, the cutoff for the block is
+/// `cutoff · 2^(2 · mod · cv)`, clamped to the parameter's range and quantised to f32 — the
+/// parameter's own precision, deliberately, so that a hand-driven reference filter set to the
+/// computed cutoff renders BIT-IDENTICAL to the modulated one. That equality is the rms→filter
+/// acceptance test's arithmetic (`tests/contract_v1.rs`): the cv wire is proven exact, not
+/// approximately right. At the default (`mod = 0`) or unconnected, this is byte-for-byte the
+/// increment-2 filter, which the module goldens pin.
 ///
 /// v0 state is EMPTY and says so: integrator memory (so a save/restore lands mid-ring instead of
 /// restarting it) arrives with state schema v1 — an empty blob that claims to be the whole truth
@@ -511,12 +561,20 @@ impl Module for Svf {
 
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
         if !ctx.has_input() {
-            for s in ctx.output.iter_mut() {
+            for s in ctx.output().iter_mut() {
                 *s = 0.0;
             }
             return BlockStatus::Silenced;
         }
-        let cutoff = f64::from(ctx.param(0).clamp(10.0, 20_000.0));
+        let mod_depth = ctx.param(3).clamp(0.0, 1.0);
+        // Block-rate cv: `at(0)` is the block's value; Unconnected reads as an explicit 0.0, so
+        // "nothing plugged in" and "plugged in at zero" both mean no modulation — the same sound
+        // from the same declaration, which is what the golden needs and the contract allows.
+        let cv = ctx.cv_in(0).map_or(0.0, |v| v.at(0).clamp(0.0, 1.0));
+        let base = ctx.param(0).clamp(10.0, 20_000.0);
+        let modulated =
+            (f64::from(base) * 2.0f64.powf(2.0 * f64::from(mod_depth) * f64::from(cv))) as f32;
+        let cutoff = f64::from(modulated.clamp(10.0, 20_000.0));
         let reso = ctx.param(1).clamp(0.0, 1.0);
         let mode = (ctx.param(2).round() as i32).clamp(0, 4);
         if self.applied.0 != cutoff || self.applied.1 != reso || self.applied.2 != mode {
@@ -558,14 +616,17 @@ fn stereo_tick<F: FnMut(usize, f32) -> f32>(ctx: &mut AudioCtx<'_>, mut tick: F)
     if frames == 0 {
         return BlockStatus::Ok;
     }
-    let in_ch = (ctx.input.len() / frames).max(1);
-    let out_ch = (ctx.output.len() / frames).max(1);
+    // Contract v1 borrow discipline: both views taken once, before the walk.
+    let input = ctx.input();
+    let output = ctx.output();
+    let in_ch = (input.len() / frames).max(1);
+    let out_ch = (output.len() / frames).max(1);
     for f in 0..frames {
         for c in 0..out_ch {
             let src = f * in_ch + c.min(in_ch - 1);
-            let v = ctx.input.get(src).copied().unwrap_or(0.0);
+            let v = input.get(src).copied().unwrap_or(0.0);
             let y = tick(c.min(1), v);
-            if let Some(slot) = ctx.output.get_mut(f * out_ch + c) {
+            if let Some(slot) = output.get_mut(f * out_ch + c) {
                 *slot = y;
             }
         }
@@ -639,7 +700,7 @@ impl Module for Delay {
 
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
         if !ctx.has_input() {
-            for s in ctx.output.iter_mut() {
+            for s in ctx.output().iter_mut() {
                 *s = 0.0;
             }
             return BlockStatus::Silenced;
@@ -736,7 +797,7 @@ impl Module for BitCrusher {
 
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
         if !ctx.has_input() {
-            for s in ctx.output.iter_mut() {
+            for s in ctx.output().iter_mut() {
                 *s = 0.0;
             }
             return BlockStatus::Silenced;
@@ -814,7 +875,7 @@ impl Module for Panner {
 
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
         if !ctx.has_input() {
-            for s in ctx.output.iter_mut() {
+            for s in ctx.output().iter_mut() {
                 *s = 0.0;
             }
             return BlockStatus::Silenced;
@@ -828,12 +889,14 @@ impl Module for Panner {
         };
         let (gl, gr) = (gl as f32, gr as f32);
         let frames = ctx.frames();
+        let input = ctx.input();
+        let output = ctx.output();
         for f in 0..frames {
-            let v = ctx.input.get(f).copied().unwrap_or(0.0); // declared mono: one sample per frame
-            if let Some(l) = ctx.output.get_mut(f * 2) {
+            let v = input.get(f).copied().unwrap_or(0.0); // declared mono: one sample per frame
+            if let Some(l) = output.get_mut(f * 2) {
                 *l = v * gl;
             }
-            if let Some(r) = ctx.output.get_mut(f * 2 + 1) {
+            if let Some(r) = output.get_mut(f * 2 + 1) {
                 *r = v * gr;
             }
         }
@@ -851,18 +914,768 @@ pub fn create_panner() -> Box<dyn Module> {
     Box::new(Panner::new())
 }
 
+// --------------------------------------------------------------------------- syn/membrane
+
+/// The fixed seed of the membrane's noise burst. A constant, not a parameter: v0 renders are
+/// reproducible from the start (ADR-007), and a per-patch seed arrives with the seed tree —
+/// declared here rather than left implicit in a constructor.
+const MEMBRANE_SEED: u64 = 0x4D45_4D42_5241_4E45; // "MEMBRANE"
+
+/// The drum-membrane voice (WO-014 increment 3): the Phase-B kick topology — measured, inside
+/// the phase-b demo golden — promoted to a trigger-driven module. Per hit: a sine body at
+/// `pitch` lifted by up to `punch` Hz through a FIXED fast pitch envelope (0.5/55 ms — the
+/// 909 click-then-body character the recipe earned), a gated seeded noise burst, an amplitude
+/// AD (`decay`), and a body lowpass (`damp`).
+///
+/// Contract v1 is the point of the module: the frame loop consumes the block's pre-sorted
+/// events BEFORE computing each frame, so a trigger at sample 37 starts the membrane at sample
+/// 37 — not at the next block, and not "somewhere in there". Events with value 0 are gate-offs
+/// and are ignored (a one-shot voice says so in its manifest).
+///
+/// Parameters: 0 pitch (Hz) · 1 punch (Hz) · 2 decay (ms) · 3 noise (0..1) · 4 damp (Hz).
+/// v0 state is empty and says so (the `flt/svf` declaration): hit memory is performance state,
+/// not project state. `reset` returns the voice — envelopes, phase and the noise stream — to
+/// its constructed state, so a render replays from any save point.
+#[derive(Clone, Copy, Debug)]
+pub struct Membrane {
+    sine: crate::dsp::core::SineOsc,
+    pitch_env: crate::dsp::env::AdEnv,
+    noise: crate::dsp::noise::Noise,
+    noise_env: crate::dsp::env::AdEnv,
+    amp_env: crate::dsp::env::AdEnv,
+    lp: crate::dsp::filter::SvfFilter,
+    rate: u32,
+    applied: (f32, f32, f32, f32, f32),
+}
+
+impl Membrane {
+    /// A fresh voice with the Phase-B kick defaults.
+    #[must_use]
+    pub fn new() -> Self {
+        use crate::dsp::core::SineOsc;
+        use crate::dsp::env::{AdEnv, EnvCurve};
+        use crate::dsp::filter::SvfFilter;
+        use crate::dsp::noise::{Noise, NoiseColour};
+        const R: u32 = 48_000;
+        let mut sine = SineOsc::new(50.0, 1.0);
+        sine.prepare(R);
+        let mut pitch_env = AdEnv::new(0.5, 55.0);
+        pitch_env.curve = EnvCurve::Exp;
+        pitch_env.prepare(R);
+        let mut noise = Noise::new(MEMBRANE_SEED);
+        noise.colour = NoiseColour::White;
+        noise.amp = 0.6;
+        let mut noise_env = AdEnv::new(0.2, 18.0);
+        noise_env.prepare(R);
+        let mut amp_env = AdEnv::new(0.4, 260.0);
+        amp_env.prepare(R);
+        let mut lp = SvfFilter::new(320.0, 0.25);
+        lp.prepare(R);
+        Self {
+            sine,
+            pitch_env,
+            noise,
+            noise_env,
+            amp_env,
+            lp,
+            rate: R,
+            applied: (f32::NAN, f32::NAN, f32::NAN, f32::NAN, f32::NAN),
+        }
+    }
+}
+
+impl Default for Membrane {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Module for Membrane {
+    fn id(&self) -> &str {
+        "sparq/syn/membrane"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        if state.is_empty() {
+            return Ok(());
+        }
+        Err(ModuleError::State(
+            "sparq/syn/membrane v0 state is empty; hit memory arrives with state schema v1",
+        ))
+    }
+
+    fn prepare(&mut self, resources: &Resources) -> Result<(), ModuleError> {
+        if resources.sample_rate == 0 {
+            return Err(ModuleError::Resources("sample_rate must be non-zero"));
+        }
+        self.rate = resources.sample_rate;
+        self.sine.prepare(resources.sample_rate);
+        self.pitch_env.prepare(resources.sample_rate);
+        self.noise_env.prepare(resources.sample_rate);
+        self.amp_env.prepare(resources.sample_rate);
+        self.lp.prepare(resources.sample_rate);
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        // Inputs first (they escape with the context's lifetime), scalars next, and the OUTPUT
+        // view LAST — the v1 borrow discipline: `output()` reborrow's the context, so every
+        // `&self` read must already be done when it is taken.
+        let events = ctx.events_in(0).unwrap_or(&[]);
+        let block_frames = ctx.frames();
+
+        let pitch = ctx.param(0).clamp(20.0, 200.0);
+        let punch = ctx.param(1).clamp(0.0, 400.0);
+        let decay = ctx.param(2).clamp(20.0, 1000.0);
+        let noise_amt = ctx.param(3).clamp(0.0, 1.0);
+        let damp = ctx.param(4).clamp(80.0, 2000.0);
+        if self.applied != (pitch, punch, decay, noise_amt, damp) {
+            self.amp_env.decay_ms = decay;
+            self.amp_env.recompute();
+            self.lp.set_cutoff(f64::from(damp));
+            self.applied = (pitch, punch, decay, noise_amt, damp);
+        }
+
+        let rate = self.rate;
+        let out = ctx.output();
+        let frames = block_frames.min(out.len());
+        let mut cursor = 0usize;
+        for (f, slot) in out.iter_mut().enumerate().take(frames) {
+            // Sample-accurate onsets: every event at or before this frame fires before the
+            // frame is computed. The list is pre-sorted (the host guarantee), so one cursor
+            // walk is the whole cost.
+            while cursor < events.len() && events[cursor].sample as usize <= f {
+                if events[cursor].value > 0.0 {
+                    self.pitch_env.trigger();
+                    self.noise_env.trigger();
+                    self.amp_env.trigger();
+                }
+                cursor += 1;
+            }
+            // The Phase-B recipe, exactly: envelopes are TICKED (driven), never sampled — the
+            // frozen-attack bug the demo's build log records is why this comment exists.
+            let penv = self.pitch_env.tick();
+            let freq = f64::from(pitch + punch * penv);
+            self.sine.set_freq(freq, rate);
+            let body = self.sine.process_mono();
+            let click = self.noise.tick() * self.noise_env.tick();
+            let v = (body * 0.9 + click * noise_amt) * self.amp_env.tick();
+            *slot = self.lp.tick(v);
+        }
+        BlockStatus::Ok
+    }
+
+    fn message(&mut self, payload: &[u8]) -> Result<(), ModuleError> {
+        if payload == b"reset" {
+            // The LIVE rate is captured BEFORE the voice is rebuilt: `Self::new()` constructs at
+            // the 48 kHz reference, and a reset between blocks at any other rate must not leave
+            // the reference-rate coefficients behind (this ordering was a real bug in the first
+            // draft — the kind a 48 kHz-only test suite would never catch).
+            let rate = self.rate;
+            *self = Self::new();
+            self.rate = rate;
+            self.sine.prepare(rate);
+            self.pitch_env.prepare(rate);
+            self.noise_env.prepare(rate);
+            self.amp_env.prepare(rate);
+            self.lp.prepare(rate);
+            return Ok(());
+        }
+        Err(ModuleError::Message("sparq/syn/membrane understands only `reset`"))
+    }
+}
+
+/// Factory for [`Membrane`].
+#[must_use]
+pub fn create_membrane() -> Box<dyn Module> {
+    Box::new(Membrane::new())
+}
+
+// --------------------------------------------------------------------------- env/ad
+
+/// The attack/decay envelope (WO-014 increment 3) — contract v1 in its purest shape: an `event`
+/// input, an AUDIO-rate `cv` output, no audio ports at all. A cycle starts at the exact sample
+/// offset of any event with value > 0; `loop` re-triggers at cycle end (free-running from
+/// activation, which is the honest substitute for a clock until WO-009 ships); gate-off events
+/// are ignored — this is AD, not ADSR, and the manifest says so rather than hiding a hold mode.
+///
+/// Wraps the Phase-B [`AdEnv`](crate::dsp::env::AdEnv) — the percussion workhorse whose
+/// five-time-constants arrival semantics and retrigger-from-current-level smoothness are already
+/// measured. Parameters: 0 attack (ms) · 1 decay (ms) · 2 loop (0/1) · 3 curve (0 exp · 1 lin).
+/// v0 state is empty and says so.
+#[derive(Clone, Copy, Debug)]
+pub struct EnvAd {
+    env: crate::dsp::env::AdEnv,
+    applied: (f32, f32, i32, i32),
+}
+
+impl EnvAd {
+    /// A fresh envelope at the manifest defaults (2 ms / 200 ms, exp, one-shot).
+    #[must_use]
+    pub fn new() -> Self {
+        let mut env = crate::dsp::env::AdEnv::new(2.0, 200.0);
+        env.prepare(48_000);
+        Self { env, applied: (f32::NAN, f32::NAN, i32::MIN, i32::MIN) }
+    }
+}
+
+impl Default for EnvAd {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Module for EnvAd {
+    fn id(&self) -> &str {
+        "sparq/env/ad"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        if state.is_empty() {
+            return Ok(());
+        }
+        Err(ModuleError::State(
+            "sparq/env/ad v0 state is empty; a mid-cycle save/restore arrives with state schema v1",
+        ))
+    }
+
+    fn prepare(&mut self, resources: &Resources) -> Result<(), ModuleError> {
+        if resources.sample_rate == 0 {
+            return Err(ModuleError::Resources("sample_rate must be non-zero"));
+        }
+        self.env.prepare(resources.sample_rate);
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        let events = ctx.events_in(0).unwrap_or(&[]);
+        let frames = ctx.frames();
+
+        let attack = ctx.param(0).clamp(0.1, 2000.0);
+        let decay = ctx.param(1).clamp(1.0, 4000.0);
+        let loop_on = ctx.param(2).round().clamp(0.0, 1.0) as i32;
+        let curve = ctx.param(3).round().clamp(0.0, 1.0) as i32;
+        if self.applied != (attack, decay, loop_on, curve) {
+            self.env.attack_ms = attack;
+            self.env.decay_ms = decay;
+            self.env.curve = if curve == 1 {
+                crate::dsp::env::EnvCurve::Linear
+            } else {
+                crate::dsp::env::EnvCurve::Exp
+            };
+            self.env.recompute();
+            self.applied = (attack, decay, loop_on, curve);
+        }
+
+        let Some(mut cv) = ctx.take_cv_out(0) else {
+            // A host that presents no cv port for a module whose ONLY output is cv has bigger
+            // problems than this block; say so rather than tick into nowhere and look busy.
+            return BlockStatus::Failed;
+        };
+        let Some(buf) = cv.as_audio() else {
+            return BlockStatus::Failed; // declared audio-rate; a block-rate slot is a host bug
+        };
+        let mut cursor = 0usize;
+        for f in 0..frames.min(buf.len()) {
+            while cursor < events.len() && events[cursor].sample as usize <= f {
+                if events[cursor].value > 0.0 {
+                    self.env.trigger();
+                }
+                cursor += 1;
+            }
+            let v = self.env.tick();
+            if loop_on == 1 && self.env.is_idle() {
+                // Free-run: the cycle re-starts from its own end. Placed AFTER the tick so the
+                // idle frame still publishes its (zero) level — the seam is one sample, and it
+                // is the declared behaviour, not a glitch to hide.
+                self.env.trigger();
+            }
+            buf[f] = v;
+        }
+        BlockStatus::Ok
+    }
+
+    fn message(&mut self, payload: &[u8]) -> Result<(), ModuleError> {
+        if payload == b"reset" {
+            self.env.reset();
+            return Ok(());
+        }
+        Err(ModuleError::Message("sparq/env/ad understands only `reset`"))
+    }
+}
+
+/// Factory for [`EnvAd`].
+#[must_use]
+pub fn create_env_ad() -> Box<dyn Module> {
+    Box::new(EnvAd::new())
+}
+
+// --------------------------------------------------------------------------- util/mixer
+
+/// The 4×4 stereo matrix (WO-014 increment 3): the explicit merge the connection rules require —
+/// audio fan-in sums HERE, in a module the patch can see, never silently in the host. Eight
+/// audio ports make it the first multi-port first-party module, riding contract v1's `take_*`
+/// output pattern; per-cell gains plus per-output trims are 20 of the 32 snapshot parameters,
+/// which is why the matrix is 4×4 and not 8×8 (declared in the manifest header, not discovered
+/// by an author at 3 a.m.).
+///
+/// Defaults are the IDENTITY wiring — an untouched mixer is four parallel bit-exact
+/// pass-throughs, and the golden pins exactly that. Cell order in the snapshot is row-major:
+/// `param(n*4 + m)` is In n → Out m; `param(16 + m)` is Out m's trim. Sums accumulate in f64
+/// (plan §5.4's rule for every summing path) and are written once, as f32.
+///
+/// v0 state is empty and says so: the matrix IS the parameter snapshot, which the project
+/// already saves.
+#[derive(Clone, Copy, Debug)]
+pub struct Mixer;
+
+impl Mixer {
+    /// The matrix is stateless; the constructor exists for the factory shape.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for Mixer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Module for Mixer {
+    fn id(&self) -> &str {
+        "sparq/util/mixer"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        if state.is_empty() {
+            return Ok(());
+        }
+        Err(ModuleError::State(
+            "sparq/util/mixer state is the parameter snapshot the project already saves; its own blob is empty",
+        ))
+    }
+
+    fn prepare(&mut self, resources: &Resources) -> Result<(), ModuleError> {
+        if resources.block_frames == 0 {
+            return Err(ModuleError::Resources("block_frames must be at least 1"));
+        }
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        // Inputs first (escaped copies), then the four TAKEN output views — the multi-output
+        // pattern the author guide documents: two reborrow accessors cannot coexist, two taken
+        // views can.
+        let ins = [ctx.audio_in(0), ctx.audio_in(1), ctx.audio_in(2), ctx.audio_in(3)];
+        let outs = [
+            ctx.take_audio_out(0),
+            ctx.take_audio_out(1),
+            ctx.take_audio_out(2),
+            ctx.take_audio_out(3),
+        ];
+        let frames = ctx.frames();
+
+        let mut cells = [[0.0f32; 4]; 4];
+        let mut trims = [0.0f32; 4];
+        for (n, row) in cells.iter_mut().enumerate() {
+            for (m, cell) in row.iter_mut().enumerate() {
+                *cell = ctx.param(n * 4 + m).clamp(0.0, 2.0);
+            }
+        }
+        for (t, slot) in trims.iter_mut().enumerate() {
+            *slot = ctx.param(16 + t).clamp(0.0, 2.0);
+        }
+
+        let connected = ins.iter().flatten().any(|i| !i.is_empty());
+        if !connected {
+            // Every input unconnected: an explicit statement, never silence-by-accident.
+            for out in outs.into_iter().flatten() {
+                for s in out.iter_mut() {
+                    *s = 0.0;
+                }
+            }
+            return BlockStatus::Silenced;
+        }
+        for (m, out) in outs.into_iter().enumerate() {
+            let Some(out) = out else { continue };
+            for f in 0..frames {
+                for ch in 0..2 {
+                    let idx = f * 2 + ch;
+                    let mut acc = 0.0f64;
+                    for n in 0..4 {
+                        if let Some(inp) = ins[n] {
+                            if let Some(&v) = inp.get(idx) {
+                                acc += f64::from(cells[n][m]) * f64::from(v);
+                            }
+                        }
+                    }
+                    if let Some(slot) = out.get_mut(idx) {
+                        *slot = (acc * f64::from(trims[m])) as f32;
+                    }
+                }
+            }
+        }
+        BlockStatus::Ok
+    }
+
+    fn message(&mut self, _payload: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("sparq/util/mixer takes no messages"))
+    }
+}
+
+/// Factory for [`Mixer`].
+#[must_use]
+pub fn create_mixer() -> Box<dyn Module> {
+    Box::new(Mixer::new())
+}
+
+// --------------------------------------------------------------------------- mod/lfo
+
+/// The low-frequency oscillator (WO-014 increment 4): four shapes mapped into 0..1, an
+/// audio-rate unipolar `cv` output, and phase reset from either the `phase-reset` message or —
+/// the contract-v1 half — a `sync` event at its EXACT sample. The transport's beat/bar
+/// triggers are the intended sync source (WO-009 emits them); the range and sync decisions are
+/// recorded in the manifest header, not buried here.
+///
+/// Parameters: 0 rate (Hz) · 1 shape (0 sine · 1 tri · 2 saw · 3 square) · 2 depth (0..1).
+/// The state blob is exactly 8 bytes — the f64 phase, the `syn/sine` promise: a save/restore
+/// lands phase-continuous.
+#[derive(Clone, Copy, Debug)]
+pub struct Lfo {
+    phase: f64,
+    inc: f64,
+    rate: u32,
+    applied: (f32, f32),
+}
+
+impl Lfo {
+    /// A fresh oscillator at phase zero, 1 Hz.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { phase: 0.0, inc: 1.0 / 48_000.0, rate: 48_000, applied: (f32::NAN, f32::NAN) }
+    }
+
+    /// The shape at phase `p` (0..1), mapped into 0..1 — the manifest header's range decision.
+    #[must_use]
+    fn shape(shape: i32, p: f64) -> f64 {
+        match shape {
+            0 => ((p * std::f64::consts::TAU).sin() + 1.0) / 2.0,
+            1 => {
+                if p < 0.5 {
+                    2.0 * p
+                } else {
+                    2.0 - 2.0 * p
+                }
+            },
+            2 => p,
+            3 => {
+                if p < 0.5 {
+                    1.0
+                } else {
+                    0.0
+                }
+            },
+            _ => 0.5, // an out-of-domain shape is a held middle, not a panic (contract §9.7)
+        }
+    }
+}
+
+impl Default for Lfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Module for Lfo {
+    fn id(&self) -> &str {
+        "sparq/mod/lfo"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        let bytes: [u8; 8] = state
+            .try_into()
+            .map_err(|_| ModuleError::State("sparq/mod/lfo state is exactly 8 bytes (phase)"))?;
+        self.phase = f64::from_le_bytes(bytes);
+        Ok(())
+    }
+
+    fn prepare(&mut self, resources: &Resources) -> Result<(), ModuleError> {
+        if resources.sample_rate == 0 {
+            return Err(ModuleError::Resources("sample_rate must be non-zero"));
+        }
+        self.rate = resources.sample_rate;
+        self.applied = (f32::NAN, f32::NAN); // force the increment recompute on the first block
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        // Inputs and scalars first, the taken output view last — the v1 borrow discipline.
+        let events = ctx.events_in(0).unwrap_or(&[]);
+        let frames = ctx.frames();
+        let rate = ctx.param(0).clamp(0.05, 50.0);
+        let depth = ctx.param(2).clamp(0.0, 1.0);
+        let shape = ctx.param(1).round().clamp(0.0, 3.0) as i32;
+        if self.applied != (rate, depth) {
+            self.inc = f64::from(rate) / f64::from(self.rate);
+            self.applied = (rate, depth);
+        }
+        let Some(mut cv) = ctx.take_cv_out(0) else {
+            // No cv port presented: run the phase so the state stays honest, publish nowhere.
+            for _ in 0..frames {
+                self.phase += self.inc;
+                if self.phase >= 1.0 {
+                    self.phase -= 1.0;
+                }
+            }
+            return BlockStatus::Ok;
+        };
+        let Some(buf) = cv.as_audio() else {
+            return BlockStatus::Failed; // declared audio-rate; a block slot is a host bug
+        };
+        let mut cursor = 0usize;
+        for (f, slot) in buf.iter_mut().enumerate().take(frames) {
+            // Sample-accurate sync: an event at this frame resets the phase BEFORE the frame is
+            // computed — the membrane's onset discipline, on the modulation side.
+            while cursor < events.len() && events[cursor].sample as usize <= f {
+                if events[cursor].value > 0.0 {
+                    self.phase = 0.0;
+                }
+                cursor += 1;
+            }
+            *slot = (Self::shape(shape, self.phase) * f64::from(depth)) as f32;
+            self.phase += self.inc;
+            if self.phase >= 1.0 {
+                self.phase -= 1.0;
+            }
+        }
+        BlockStatus::Ok
+    }
+
+    fn message(&mut self, payload: &[u8]) -> Result<(), ModuleError> {
+        if payload == b"phase-reset" {
+            self.phase = 0.0;
+            return Ok(());
+        }
+        Err(ModuleError::Message("sparq/mod/lfo understands only `phase-reset`"))
+    }
+}
+
+/// Factory for [`Lfo`].
+#[must_use]
+pub fn create_lfo() -> Box<dyn Module> {
+    Box::new(Lfo::new())
+}
+
+// --------------------------------------------------------------------------- mod/clk-div
+
+/// The pending-schedule capacity: multiply ≤ 8 sub-triggers per passing input, so 32 slots hold
+/// four inputs' worth — a divider fed faster than its own schedule can carry is a patching
+/// error, and the module degrades by dropping (counted internally), never by growing on the
+/// audio thread.
+const CLKDIV_PENDING_CAP: usize = 32;
+
+/// The clock divider/multiplier with a seeded probability gate (WO-014 increment 4) — the first
+/// event-PROCESSING module: events in, events out, the contract-v1 wire proven from the
+/// consuming end. The exact semantics (first input passes, sub-triggers measured from the
+/// previous arrival, seeded independent draws) are the manifest header's, and the goldens pin
+/// them.
+///
+/// Parameters: 0 divide (1..16) · 1 multiply (1..8) · 2 probability (0..1). The state blob is
+/// the 8-byte seed; `reset` replays the stream from it — the `syn/noise` promise.
+#[derive(Clone, Copy, Debug)]
+pub struct ClkDiv {
+    base_seed: u64,
+    rng: u64,
+    count: u32,
+    last_in: u64,
+    has_last: bool,
+    pending: [u64; CLKDIV_PENDING_CAP],
+    pending_len: usize,
+    dropped_pending: u64,
+}
+
+impl ClkDiv {
+    /// The conventional default seed (`syn/noise`'s), so an unconfigured divider is reproducible.
+    pub const DEFAULT_SEED: u64 = 0x5EED;
+
+    /// A fresh divider at the default seed.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            base_seed: Self::DEFAULT_SEED,
+            rng: Self::DEFAULT_SEED,
+            count: 0,
+            last_in: 0,
+            has_last: false,
+            pending: [0; CLKDIV_PENDING_CAP],
+            pending_len: 0,
+            dropped_pending: 0,
+        }
+    }
+
+    /// xorshift64 — the seeded stream ADR-007 requires: the same seed, the same decisions.
+    fn next_rand(&mut self) -> u64 {
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.rng = x;
+        x
+    }
+
+    /// The probability gate: `prob >= 1` and `prob <= 0` are exact, the middle is a draw in
+    /// [0,1) from 53 bits of the stream.
+    fn gate_passes(&mut self, prob: f32) -> bool {
+        if prob >= 1.0 {
+            return true;
+        }
+        if prob <= 0.0 {
+            return false;
+        }
+        let x = (self.next_rand() >> 11) as f64 / (1u64 << 53) as f64;
+        x < f64::from(prob)
+    }
+
+    /// Sorted insert into the bounded pending schedule; overflow drops the newcomer and counts.
+    fn push_pending(&mut self, abs_sample: u64) {
+        if self.pending_len >= CLKDIV_PENDING_CAP {
+            self.dropped_pending += 1;
+            return;
+        }
+        let mut i = self.pending_len;
+        while i > 0 && self.pending[i - 1] > abs_sample {
+            self.pending[i] = self.pending[i - 1];
+            i -= 1;
+        }
+        self.pending[i] = abs_sample;
+        self.pending_len += 1;
+    }
+}
+
+impl Default for ClkDiv {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Module for ClkDiv {
+    fn id(&self) -> &str {
+        "sparq/mod/clk-div"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        let bytes: [u8; 8] = state
+            .try_into()
+            .map_err(|_| ModuleError::State("sparq/mod/clk-div state is exactly 8 bytes (seed)"))?;
+        self.base_seed = u64::from_le_bytes(bytes);
+        self.rng = self.base_seed;
+        Ok(())
+    }
+
+    fn prepare(&mut self, _resources: &Resources) -> Result<(), ModuleError> {
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        let events = ctx.events_in(0).unwrap_or(&[]);
+        let frames = ctx.frames();
+        let base = ctx.block.sample_offset;
+        let divide = (ctx.param(0).round() as i32).clamp(1, 16) as u32;
+        let multiply = (ctx.param(1).round() as i32).clamp(1, 8) as u64;
+        let prob = ctx.param(2).clamp(0.0, 1.0);
+
+        let Some(mut sink) = ctx.take_event_out(0) else {
+            // No event-out port presented — impossible through a validated manifest (the
+            // executor presents every declared port); a module run outside its shape publishes
+            // nowhere and counts nothing, rather than counting into the void.
+            return BlockStatus::Ok;
+        };
+        let mut cursor = 0usize;
+        for f in 0..frames {
+            let abs = base + f as u64;
+            // 1. sub-triggers that came due (bounded schedule, sorted — one cursor at [0]).
+            while self.pending_len > 0 && self.pending[0] <= abs {
+                // shift out
+                for i in 0..self.pending_len - 1 {
+                    self.pending[i] = self.pending[i + 1];
+                }
+                self.pending_len -= 1;
+                if self.gate_passes(prob) {
+                    sink.push(sparq_module_api::event::Event::trigger(f as u32, 1.0));
+                }
+            }
+            // 2. inputs at this frame.
+            while cursor < events.len() && events[cursor].sample as usize <= f {
+                let ev = events[cursor];
+                cursor += 1;
+                if ev.value <= 0.0 {
+                    continue; // gate-offs are not clock pulses
+                }
+                self.count += 1;
+                if (self.count - 1) % divide != 0 {
+                    continue;
+                }
+                // A passing input: the interval to the previous PASSING input paces the
+                // multiplier's sub-triggers.
+                let interval = if self.has_last && abs > self.last_in {
+                    Some(abs - self.last_in)
+                } else {
+                    None
+                };
+                self.last_in = abs;
+                self.has_last = true;
+                if self.gate_passes(prob) {
+                    sink.push(sparq_module_api::event::Event::trigger(f as u32, ev.value));
+                }
+                if multiply > 1 {
+                    if let Some(span) = interval {
+                        for k in 1..multiply {
+                            self.push_pending(abs + span * k / multiply);
+                        }
+                    }
+                }
+            }
+        }
+        BlockStatus::Ok
+    }
+
+    fn message(&mut self, payload: &[u8]) -> Result<(), ModuleError> {
+        if payload == b"reset" {
+            let seed = self.base_seed;
+            *self = Self::new();
+            self.base_seed = seed;
+            self.rng = seed;
+            return Ok(());
+        }
+        Err(ModuleError::Message("sparq/mod/clk-div understands only `reset`"))
+    }
+}
+
+/// Factory for [`ClkDiv`].
+#[must_use]
+pub fn create_clk_div() -> Box<dyn Module> {
+    Box::new(ClkDiv::new())
+}
+
 // --------------------------------------------------------------------------- the table
 
 /// Every built-in: id → (manifest text, factory). The single place that knows the first-party
 /// set; discovery pairs these with on-disk manifests by id (§11 precedence: built-in wins).
-pub const BUILTINS: [(&str, &str, Factory); 9] = [
+pub const BUILTINS: [(&str, &str, Factory); 14] = [
     ("sparq/syn/sine", SINE_MANIFEST, create_sine),
     ("sparq/syn/noise", NOISE_MANIFEST, create_noise),
     ("sparq/syn/polyblep", POLYBLEP_MANIFEST, create_polyblep),
+    ("sparq/syn/membrane", MEMBRANE_MANIFEST, create_membrane),
     ("sparq/flt/svf", SVF_MANIFEST, create_svf),
+    ("sparq/env/ad", ENV_AD_MANIFEST, create_env_ad),
     ("sparq/util/gain", GAIN_MANIFEST, create_gain),
     ("sparq/util/delay", DELAY_MANIFEST, create_delay),
     ("sparq/util/panner", PANNER_MANIFEST, create_panner),
+    ("sparq/util/mixer", MIXER_MANIFEST, create_mixer),
+    ("sparq/mod/lfo", LFO_MANIFEST, create_lfo),
+    ("sparq/mod/clk-div", CLK_DIV_MANIFEST, create_clk_div),
     ("sparq/fx/bitcrush", BITCRUSH_MANIFEST, create_bitcrush),
     ("sparq/ana/rms", RMS_MANIFEST, create_rms),
 ];
@@ -962,6 +1775,166 @@ pub fn demo_patch(registry: &Registry, cfg: ExecConfig) -> Result<DemoPatch, Str
     Ok(DemoPatch { executor, sine, gain, rms })
 }
 
+/// The rms→filter modulation demo patch (WO-014's acceptance: *"`ana/rms` output demonstrably
+/// modulates a filter cutoff — the analysis-as-control-source principle proven end to end"*).
+///
+/// ```text
+/// sine(440 Hz, 0.5) ──→ gain(0.5) ──→ svf(bp 200 Hz, mod 1.0) ──→ MASTER
+///                          │
+///                          └──→ rms ──(cv: level → cutoff-mod)──┘
+/// ```
+///
+/// The cv wire is the point: the filter's cutoff for every block is
+/// `200 · 2^(2 · rms)` — the louder the signal, the brighter the filter. The arithmetic proof
+/// that the wire carries EXACTLY that value lives in `tests/contract_v1.rs` (a hand-driven
+/// reference filter renders bit-identical); this patch is the audible artefact `sparq exec
+/// --patch mod-demo` renders.
+pub struct ModDemoPatch {
+    /// The built executor.
+    pub executor: Executor,
+    /// The sine node.
+    pub sine: NodeId,
+    /// The gain node.
+    pub gain: NodeId,
+    /// The rms node (the cv source).
+    pub rms: NodeId,
+    /// The filter node (the master, and the cv consumer).
+    pub svf: NodeId,
+}
+
+/// Build the modulation-demo patch from a registry that has the built-ins.
+///
+/// # Errors
+/// A sentence naming what is missing or what the executor refused.
+pub fn mod_demo_patch(registry: &Registry, cfg: ExecConfig) -> Result<ModDemoPatch, String> {
+    let mut graph = Graph::new();
+    let sine = graph.add_node(0);
+    let gain = graph.add_node(0);
+    let rms = graph.add_node(0);
+    let svf = graph.add_node(0);
+    // sine.out (mono) → gain.in (stereo): the documented fan-out.
+    graph
+        .connect(PortRef::new(sine, 0), PortRef::new(gain, 0), EdgeKind::Plain)
+        .map_err(|e| e.to_string())?;
+    // gain.out → svf.in: the audio path (master chain).
+    graph
+        .connect(PortRef::new(gain, 1), PortRef::new(svf, 0), EdgeKind::Plain)
+        .map_err(|e| e.to_string())?;
+    // gain.out → rms.in: the analysis tap (fan-out is free).
+    graph
+        .connect(PortRef::new(gain, 1), PortRef::new(rms, 0), EdgeKind::Plain)
+        .map_err(|e| e.to_string())?;
+    // rms.level → svf.cutoff-mod: THE contract-v1 cv wire — block-rate unipolar into block-rate
+    // unipolar, the matrix's plain `compatible` cell, carried for real.
+    graph
+        .connect(PortRef::new(rms, 1), PortRef::new(svf, 2), EdgeKind::Plain)
+        .map_err(|e| e.to_string())?;
+
+    let mut builds = Vec::new();
+    for (id, node, params) in [
+        ("sparq/syn/sine", sine, &[440.0f32, 0.5][..]),
+        ("sparq/util/gain", gain, &[0.5][..]),
+        ("sparq/ana/rms", rms, &[0.0][..]),
+        // cutoff 200 Hz · resonance 0.2 · mode 2 (bandpass) · mod depth 1.0
+        ("sparq/flt/svf", svf, &[200.0f32, 0.2, 2.0, 1.0][..]),
+    ] {
+        let Some(reg) = registry.get(id) else {
+            return Err(format!("`{id}` is not registered — register_builtins first"));
+        };
+        builds.push((
+            node,
+            crate::executor::NodeBuild {
+                module: reg.create(),
+                manifest: reg.manifest().clone(),
+                params: sparq_module_api::params::ParamSet::new(1, params)
+                    .ok_or_else(|| format!("`{id}` params exceed MAX_PARAMS"))?,
+            },
+        ));
+    }
+    let executor = Executor::build(graph, builds, cfg).map_err(|e| e.to_string())?;
+    Ok(ModDemoPatch { executor, sine, gain, rms, svf })
+}
+
+/// The drum demo patch (WO-014 increment 3): contract v1's event wire driving real modules —
+/// `syn/membrane` into `util/mixer`'s first cell, mixer out-0 as master.
+///
+/// ```text
+/// [host triggers: four-on-the-floor] ──(event)──→ membrane ──(audio)──→ mixer(in-0 → out-0) ──→ MASTER
+/// ```
+///
+/// The triggers are NOT in the graph: the render loop injects them through
+/// [`Executor::push_host_event`] — the control-side door WO-009's transport will publish through.
+/// The schedule lives in [`DrumDemoPatch::is_kick_block`] so the exec command and the golden test
+/// cannot drift apart on what "four-on-the-floor" means.
+pub struct DrumDemoPatch {
+    /// The built executor.
+    pub executor: Executor,
+    /// The membrane node (its `trig` port is manifest port 0).
+    pub membrane: NodeId,
+    /// The mixer node (the master).
+    pub mixer: NodeId,
+}
+
+impl DrumDemoPatch {
+    /// Four-on-the-floor at 120 BPM: one kick every half second. Block-granular arithmetic —
+    /// `blocks_per_half_second = rate / (2 · block_frames)`; at 48 kHz/64 that is every 375
+    /// blocks. The kick lands at sample 0 of those blocks (the trigger's offset), which at 120
+    /// BPM is exactly on the beat because 0.5 s is a whole number of blocks at every power-of-two
+    /// block size this project uses.
+    #[must_use]
+    pub fn is_kick_block(block_index: u64, sample_rate: u32, block_frames: usize) -> bool {
+        let per_hit = (u64::from(sample_rate) / (2 * block_frames as u64)).max(1);
+        block_index % per_hit == 0
+    }
+}
+
+/// Build the drum-demo patch from a registry that has the built-ins.
+///
+/// # Errors
+/// A sentence naming what is missing or what the executor refused.
+pub fn drum_demo_patch(registry: &Registry, cfg: ExecConfig) -> Result<DrumDemoPatch, String> {
+    let mut graph = Graph::new();
+    let membrane = graph.add_node(0);
+    let mixer = graph.add_node(0);
+    // membrane.out (manifest port 1, mono) → mixer.in-0 (manifest port 0, stereo): the
+    // documented mono→multi fan-out, into the identity cell c00.
+    graph
+        .connect(PortRef::new(membrane, 1), PortRef::new(mixer, 0), EdgeKind::Plain)
+        .map_err(|e| e.to_string())?;
+    let mut builds = Vec::new();
+    for (id, node, params) in [
+        // pitch 50 · punch 130 · decay 260 · noise 0.5 · damp 320 — the Phase-B kick, verbatim.
+        ("sparq/syn/membrane", membrane, &[50.0f32, 130.0, 260.0, 0.5, 320.0][..]),
+        // The identity matrix, with the out-0 trim at 0.6 as the demo's bus headroom: the
+        // membrane's transient peaks near 1.5 (body 0.9 + click 0.5 at full envelope — the
+        // Phase-B recipe's own arithmetic), and a demo that clips teaches the wrong lesson.
+        // Explicit values, not manifest defaults, so the render cannot move when a default does.
+        (
+            "sparq/util/mixer",
+            mixer,
+            &[
+                1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+                0.6, 1.0, 1.0, 1.0,
+            ][..],
+        ),
+    ] {
+        let Some(reg) = registry.get(id) else {
+            return Err(format!("`{id}` is not registered — register_builtins first"));
+        };
+        builds.push((
+            node,
+            crate::executor::NodeBuild {
+                module: reg.create(),
+                manifest: reg.manifest().clone(),
+                params: sparq_module_api::params::ParamSet::new(1, params)
+                    .ok_or_else(|| format!("`{id}` params exceed MAX_PARAMS"))?,
+            },
+        ));
+    }
+    let executor = Executor::build(graph, builds, cfg).map_err(|e| e.to_string())?;
+    Ok(DrumDemoPatch { executor, membrane, mixer })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)]
@@ -969,6 +1942,7 @@ mod tests {
     use super::*;
     use sparq_kernel::block::BlockContext;
     use sparq_module_api::decode;
+    use sparq_module_api::module::CvOut;
     use sparq_module_api::params::ParamSet;
 
     const FRAMES: usize = 64;
@@ -1021,7 +1995,7 @@ mod tests {
         let mut last = 0.0f32;
         // 750 blocks × 64 frames = 1 s at 48 kHz; 440 Hz must cross zero ≈ 880 times.
         for _ in 0..750 {
-            let mut a = AudioCtx { block: &ctx, params: &params, input: &[], output: &mut out };
+            let mut a = AudioCtx::single(&ctx, &params, &[], &mut out);
             s.process(&mut a);
             for v in out.iter().take(FRAMES) {
                 if (last < 0.0 && *v >= 0.0) || (last > 0.0 && *v <= 0.0) {
@@ -1057,13 +2031,13 @@ mod tests {
         let mut out = vec![0.0f32; FRAMES * 2];
         let unity = ParamSet::new(1, &[1.0]).unwrap();
         {
-            let mut a = AudioCtx { block: &ctx, params: &unity, input: &input, output: &mut out };
+            let mut a = AudioCtx::single(&ctx, &unity, &input, &mut out);
             g.process(&mut a);
         }
         assert_eq!(out, input, "unity gain must be bit-exact");
         let half = ParamSet::new(2, &[0.5]).unwrap();
         {
-            let mut a = AudioCtx { block: &ctx, params: &half, input: &input, output: &mut out };
+            let mut a = AudioCtx::single(&ctx, &half, &input, &mut out);
             g.process(&mut a);
         }
         for (o, i) in out.iter().zip(input.iter()) {
@@ -1083,7 +2057,7 @@ mod tests {
         let ctx = ctx2();
         let mut out = vec![9.0f32; FRAMES * 2];
         let p = ParamSet::new(1, &[1.0]).unwrap();
-        let mut a = AudioCtx { block: &ctx, params: &p, input: &[], output: &mut out };
+        let mut a = AudioCtx::single(&ctx, &p, &[], &mut out);
         let st = g.process(&mut a);
         assert_eq!(st, BlockStatus::Silenced);
         assert!(out.iter().all(|&s| s == 0.0), "the buffer is still written");
@@ -1095,18 +2069,22 @@ mod tests {
         r.prepare(&res()).unwrap();
         let ctx = ctx2();
         let input = vec![0.5f32; FRAMES * 2];
-        let mut out = vec![9.0f32; FRAMES]; // rms out_ch = 1 by the executor's cv convention
+        // Contract v1: the value travels on the declared cv port, not in an audio buffer the
+        // manifest never declared. NAN seed: an unwritten cell must fail loudly, not read as 0.
+        let mut cell = f32::NAN;
         let p = ParamSet::new(1, &[0.0]).unwrap();
         {
-            let mut a = AudioCtx { block: &ctx, params: &p, input: &input, output: &mut out };
+            let mut a =
+                AudioCtx::single(&ctx, &p, &input, &mut []).with_cv_out(CvOut::Block(&mut cell));
             r.process(&mut a);
         }
-        assert!((out[0] - 0.5).abs() < 1e-6, "rms of DC 0.5 is 0.5, got {}", out[0]);
+        assert!((cell - 0.5).abs() < 1e-6, "rms of DC 0.5 is 0.5, got {cell}");
         let gated = ParamSet::new(2, &[0.75]).unwrap();
         {
-            let mut a = AudioCtx { block: &ctx, params: &gated, input: &input, output: &mut out };
+            let mut a = AudioCtx::single(&ctx, &gated, &input, &mut [])
+                .with_cv_out(CvOut::Block(&mut cell));
             r.process(&mut a);
         }
-        assert_eq!(out[0], 0.0, "below the floor the output is zero");
+        assert_eq!(cell, 0.0, "below the floor the output is zero");
     }
 }

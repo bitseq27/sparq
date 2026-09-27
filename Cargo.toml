@@ -5,6 +5,7 @@ members = [
     "crates/sparq-audio",
     "crates/sparq-ui",
     "crates/sparq-module-api",
+    "crates/sparq-music",
     "crates/sparq-app",
 ]
 
@@ -12,8 +13,8 @@ members = [
 exclude = ["tools/dispatch-bench"]
 
 # Empty crates are debt (ADR-000): a crate is added to this list only when it has contents.
-# Planned, not yet created: sparq-module-api, sparq-stream, sparq-music, sparq-sample,
-# sparq-assets, sparq-visual, sparq-perform, sparq-io, sparq-host-wasm, sparq-bridge.
+# Planned, not yet created: sparq-stream, sparq-sample, sparq-assets, sparq-visual,
+# sparq-perform, sparq-io, sparq-host-wasm, sparq-bridge.
 
 [workspace.package]
 version = "0.0.0-phase0"
@@ -28,6 +29,7 @@ sparq-kernel = { path = "crates/sparq-kernel" }
 sparq-audio = { path = "crates/sparq-audio" }
 sparq-ui = { path = "crates/sparq-ui" }
 sparq-module-api = { path = "crates/sparq-module-api" }
+sparq-music = { path = "crates/sparq-music" }
 
 # Optional / feature-gated only. The core build has ZERO third-party dependencies:
 # everything testable (engine, DSP, render, golden tests) runs on std alone, so CI on a

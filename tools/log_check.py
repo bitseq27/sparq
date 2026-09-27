@@ -27,7 +27,7 @@ the decision needs reopening - so the tool says so rather than printing two numb
 somebody notices.
 
 Baseline provenance: measured 2026-09-22 on x86-64 Linux, a 2-core virtualised sandbox at ~1 GB RAM,
-stamp `src 68f/1070593B`. Update BASELINE at the end of each increment; a stale baseline produces
+stamp `src 86f/1679258B`. Update BASELINE at the end of each increment; a stale baseline produces
 confident nonsense, which is worse than no baseline.
 """
 
@@ -67,18 +67,20 @@ def read_text(path: pathlib.Path) -> str:
 
 # ---------------------------------------------------------------- baseline
 # Measured, not asserted. Every value here came from a gate run recorded in PHASE0-WORKORDERS.md
-# section 2.1 (WO-007 increment 4, 2026-09-22).
+# section 2.1 (WO-014 increment 4, 2026-09-26, sandbox). This block MOVES WITH EVERY
+# SEAL - defect #83 was exactly that nobody moved it for two increments, so the device's next
+# gates run would have hard-failed a perfectly good tree against numbers three increments old.
 BASELINE: dict[str, object] = {
-    "stamp": "src 68f/1070593B",
+    "stamp": "src 89f/1782456B",
     "golden_hash": "ba577186c988db21",
     "tests_failed": 0,
-    "tests_passed": 388,  # workspace suite only - the release golden rerun is scoped out (#72)
+    "tests_passed": 665,  # workspace suite only - the release golden rerun is scoped out (#72)
     "selftest": "PASS",
     "ui_audit": "PASS",
     "allocations": 0,
     "reopen_leak_outstanding": 0,
     "soak_xruns": 0,
-    "realtime_x": 315.0,
+    "realtime_x": 309.5,
     # tools/dispatch-bench, medians over three runs (us per 100-module x 64-sample block)
     "dispatch_block_dyn_us": (1.65, 1.95),
     "dispatch_block_enum_us": (1.26, 1.30),
@@ -286,7 +288,7 @@ def report(found: dict[str, object], logdir: pathlib.Path) -> int:
 
 # ---------------------------------------------------------------- self-test
 SELF_LOGS = {
-    "build.log": "sparq build\n  stamp: src 68f/1070593B\n  rebuilt 12 crates\n",
+    "build.log": "sparq build\n  stamp: src 89f/1782456B\n  rebuilt 12 crates\n",
     "gates.log": (
         "test result: ok. 300 passed; 0 failed; 1 ignored\n"
         "test result: ok. 88 passed; 0 failed; 0 ignored\n"

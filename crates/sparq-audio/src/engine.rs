@@ -143,7 +143,7 @@ mod tests {
         }
         fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
             let v = ctx.param(0);
-            for s in ctx.output.iter_mut() {
+            for s in ctx.output().iter_mut() {
                 *s = v;
             }
             BlockStatus::Ok

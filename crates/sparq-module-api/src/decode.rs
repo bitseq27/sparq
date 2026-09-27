@@ -438,6 +438,7 @@ fn ports(root: &Table, r: &mut ValidationReport) -> Vec<PortSpec> {
                 ),
                 cv_reduce: opt_str(t, "cv_reduce", &format!("{base}.cv_reduce"), r),
                 cv_interp: opt_str(t, "cv_interp", &format!("{base}.cv_interp"), r),
+                event_kinds: str_vec(t, "event_kinds", &format!("{base}.event_kinds"), r),
             }
         })
         .collect()
@@ -611,7 +612,6 @@ type = "cv"
 rate = "block"
 range = "unipolar"
 cv_reduce = "mean"
-cv_interp = "linear"
 
 [[params]]
 id = "size"

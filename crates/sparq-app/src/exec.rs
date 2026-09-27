@@ -4,19 +4,24 @@
 //! contract modules loaded from real manifests.
 //!
 //! Increment 1 renders the built-in `demo` patch (`sparq_audio::modules::demo_patch`: sine →
-//! gain → master, rms analysis tap). Patch FILES arrive with WO-011's project format; until
-//! then a `--patch` name other than `demo` is refused in words rather than guessed at.
+//! gain → master, rms analysis tap). Contract v1 (WO-008 increment 4) adds `mod-demo`
+//! (`sparq_audio::modules::mod_demo_patch`): the rms→filter modulation demo — WO-014's
+//! analysis-as-control-source acceptance, audible. Patch FILES arrive with WO-011's project
+//! format; until then any other `--patch` name is refused in words rather than guessed at.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use sparq_audio::executor::ExecConfig;
 use sparq_audio::hash::{fnv1a64_f32, hex64};
-use sparq_audio::modules::{builtin_sources, demo_patch, first_party, register_builtins};
+use sparq_audio::modules::{
+    builtin_sources, demo_patch, drum_demo_patch, first_party, mod_demo_patch, register_builtins,
+};
 use sparq_audio::wav::{write_wav, SampleFormat};
 use sparq_module_api::discover;
 use sparq_module_api::discovery::{Origin, Source};
 use sparq_module_api::registry::Registry;
+use sparq_music::transport::{BlockEvents, Transport};
 
 use crate::modules::scan;
 
@@ -104,11 +109,12 @@ fn sample_format(name: &str) -> Result<SampleFormat> {
 /// refusal, or a file that will not write.
 pub fn run(opts: ExecOpts) -> Result<ExitCode> {
     let fmt = sample_format(&opts.format)?;
-    if opts.patch != "demo" {
+    if opts.patch != "demo" && opts.patch != "mod-demo" && opts.patch != "drum-demo" {
         return Err(format!(
-            "unknown patch `{}` — increment 1 ships only `demo`; patch FILES arrive with the \
-             WO-011 project format, and until then a name we cannot honour is refused rather \
-             than guessed at",
+            "unknown patch `{}` — this build ships `demo`, `mod-demo` (the contract-v1 \
+             rms→filter modulation demo) and `drum-demo` (the contract-v1 event wire: host \
+             triggers → membrane → mixer); patch FILES arrive with the WO-011 project format, \
+             and until then a name we cannot honour is refused rather than guessed at",
             opts.patch
         ));
     }
@@ -168,16 +174,56 @@ pub fn run(opts: ExecOpts) -> Result<ExitCode> {
 
     // ---- 2. the patch: registry → factories → kernel graph → executor.
     let cfg = ExecConfig::new(opts.rate, opts.block, 2);
-    let mut demo = demo_patch(&registry, cfg).map_err(|e| format!("patch build failed: {e}"))?;
+    let mut transport: Option<Transport> = None;
+    let (mut executor, master, rms_node, drum_node, description) = if opts.patch == "mod-demo" {
+        let d = mod_demo_patch(&registry, cfg).map_err(|e| format!("patch build failed: {e}"))?;
+        (
+            d.executor,
+            d.svf,
+            Some(d.rms),
+            None,
+            "sine(440 Hz, 0.5) → gain(0.5) → svf(bp 200 Hz, mod 1.0) = master · rms.level → \
+             svf.cutoff-mod (the contract-v1 cv wire)"
+                .to_string(),
+        )
+    } else if opts.patch == "drum-demo" {
+        let d = drum_demo_patch(&registry, cfg).map_err(|e| format!("patch build failed: {e}"))?;
+        // WO-009: the triggers are the TRANSPORT's — beat/bar triggers from `sparq-music`,
+        // published through the executor's host-event door. The block-counter schedule this
+        // command used before contract-v1's clocks landed stays pinned by the batch-3 gate
+        // (`DrumDemoPatch::is_kick_block`); the golden is the same hash either way, and
+        // tests/transport_drum.rs is the cross-check that says so.
+        let mut tr = Transport::new(opts.rate, 120.0, 960);
+        tr.play();
+        transport = Some(tr);
+        (
+            d.executor,
+            d.mixer,
+            None,
+            Some(d.membrane),
+            "membrane → mixer(in-0 → out-0) = master · four-on-the-floor at 120 BPM, \
+             transport-driven (sparq-music beat/bar triggers through the event wire)"
+                .to_string(),
+        )
+    } else {
+        let d = demo_patch(&registry, cfg).map_err(|e| format!("patch build failed: {e}"))?;
+        (
+            d.executor,
+            d.gain,
+            Some(d.rms),
+            None,
+            "sine(440 Hz, 0.5) → gain(0.5) → master · rms analysis tap".to_string(),
+        )
+    };
     println!(
-        "  patch       sine(440 Hz, 0.5) → gain(0.5) → master · rms analysis tap · {} node(s), {} edge(s)",
-        demo.executor.order().len(),
-        demo.executor.graph().edge_count()
+        "  patch       {description} · {} node(s), {} edge(s)",
+        executor.order().len(),
+        executor.graph().edge_count()
     );
     // ADR-009 decision 4: the memory budget is printed at patch load.
     println!(
         "  budget      {} bytes of audio buffers, all pre-allocated",
-        demo.executor.memory_budget_bytes()
+        executor.memory_budget_bytes()
     );
 
     // ---- 3. render.
@@ -187,24 +233,66 @@ pub fn run(opts: ExecOpts) -> Result<ExitCode> {
     let blocks = total_frames / frames;
     let mut samples: Vec<f32> = Vec::with_capacity(total_frames * cfg.device_channels);
     let mut out = vec![0.0f32; frames * cfg.device_channels];
-    for _ in 0..blocks {
-        demo.executor
-            .render_block(demo.gain, &mut out)
-            .map_err(|e| format!("render failed: {e}"))?;
+    let mut block_events = BlockEvents::new();
+    let mut kicks = 0u64;
+    for _b in 0..blocks {
+        if let Some(tr) = &mut transport {
+            // The transport computes; the executor carries. Tick at the block's first frame,
+            // then the block's events, then the render — the driver order WO-009 specifies.
+            let tick0 = tr.abs_tick().round().max(0.0) as u64;
+            executor.set_musical_position(Some((tick0, 960)));
+            tr.advance_block(opts.block, &mut block_events);
+            if let Some(mem) = drum_node {
+                for e in block_events.as_slice() {
+                    executor
+                        .push_host_event(mem, 0, *e)
+                        .map_err(|err| format!("trigger injection failed: {err}"))?;
+                    if e.channel == 0 {
+                        kicks += 1;
+                    }
+                }
+            }
+        }
+        executor.render_block(master, &mut out).map_err(|e| format!("render failed: {e}"))?;
         samples.extend_from_slice(&out);
     }
 
     // ---- 4. evidence: the analysis tap proves analysis-as-control-source, the hash is the
-    // golden identity of this render (tests/modules_golden.rs asserts it). The tap VALUE is
-    // output[0] of the rms node (the v0 cv convention); the master's meter is the audio one.
-    let tap = demo.executor.node_output(demo.rms).and_then(|b| b.first().copied());
-    let master = demo.executor.meter(demo.gain);
-    println!(
-        "  meters      rms tap value {:?} (0.25 amp sine, 0.59-cycle window → ≈ 0.16..0.19) · master peak {:?} rms {:?}",
-        tap,
-        master.map(|m| m.peak),
-        master.map(|m| m.rms)
-    );
+    // golden identity of this render (tests/modules_golden.rs asserts the demo's; tests/
+    // contract_v1.rs asserts the mod-demo's). Contract v1: the tap VALUE is read from the rms
+    // node's declared block-rate cv port — the v0 convention of riding in an undeclared audio
+    // output[0] is gone; the master's meter is the audio one. rms.level is manifest port 1.
+    let tap = rms_node.and_then(|n| executor.node_cv_block(n, 1));
+    let master_m = executor.meter(master);
+    if rms_node.is_some() {
+        println!(
+            "  meters      rms tap value {:?} (0.25 amp sine, 0.59-cycle window → ≈ 0.16..0.19) · master peak {:?} rms {:?}",
+            tap,
+            master_m.map(|m| m.peak),
+            master_m.map(|m| m.rms)
+        );
+    } else {
+        // The drum demo has no analysis tap; the meters are the LAST BLOCK's (a decaying hit's
+        // tail reads small — the render hash and the WAV are the evidence, not this line).
+        println!(
+            "  meters      master (last block) peak {:?} rms {:?} · {} beat trigger(s) from the transport",
+            master_m.map(|m| m.peak),
+            master_m.map(|m| m.rms),
+            kicks
+        );
+    }
+    if opts.patch == "mod-demo" {
+        if let Some(v) = tap {
+            // The live cv wire, in numbers: the cutoff the filter ran at in the final block, by
+            // the formula the module documents (cutoff · 2^(2·mod·cv)). The arithmetic PROOF
+            // that the wire carries exactly this lives in tests/contract_v1.rs (a hand-driven
+            // reference filter renders bit-identical); this line is the operator's evidence.
+            let eff = 200.0f64 * 2.0f64.powf(2.0 * f64::from(v));
+            println!(
+                "  cv wire     rms.level → svf.cutoff-mod LIVE: cv {v:.6} → effective cutoff {eff:.2} Hz (from 200 Hz, mod 1.0)"
+            );
+        }
+    }
     let hash = fnv1a64_f32(&samples);
     println!("  rendered    {blocks} blocks · {total_frames} frames · hash {}", hex64(hash));
 

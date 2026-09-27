@@ -265,8 +265,9 @@ default = { verdict = "refused", error_code = "E-PORT-TYPE-MISMATCH", ui = "dim"
   [[cross_type.adapters]]
   from = "cv"
   to = "audio"
-  adapter = "syn/sine-or-offset"
-  note = "ADR-005: 'via an oscillator/offset'. Appendix B has no util/offset module; syn/sine is Phase 1. Naming to be settled."
+  adapter = "util/offset"
+  decided = "2026-09-26 (contract-v1 drift gate): the ADR-005 addendum settled this cell's open naming — `util/range`, `util/offset` and `util/gate-to-cv` join Phase 1. The code-side Adapter::Offset has said `util/offset` since WO-007; this row said 'syn/sine-or-offset ... naming to be settled' and the two had drifted (defect #81). The addendum's decision is recorded here so the table and the compiled matrix agree."
+  note = "ADR-005: 'via an oscillator/offset'; the addendum names the module util/offset."
 
   [[cross_type.adapters]]
   from = "audio"

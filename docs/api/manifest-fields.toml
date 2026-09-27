@@ -109,7 +109,7 @@ on_violation = ["E-KEY-MISSING*"]
 path = "classification.top"
 type = "enum"
 required = true
-domain = ["syn","smp","flt","fx","dyn","ana","spa","seq","gen","harm","dat","io","dsp","util","ml","out"]
+domain = ["syn","smp","flt","fx","dyn","ana","spa","seq","env","mod","gen","harm","dat","io","dsp","util","ml","out"]  # "env"+"mod" added 2026-09-26 (defect #84): Appendix B ids (env/ad, mod/lfo, mod/clk-div) and WO-014's artefact paths name these families; the closed domain was missing them, caught when env/ad could not declare its own top
 on_violation = ["E-ENUM-UNKNOWN*", "E-KEY-MISSING*"]
 
 [[field]]

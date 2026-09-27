@@ -1,0 +1,279 @@
+# sparq module manifest — util/mixer (WO-014 increment 3).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The 4×4 stereo matrix with per-cell gain — the explicit merge the connection rules require
+# (audio fan-in sums HERE, in a module the patch can see, never silently in the host). Contract
+# stress per WO-014: "channel sets, multichannel readiness" — eight audio ports, the first
+# multi-port first-party module, riding contract v1's take_* output pattern.
+#
+# Why 4×4 and not 8×8: the parameter snapshot cap is 32 (MAX_PARAMS), and 16 cells + 4 output
+# trims = 20 of them. A wider matrix waits for the cap to move — declared, not discovered.
+# The cv fan-in refusal also names this module; its AUDIO side ships here, and the cv merge side
+# (cv inputs summing to a cv output) is declared open in LATER.md rather than faked.
+
+[identity]
+id = "sparq/util/mixer"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Mixer"
+summary = "4x4 stereo matrix with per-cell gain - the explicit merge, never implicit summing"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "utility/mixer"
+top = "util"
+kind = "processor"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "in-0"
+name = "Input 1"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+required = false
+
+[[ports]]
+id = "in-1"
+name = "Input 2"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+required = false
+
+[[ports]]
+id = "in-2"
+name = "Input 3"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+required = false
+
+[[ports]]
+id = "in-3"
+name = "Input 4"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+required = false
+
+[[ports]]
+id = "out-0"
+name = "Output 1"
+direction = "out"
+type = "audio"
+channel_set = "stereo"
+
+[[ports]]
+id = "out-1"
+name = "Output 2"
+direction = "out"
+type = "audio"
+channel_set = "stereo"
+
+[[ports]]
+id = "out-2"
+name = "Output 3"
+direction = "out"
+type = "audio"
+channel_set = "stereo"
+
+[[ports]]
+id = "out-3"
+name = "Output 4"
+direction = "out"
+type = "audio"
+channel_set = "stereo"
+
+# The matrix, row-major: c<in><out>. Defaults are the IDENTITY wiring (each input passes to the
+# equally numbered output at unity, everything else silent), so an untouched mixer is four
+# parallel pass-throughs — bit-exact, and the golden pins it.
+[[params]]
+id = "c00"
+name = "In 1 → Out 1"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 1.0
+
+[[params]]
+id = "c01"
+name = "In 1 → Out 2"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "c02"
+name = "In 1 → Out 3"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "c03"
+name = "In 1 → Out 4"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "c10"
+name = "In 2 → Out 1"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "c11"
+name = "In 2 → Out 2"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 1.0
+
+[[params]]
+id = "c12"
+name = "In 2 → Out 3"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "c13"
+name = "In 2 → Out 4"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "c20"
+name = "In 3 → Out 1"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "c21"
+name = "In 3 → Out 2"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "c22"
+name = "In 3 → Out 3"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 1.0
+
+[[params]]
+id = "c23"
+name = "In 3 → Out 4"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "c30"
+name = "In 4 → Out 1"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "c31"
+name = "In 4 → Out 2"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "c32"
+name = "In 4 → Out 3"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "c33"
+name = "In 4 → Out 4"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 1.0
+
+[[params]]
+id = "trim0"
+name = "Out 1 Trim"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 1.0
+
+[[params]]
+id = "trim1"
+name = "Out 2 Trim"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 1.0
+
+[[params]]
+id = "trim2"
+name = "Out 3 Trim"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 1.0
+
+[[params]]
+id = "trim3"
+name = "Out 4 Trim"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 1.0
+
+[state]
+schema_id = "sparq/util/mixer/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "trivial"

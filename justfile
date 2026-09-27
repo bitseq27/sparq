@@ -23,6 +23,8 @@ clippy:
 check-windows:
     # WO-007: the contract crate is pure Rust, so its MSVC cell is cheap and catches cfg drift early.
     cargo clippy --target x86_64-pc-windows-msvc -p sparq-module-api --all-targets -- -D warnings
+    # WO-009: the clocks/transport crate is pure Rust — its MSVC cell is cheap and catches cfg drift early.
+    cargo clippy --target x86_64-pc-windows-msvc -p sparq-music --all-targets -- -D warnings
     cargo clippy --target x86_64-pc-windows-msvc -p sparq-kernel --features hal-wasapi --all-targets -- -D warnings
     cargo clippy --target x86_64-pc-windows-msvc -p sparq-app --features hal-wasapi --all-targets -- -D warnings
     cargo clippy --target x86_64-pc-windows-msvc -p sparq-kernel --all-targets -- -D warnings

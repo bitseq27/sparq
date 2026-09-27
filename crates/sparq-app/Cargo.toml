@@ -11,6 +11,7 @@ sparq-kernel.workspace = true
 sparq-audio.workspace = true
 sparq-ui.workspace = true
 sparq-module-api.workspace = true
+sparq-music.workspace = true
 cpal = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }
 egui-winit = { workspace = true, optional = true }

@@ -94,3 +94,24 @@ log was built to make impossible.
 **Still open, with a trigger:** whether a T2/T3 module may hold a `gpu` port. Deferred to Phase 5,
 when the wasm tier is scoped. Interim: no `gpu` module may be T2 or T3. The port type itself is not
 deferred — Phase 0's `ana/tap` and `dsp/scope` are first-party T1 and use it.
+
+## Addendum — contract v1 (WO-008 increment 4, 2026-09-26)
+
+The table now has **two consumers in code and a gate between them**. The canvas affordance layer
+already delegated to `sparq-module-api::port`'s `connect_*` (WO-013); the executor's new `cv`/`event`
+build rules delegate to the same single compiled copy — range mismatches, fan-in, and the four
+cross-type adapters all resolve through it, at `Phase::Zero`, so an offer that does not exist in this
+build degrades to a refusal that names the remedy and its phase. `tests/compat_matrix.rs` parses the
+TOML with the crate's own parser and pins vocabularies, verdicts, adapter ids, case counts and
+representative outcomes against the code: the mirror carried since WO-007 can no longer drift
+silently. Its first run found two real drifts — the compiled HOA offer named `spa/objects` instead of
+the table's `spa/hoa-encode`/`spa/hoa-decode` (defect #80, fixed: the offer must name the module it
+would insert), and this table's `cv→audio` adapter still said "syn/sine-or-offset … naming to be
+settled" after the 2026-09-22 addendum had settled it as `util/offset` (defect #81, fixed here).
+One ordering question is pinned rather than decided: the mono fan-out case precedes the spatial
+cases in both copies, so `mono → ambisonics:N` is "compatible fan-out" rather than an encoder
+insertion — flagged for the matrix review the pending `reviewed = false` owes (defect #82). Full
+deletion of the code mirror stays open and now has a named reason: several `when` cells are prose
+("fan-out: one cv output -> many cv inputs"), and no interpreter can evaluate a shape rule against a
+port pair — the table must be restructured into machine predicates (a review-packet change) before
+"read at discovery" can mean more than "pinned at test time".

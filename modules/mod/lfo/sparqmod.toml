@@ -1,0 +1,90 @@
+# sparq module manifest — mod/lfo (WO-014 increment 4).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The first `mod`-family module — the taxonomy family defect #84 added to the closed TOPS
+# domain precisely so this manifest could declare its own top.
+#
+# RANGE DECISION, stated where it is visible: the output is UNIPOLAR (0..1). A bipolar LFO is
+# the modular convention, but the compat matrix REFUSES a bipolar → unipolar wire rather than
+# silently rescaling it (G2 — "nothing invisible happens to the sound"), and the converter it
+# names (`util/range`) is Phase 1 and not built. A bipolar port today would be a module that
+# cannot connect to a single shipped consumer; a unipolar one modulates `flt/svf`'s
+# `cutoff-mod` out of the box. When `util/range` ships, a bipolar sibling (or a `bipolar`
+# port on a 0.2.0 of this module, additively) is a small increment — declared here so the
+# choice is a decision on the record, not an accident.
+#
+# TRANSPORT SYNC, v0 shape: the `sync` event input resets the phase at the event's exact
+# sample — the transport's beat/bar triggers ARE the clock (WO-009 emits them). Continuous
+# tick-derived phase (rate in beats rather than Hz) needs a per-frame tick view or a
+# module-side bpm derivation from block-start ticks; both are declared in LATER.md rather
+# than approximated here.
+
+[identity]
+id = "sparq/mod/lfo"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "LFO"
+summary = "Low-frequency oscillator - four shapes, event phase-reset, unipolar audio-rate cv"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "modulation/lfo"
+top = "mod"
+kind = "source"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "sync"
+name = "Sync"
+direction = "in"
+type = "event"
+event_kinds = ["trigger", "clock"]
+required = false
+
+[[ports]]
+id = "out"
+name = "Out"
+direction = "out"
+type = "cv"
+rate = "audio"
+range = "unipolar"
+
+[[params]]
+id = "rate"
+name = "Rate"
+type = "float"
+unit = "Hz"
+min = 0.05
+max = 50.0
+default = 1.0
+
+# 0 sine · 1 triangle · 2 saw · 3 square — mapped into 0..1 (see the header's range decision).
+[[params]]
+id = "shape"
+name = "Shape (0 sine 1 tri 2 saw 3 sqr)"
+type = "int"
+unit = "x"
+min = 0.0
+max = 3.0
+default = 0.0
+
+[[params]]
+id = "depth"
+name = "Depth"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 1.0
+default = 1.0
+
+[state]
+# The state blob is exactly 8 bytes: the f64 phase, like syn/sine — a project save/restore
+# lands phase-continuous.
+schema_id = "sparq/mod/lfo/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "trivial"

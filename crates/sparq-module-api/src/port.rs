@@ -196,6 +196,15 @@ impl CvRate {
             _ => None,
         }
     }
+
+    /// The manifest spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Audio => "audio",
+            Self::Block => "block",
+        }
+    }
 }
 
 /// The declared range of a `cv` port.
@@ -215,6 +224,157 @@ impl CvRange {
             "bipolar" => Some(Self::Bipolar),
             "unipolar" => Some(Self::Unipolar),
             _ => None,
+        }
+    }
+
+    /// The manifest spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bipolar => "bipolar",
+            Self::Unipolar => "unipolar",
+        }
+    }
+}
+
+/// How an audio-rate `cv` source collapses into a block-rate input (compat-matrix decision G3:
+/// the RECEIVING module declares it, in the manifest, never in code — `first` and `last` render
+/// differently, and an undeclared choice would break journal replay, ADR-007).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CvReduce {
+    /// The final sample of the block wins. The matrix default.
+    #[default]
+    Last,
+    /// The first sample of the block wins.
+    First,
+    /// The arithmetic mean over the block.
+    Mean,
+    /// The minimum over the block.
+    Min,
+    /// The maximum over the block.
+    Max,
+    /// The maximum |sample| over the block, sign-preserved at its occurrence — for level
+    /// followers, where "the peak" means magnitude, and the sign keeps bipolar cv honest.
+    Peak,
+}
+
+impl CvReduce {
+    /// Parses a manifest spelling (`last` | `first` | `mean` | `min` | `max` | `peak`).
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "last" => Some(Self::Last),
+            "first" => Some(Self::First),
+            "mean" => Some(Self::Mean),
+            "min" => Some(Self::Min),
+            "max" => Some(Self::Max),
+            "peak" => Some(Self::Peak),
+            _ => None,
+        }
+    }
+
+    /// The manifest spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Last => "last",
+            Self::First => "first",
+            Self::Mean => "mean",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Peak => "peak",
+        }
+    }
+
+    /// Applies the reduction to one block of audio-rate samples. Empty input reduces to 0.0 —
+    /// a declared policy over nothing is still nothing, not a guess. Allocation-free.
+    #[must_use]
+    pub fn apply(self, samples: &[f32]) -> f32 {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        match self {
+            Self::Last => samples[samples.len() - 1],
+            Self::First => samples[0],
+            Self::Mean => {
+                // f64 accumulator: plan §5.4's rule for every summing path.
+                let sum: f64 = samples.iter().map(|s| f64::from(*s)).sum();
+                (sum / samples.len() as f64) as f32
+            },
+            Self::Min => samples.iter().copied().fold(f32::INFINITY, f32::min),
+            Self::Max => samples.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+            Self::Peak => {
+                let mut best = 0.0f32;
+                for &s in samples {
+                    if s.abs() > best.abs() {
+                        best = s;
+                    }
+                }
+                best
+            },
+        }
+    }
+}
+
+/// How the host expands a block-rate `cv` source for an audio-rate input (decision G4/Q3: the
+/// module declares, the host performs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CvInterp {
+    /// Every frame of the block reads the block's value. The matrix default.
+    #[default]
+    Hold,
+    /// A ramp from the PREVIOUS block's value to this block's, reaching this block's value at
+    /// frame `frames` (i.e. exactly at the next block boundary): `v[i] = prev + (cur − prev) ·
+    /// i / frames`. Continuous across blocks, so a slow block-rate sweep produces no steps.
+    Linear,
+    /// Declared in the vocabulary, NOT yet implemented by the host: an edge whose receiver
+    /// declares `spline` is refused at build in words rather than silently held.
+    Spline,
+}
+
+impl CvInterp {
+    /// Parses a manifest spelling (`hold` | `linear` | `spline`).
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "hold" => Some(Self::Hold),
+            "linear" => Some(Self::Linear),
+            "spline" => Some(Self::Spline),
+            _ => None,
+        }
+    }
+
+    /// The manifest spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hold => "hold",
+            Self::Linear => "linear",
+            Self::Spline => "spline",
+        }
+    }
+
+    /// Expands `prev → cur` into `dst` (one frame per element). Allocation-free; `dst.len()` is
+    /// the block's frame count.
+    pub fn expand(self, prev: f32, cur: f32, dst: &mut [f32]) {
+        let n = dst.len();
+        match self {
+            Self::Hold | Self::Spline => {
+                // Spline never reaches here (refused at build); if it ever did, holding would be
+                // the visible-lie option — the executor's refusal is the honest path.
+                for s in dst.iter_mut() {
+                    *s = cur;
+                }
+            },
+            Self::Linear => {
+                if n == 0 {
+                    return;
+                }
+                for (i, s) in dst.iter_mut().enumerate() {
+                    let t = i as f32 / n as f32;
+                    *s = prev + (cur - prev) * t;
+                }
+            },
         }
     }
 }
@@ -295,8 +455,12 @@ pub enum Adapter {
     Mapper,
     /// `util/mixer` — the explicit merge that `cv` fan-in requires. Phase 1.
     Merge,
-    /// `spa/hoa-encode` / `spa/hoa-decode` — spatial ↔ non-spatial. Phase 5–7.
-    Hoa,
+    /// `spa/hoa-encode` — non-spatial → `ambisonics:N`. Phase 5–7. (Contract v1 split the old
+    /// single `Hoa` variant: the matrix names TWO modules, one per direction, and an offer has
+    /// to name the module it would insert — defect #80.)
+    HoaEncode,
+    /// `spa/hoa-decode` — `ambisonics:N` → non-spatial. Phase 5–7.
+    HoaDecode,
     /// `spa/objects` — object-count conversion (decision G1). Phase 5–7.
     Objects,
 }
@@ -312,7 +476,9 @@ impl Adapter {
             Self::GateToCv => "util/gate-to-cv",
             Self::Mapper => "dat/mapper",
             Self::Merge => "util/mixer",
-            Self::Hoa | Self::Objects => "spa/objects",
+            Self::HoaEncode => "spa/hoa-encode",
+            Self::HoaDecode => "spa/hoa-decode",
+            Self::Objects => "spa/objects",
         }
     }
 
@@ -323,7 +489,7 @@ impl Adapter {
             Self::Range | Self::Offset | Self::Analyser | Self::GateToCv | Self::Merge => {
                 Phase::One
             },
-            Self::Mapper | Self::Hoa | Self::Objects => Phase::Five,
+            Self::Mapper | Self::HoaEncode | Self::HoaDecode | Self::Objects => Phase::Five,
         }
     }
 
@@ -375,8 +541,11 @@ pub fn connect_audio(src: ChannelSet, dst: ChannelSet, phase: Phase) -> Verdict 
         // objects:K -> objects:J, K != J: decision G1, convert via spa/objects.
         (C::Objects(_), C::Objects(_)) => adapter(Adapter::Objects, phase),
         // "ambisonics:* refuses to connect to non-spatial ports unless an encoder/decoder is
-        // inserted", in both directions.
-        (a, b) if a.is_spatial() != b.is_spatial() => adapter(Adapter::Hoa, phase),
+        // inserted" — the table's cell names ambisonics SPECIFICALLY, one module per direction.
+        // objects ↔ non-spatial has no named converter, so it falls through to refusal: the
+        // canvas never offers a module that does not exist (ADR-005 addendum's rule).
+        (C::Ambisonics(_), _) => adapter(Adapter::HoaDecode, phase),
+        (_, C::Ambisonics(_)) => adapter(Adapter::HoaEncode, phase),
         // Two different non-spatial fixed layouts (stereo -> quad, 5.1 -> 7.1.4, ...).
         _ => Verdict::Refused,
     }
@@ -498,11 +667,24 @@ mod tests {
         assert_eq!(connect_audio(ambi, ChannelSet::Stereo, Phase::Zero), Verdict::Refused);
         assert_eq!(
             connect_audio(ambi, ChannelSet::Stereo, Phase::Five),
-            Verdict::Adapter(Adapter::Hoa)
+            Verdict::Adapter(Adapter::HoaDecode),
+            "leaving spatial decodes"
+        );
+        assert_eq!(
+            connect_audio(ChannelSet::Stereo, ambi, Phase::Five),
+            Verdict::Adapter(Adapter::HoaEncode),
+            "entering spatial encodes"
         );
         assert_eq!(
             connect_audio(ambi, ChannelSet::Ambisonics(3), Phase::Zero),
             Verdict::Compatible
+        );
+        // The table's spatial cell names ambisonics specifically; objects → non-spatial has no
+        // named converter, so it refuses even where an adapter phase exists (defect #80's fix:
+        // the offer must name the module it would insert, and no module renders objects to stereo).
+        assert_eq!(
+            connect_audio(ChannelSet::Objects(8), ChannelSet::Stereo, Phase::Five),
+            Verdict::Refused
         );
     }
 
@@ -560,10 +742,16 @@ mod tests {
             Adapter::GateToCv,
             Adapter::Mapper,
             Adapter::Merge,
-            Adapter::Hoa,
+            Adapter::HoaEncode,
+            Adapter::HoaDecode,
             Adapter::Objects,
         ] {
             assert!(a.module_id().contains('/'), "{} is not a <category>/<name> id", a.module_id());
         }
+        // The exact ids the matrix names — the drift gate (tests/compat_matrix.rs) reads the
+        // same strings out of the TOML, so these literals are pinned from both sides.
+        assert_eq!(Adapter::HoaEncode.module_id(), "spa/hoa-encode");
+        assert_eq!(Adapter::HoaDecode.module_id(), "spa/hoa-decode");
+        assert_eq!(Adapter::Objects.module_id(), "spa/objects");
     }
 }

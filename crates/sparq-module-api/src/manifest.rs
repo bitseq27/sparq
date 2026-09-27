@@ -15,10 +15,12 @@
 //! disagree, the table wins and this file is wrong.
 
 use crate::error::{CodeKind, ValidationError, ValidationReport};
-use crate::module::Oversampling;
+use crate::event::EventKind;
+use crate::module::{Oversampling, MAX_PORTS_PER_CLASS};
 use crate::params::MAX_PARAMS;
 use crate::port::{
-    ChannelSet, ChannelSetError, CvRange, CvRate, Direction, Multiplicity, PortType,
+    ChannelSet, ChannelSetError, CvInterp, CvRange, CvRate, CvReduce, Direction, Multiplicity,
+    PortType,
 };
 
 /// The closed unit vocabulary (module-api §5). No invented units.
@@ -27,10 +29,14 @@ pub const UNITS: [&str; 16] = [
     "ticks", "x",
 ];
 /// `classification.top` — the taxonomy's first segment.
-pub const TOPS: [&str; 16] = [
-    "syn", "smp", "flt", "fx", "dyn", "ana", "spa", "seq", "gen", "harm", "dat", "io", "dsp",
-    "util", "ml", "out",
+pub const TOPS: [&str; 18] = [
+    "syn", "smp", "flt", "fx", "dyn", "ana", "spa", "seq", "env", "mod", "gen", "harm", "dat",
+    "io", "dsp", "util", "ml", "out",
 ];
+// "env" and "mod" joined 2026-09-26 (defect #84, table-first): Appendix B's stable ids (`env/ad`,
+// `mod/lfo`, `mod/clk-div`) and WO-014's artefact paths name these families, but the closed domain
+// in BOTH copies lacked them — `env/ad` could not declare its own top. The drift pin below makes
+// the two copies move together from now on.
 /// `classification.kind` — what a module *is*, as against where it sits in the browser.
 pub const KINDS: [&str; 9] = [
     "source",
@@ -153,6 +159,8 @@ pub struct PortSpec {
     pub cv_reduce: Option<String>,
     /// How the host expands a block-rate source for an audio-rate input (Q3). Default `hold`.
     pub cv_interp: Option<String>,
+    /// For `event`: the dialects this port speaks. Required and closed-domain.
+    pub event_kinds: Vec<String>,
 }
 
 /// One `params[]` entry, as written.
@@ -245,6 +253,17 @@ pub struct Port {
     pub cv_rate: Option<CvRate>,
     /// For `cv`.
     pub cv_range: Option<CvRange>,
+    /// For a block-rate `cv` INPUT: how an audio-rate source collapses (decision G3 — the
+    /// receiver declares, the host performs, and the choice is data because `first` and `last`
+    /// render differently). [`CvReduce::Last`] when undeclared.
+    pub cv_reduce: CvReduce,
+    /// For an audio-rate `cv` INPUT: how the host expands a block-rate source (decision G4).
+    /// [`CvInterp::Hold`] when undeclared.
+    pub cv_interp: CvInterp,
+    /// For `event`: the dialects this port speaks, in declared order, deduplicated by
+    /// validation's duplicate-id discipline being unnecessary — the domain is six wide and a
+    /// repeat is harmless. Empty for every other port type.
+    pub event_kinds: Vec<EventKind>,
     /// Fan-in/fan-out policy.
     pub multiplicity: Multiplicity,
     /// Samples this port path adds.
@@ -647,18 +666,93 @@ impl Manifest {
                         ),
                     },
                 }
-                // Decisions G3/G4: the policies are declared, so a rate change is reproducible.
-                opt_enum(
-                    r,
-                    &format!("{base}.cv_reduce"),
-                    p.cv_reduce.as_deref(),
-                    &["last", "first", "mean", "min", "max", "peak"],
+            }
+
+            // Decisions G3/G4: the policies are declared, so a rate change is reproducible. They
+            // are typed here rather than left as strings, because contract v1 makes the executor
+            // *perform* them and a policy the engine re-parses from text is a policy that can
+            // drift from the vocabulary.
+            let cv_reduce = match p.cv_reduce.as_deref() {
+                None => CvReduce::default(),
+                Some(s) => CvReduce::parse(s).unwrap_or_else(|| {
+                    r.push(
+                        ValidationError::new(
+                            CodeKind::EnumUnknown,
+                            format!("{base}.cv_reduce"),
+                            "use one of the reductions the receiving module may declare",
+                        )
+                        .with_found(s)
+                        .with_allowed("last first mean min max peak"),
+                    );
+                    CvReduce::default()
+                }),
+            };
+            let cv_interp = match p.cv_interp.as_deref() {
+                None => CvInterp::default(),
+                Some(s) => CvInterp::parse(s).unwrap_or_else(|| {
+                    r.push(
+                        ValidationError::new(
+                            CodeKind::EnumUnknown,
+                            format!("{base}.cv_interp"),
+                            "use one of the expansions the host performs",
+                        )
+                        .with_found(s)
+                        .with_allowed("hold linear spline"),
+                    );
+                    CvInterp::default()
+                }),
+            };
+
+            // `event_kinds` is required on an event port and forbidden elsewhere (the domain is
+            // closed: ump, osc, trigger, gate, note, clock).
+            let mut event_kinds: Vec<EventKind> = Vec::new();
+            if port_type == Some(PortType::Event) {
+                if p.event_kinds.is_empty() {
+                    r.push(ValidationError::new(
+                        CodeKind::KeyMissing,
+                        format!("{base}.event_kinds"),
+                        "an event port must declare the dialects it speaks — a port that accepts \
+                         everything accepts nothing reproducibly",
+                    ));
+                }
+                for (k, item) in p.event_kinds.iter().enumerate() {
+                    match EventKind::parse(item) {
+                        Some(kind) => event_kinds.push(kind),
+                        None => r.push(
+                            ValidationError::new(
+                                CodeKind::EnumUnknown,
+                                format!("{base}.event_kinds[{k}]"),
+                                "the event dialect set is closed (ADR-005)",
+                            )
+                            .with_found(item)
+                            .with_allowed("ump osc trigger gate note clock"),
+                        ),
+                    }
+                }
+            } else if !p.event_kinds.is_empty() {
+                r.push(
+                    ValidationError::new(
+                        CodeKind::CrossField,
+                        format!("{base}.event_kinds"),
+                        "`event_kinds` only applies to an `event` port",
+                    )
+                    .with_found(format!("type = {:?}", port_type)),
                 );
-                opt_enum(
-                    r,
-                    &format!("{base}.cv_interp"),
-                    p.cv_interp.as_deref(),
-                    &["hold", "linear", "spline"],
+            }
+
+            // The rate-change policies belong to the RECEIVING side only (G3/G4: "the receiving
+            // module owns any rate change on its own input"), so an output declaring one is a
+            // misunderstanding worth naming rather than ignoring.
+            if direction == Some(Direction::Out) && (p.cv_reduce.is_some() || p.cv_interp.is_some())
+            {
+                r.push(
+                    ValidationError::new(
+                        CodeKind::CrossField,
+                        format!("{base}.cv_reduce"),
+                        "`cv_reduce`/`cv_interp` are the RECEIVING port's declarations — an output \
+                         has nothing to reduce or interpolate",
+                    )
+                    .with_found("direction = out"),
                 );
             }
 
@@ -691,9 +785,35 @@ impl Manifest {
                     channel_set_variable: variable,
                     cv_rate,
                     cv_range,
+                    cv_reduce,
+                    cv_interp,
+                    event_kinds,
                     multiplicity,
                     latency_contribution: p.latency_contribution.unwrap_or(0),
                 });
+            }
+        }
+        // Contract v1's carrying cap: AudioCtx presents at most MAX_PORTS_PER_CLASS ports per
+        // type per direction, and a port the context cannot present must not pretend to exist —
+        // so the manifest is refused here, where the author gets a sentence, rather than at
+        // build time deep inside a patch load. Only the CARRIED types count: data/gpu/atom ports
+        // never enter AudioCtx (their edges are refused by the executor in words).
+        for ty in [PortType::Audio, PortType::Cv, PortType::Event] {
+            for dir in [Direction::In, Direction::Out] {
+                let n = out.iter().filter(|pt| pt.port_type == ty && pt.direction == dir).count();
+                if n > MAX_PORTS_PER_CLASS {
+                    r.push(
+                        ValidationError::new(
+                            CodeKind::CrossField,
+                            "ports",
+                            "contract v1 carries at most 8 ports of one type in one direction \
+                             (AudioCtx is fixed-capacity so the audio thread never allocates); \
+                             split the module or use a wider port (raw:M, multi-channel sets)",
+                        )
+                        .with_found(format!("{n} {ty} {} ports", dir_name(dir)))
+                        .with_allowed(format!("at most {MAX_PORTS_PER_CLASS}")),
+                    );
+                }
             }
         }
         report_duplicate_ids(r, "ports", self.ports.iter().filter_map(|p| p.id.as_deref()));
@@ -918,7 +1038,28 @@ impl Manifest {
                     .with_found("rate = audio"),
                 );
             }
+            if p.port_type.as_deref() == Some("cv")
+                && p.rate.as_deref() == Some("block")
+                && p.cv_interp.is_some()
+            {
+                r.push(
+                    ValidationError::new(
+                        CodeKind::CrossField,
+                        format!("ports[{n}].cv_interp"),
+                        "`cv_interp` only applies to an audio-rate cv input; a block-rate input has nothing to expand",
+                    )
+                    .with_found("rate = block"),
+                );
+            }
         }
+    }
+}
+
+/// The manifest spelling of a direction, for error sentences.
+fn dir_name(d: Direction) -> &'static str {
+    match d {
+        Direction::In => "input",
+        Direction::Out => "output",
     }
 }
 
@@ -1231,6 +1372,187 @@ mod tests {
         let e = rep.first_at("ports[2].cv_reduce").unwrap();
         assert_eq!(e.kind, CodeKind::CrossField);
         assert!(e.to_string().contains("nothing to reduce"), "{e}");
+    }
+
+    #[test]
+    fn the_tops_vocabulary_matches_the_field_table() {
+        // The first code consumer of docs/api/manifest-fields.toml (the compat_matrix.rs gate
+        // pattern, applied to the field table): the closed domain of classification.top exists
+        // in TWO copies — the table's `domain` row and [`TOPS`] — and defect #84 is what happens
+        // when only one of them moves: `env/ad` could not declare its own top.
+        use crate::toml::Value;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/api/manifest-fields.toml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let root = crate::toml::parse(&text).unwrap();
+        let row = root
+            .tables("field")
+            .unwrap()
+            .into_iter()
+            .find(|t| t.get("path").and_then(Value::as_str) == Some("classification.top"))
+            .expect("the field table lost the classification.top row");
+        let mut table: Vec<String> = row
+            .get("domain")
+            .and_then(Value::as_array)
+            .expect("classification.top lost its domain")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        let mut code: Vec<String> = TOPS.iter().map(|s| (*s).to_string()).collect();
+        table.sort();
+        code.sort();
+        assert_eq!(
+            table, code,
+            "classification.top drifted between the table and TOPS — defect #84's class"
+        );
+        assert!(
+            code.contains(&"env".to_string()) && code.contains(&"mod".to_string()),
+            "Appendix B's families must stay declarable"
+        );
+    }
+
+    #[test]
+    fn cv_interp_on_a_block_rate_input_is_a_cross_field_error() {
+        // The mirror of the rule above (G3/G4 are one decision seen from two sides): a block-rate
+        // input receives one value per block — there is nothing for the host to expand.
+        let mut m = minimal();
+        m.ports.push(PortSpec {
+            id: Some("mod".into()),
+            name: Some("Mod".into()),
+            direction: Some("in".into()),
+            port_type: Some("cv".into()),
+            rate: Some("block".into()),
+            range: Some("unipolar".into()),
+            cv_interp: Some("linear".into()),
+            ..PortSpec::default()
+        });
+        let rep = m.report();
+        let e = rep.first_at("ports[2].cv_interp").unwrap();
+        assert_eq!(e.kind, CodeKind::CrossField);
+        assert!(e.to_string().contains("nothing to expand"), "{e}");
+    }
+
+    #[test]
+    fn rate_change_policies_on_an_output_are_a_cross_field_error() {
+        // G3/G4: "the RECEIVING module owns any rate change on its own input." An output that
+        // declares a policy is a misunderstanding worth naming, not ignoring.
+        let mut m = minimal();
+        m.ports.push(PortSpec {
+            id: Some("level".into()),
+            name: Some("Level".into()),
+            direction: Some("out".into()),
+            port_type: Some("cv".into()),
+            rate: Some("block".into()),
+            range: Some("unipolar".into()),
+            cv_reduce: Some("last".into()),
+            ..PortSpec::default()
+        });
+        let rep = m.report();
+        let e = rep.first_at("ports[2].cv_reduce").unwrap();
+        assert_eq!(e.kind, CodeKind::CrossField);
+        assert!(e.to_string().contains("RECEIVING"), "{e}");
+    }
+
+    fn event_port(id: &str, kinds: Vec<String>) -> PortSpec {
+        PortSpec {
+            id: Some(id.into()),
+            name: Some(id.to_uppercase()),
+            direction: Some("in".into()),
+            port_type: Some("event".into()),
+            event_kinds: kinds,
+            ..PortSpec::default()
+        }
+    }
+
+    #[test]
+    fn an_event_port_must_declare_its_dialects() {
+        let mut m = minimal();
+        m.ports.push(event_port("trig", Vec::new()));
+        let rep = m.report();
+        let e = rep.first_at("ports[2].event_kinds").unwrap();
+        assert_eq!(e.code(), "E-KEY-MISSING:ports[2].event_kinds");
+        assert!(e.to_string().contains("reproducibly"), "{e}");
+
+        // Declared kinds parse into the closed vocabulary, in order.
+        let mut m = minimal();
+        m.ports.push(event_port("trig", vec!["trigger".into(), "gate".into()]));
+        let v = m.validate().unwrap_or_else(|r| panic!("{r}"));
+        use crate::event::EventKind;
+        assert_eq!(v.ports()[2].event_kinds, vec![EventKind::Trigger, EventKind::Gate]);
+    }
+
+    #[test]
+    fn an_unknown_event_dialect_is_rejected_by_path() {
+        let mut m = minimal();
+        m.ports.push(event_port("trig", vec!["trigger".into(), "midi1".into()]));
+        let rep = m.report();
+        let e = rep.first_at("ports[2].event_kinds[1]").unwrap();
+        assert_eq!(e.code(), "E-ENUM-UNKNOWN:ports[2].event_kinds[1]");
+        assert!(e.to_string().contains("ump osc trigger gate note clock"), "{e}");
+    }
+
+    #[test]
+    fn event_kinds_on_a_non_event_port_is_a_cross_field_error() {
+        let mut m = minimal();
+        m.ports[0].event_kinds = vec!["trigger".into()]; // the audio input
+        let rep = m.report();
+        let e = rep.first_at("ports[0].event_kinds").unwrap();
+        assert_eq!(e.kind, CodeKind::CrossField);
+        assert!(e.to_string().contains("only applies to an `event` port"), "{e}");
+    }
+
+    #[test]
+    fn more_than_eight_ports_of_one_class_is_refused_and_eight_is_not() {
+        use crate::module::MAX_PORTS_PER_CLASS;
+        let mut m = minimal();
+        for i in 0..MAX_PORTS_PER_CLASS {
+            m.ports.push(PortSpec {
+                id: Some(format!("cv{i}")),
+                name: Some(format!("Cv{i}")),
+                direction: Some("out".into()),
+                port_type: Some("cv".into()),
+                rate: Some("block".into()),
+                range: Some("unipolar".into()),
+                ..PortSpec::default()
+            });
+        }
+        assert!(m.report().is_empty(), "exactly the cap is legal: {}", m.report());
+        m.ports.push(PortSpec {
+            id: Some("cv8".to_string()),
+            name: Some("Cv8".into()),
+            direction: Some("out".into()),
+            port_type: Some("cv".into()),
+            rate: Some("block".into()),
+            range: Some("unipolar".into()),
+            ..PortSpec::default()
+        });
+        let rep = m.report();
+        assert!(rep.has(CodeKind::CrossField), "one past the cap is refused: {rep}");
+        assert!(rep.to_string().contains("8 ports of one type"), "{rep}");
+    }
+
+    #[test]
+    fn the_port_cap_is_per_class_not_total() {
+        // Eight cv OUTPUTS plus two audio ports plus an event input is nine ports total and legal:
+        // the cap exists because AudioCtx presents ports per type per direction, not because the
+        // manifest has a shape budget.
+        use crate::module::MAX_PORTS_PER_CLASS;
+        let mut m = minimal();
+        for i in 0..MAX_PORTS_PER_CLASS {
+            m.ports.push(PortSpec {
+                id: Some(format!("cv{i}")),
+                name: Some(format!("Cv{i}")),
+                direction: Some("out".into()),
+                port_type: Some("cv".into()),
+                rate: Some("block".into()),
+                range: Some("unipolar".into()),
+                ..PortSpec::default()
+            });
+        }
+        m.ports.push(event_port("trig", vec!["trigger".into()]));
+        assert_eq!(m.ports.len(), 11);
+        assert!(m.report().is_empty(), "per-class caps, not a total: {}", m.report());
     }
 
     #[test]

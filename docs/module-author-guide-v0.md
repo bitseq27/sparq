@@ -1,4 +1,4 @@
-# sparq module author guide — v0
+# sparq module author guide — v0, updated for contract v1 (WO-008 increment 4, 2026-09-26)
 
 **Audience:** you, writing a module for sparq. **Status:** v0, matching `sparq-module-api` as built in
 WO-007. **The test this document has to pass** (module-api §15): a simple module is a **two-hour**
@@ -220,7 +220,43 @@ You do not implement connection logic; the host does, from one table
   `first` and `last` produce *different audio* — an undeclared choice would make a journal replay
   diverge from the original render.
 * A converter is only offered if it exists. `data → cv` is refused until `dat/mapper` ships in
-  Phase 5, rather than presenting a button that does nothing.
+  Phase 5, rather than presenting a button that does nothing. `spline` interpolation is the same
+  rule seen from the rate table: the vocabulary promises it, the host has not implemented it, so
+  a graph whose receiver declares it is **refused at build in words** rather than silently held.
+
+### 8.1 How your ports arrive in `process` (contract v1)
+
+`AudioCtx` presents your declared ports **per type, in manifest order**: `audio_in(i)` is your
+*i*-th `audio` `in` port even when a `cv` port sits before it in the manifest, and the same holds
+for `audio_out`, `cv_in`, `cv_out`, `events_in` and `event_out`. An accessor returns `None` past
+your declared ports; for inputs, `Some(&[])` / `CvIn::Unconnected` means *present but nothing
+plugged in* — an explicit signal, never silence-by-accident. The v0 conveniences are still there
+over the first audio port: `ctx.input()`, `ctx.output()`, `ctx.has_input()`.
+
+What each port class hands you:
+
+| Class | In | Out |
+|---|---|---|
+| `audio` | `&[f32]` interleaved, `frames × channels` | `&mut [f32]`, same |
+| `cv` | `CvIn`: `Block(f32)` **or** `Audio(&[f32])` — always the rate YOU declared; the host performs any rate change (`cv_reduce`/`cv_interp`) before you see a value | `CvOut`: `Block(&mut f32)` or `Audio(&mut [f32])`; `set(v)` writes the cell or constant-fills the buffer |
+| `event` | `&[Event]` — **pre-sorted by `sample`**, ties stable (host rank → connection id → insertion order); empty means "no events this block", which is information | `EventSink`: `push(Event) -> bool`; capacity is `EVENTS_PER_BLOCK` (64) per port per block, and a `false` return is counted host-side (`event_drops_total`), never grown and never silent |
+
+**Borrow discipline, the two rules that bite:**
+
+1. Input views escape with the context's lifetime, output views borrow the context. Take inputs
+   FIRST: `let inp = ctx.input(); for (o, i) in ctx.output().iter_mut().zip(inp) { … }` compiles;
+   the reversed order does not.
+2. Two reborrowed output views cannot coexist (`ctx.audio_out(0)` and `ctx.audio_out(1)` are two
+   `&mut self` calls). A multi-output module uses the `take_*` variants, which MOVE the view out:
+   `let (a, b) = (ctx.take_audio_out(0), ctx.take_audio_out(1));` — taken means taken, the slot
+   reads `None` afterwards, so take each port once per block. Same for `take_cv_out` and
+   `take_event_out`.
+
+`prepare` now receives the resolved per-port channel counts (`audio_in_channels` /
+`audio_out_channels` with their counts); `input_channels`/`output_channels` remain as the
+first-port view. A worked multi-port module: `crates/sparq-audio/tests/contract_v1.rs`'s
+`MultiProc` (two ins, two outs); a worked cv consumer: `flt/svf`'s `cutoff-mod` port; a worked
+event pair: the same file's emitter/probe.
 
 ## 9. State, assets, latency
 
@@ -256,20 +292,34 @@ number of periods, so the mean could not cancel and the test measured its own ar
 phase drift. At 750 Hz one block *is* one period and the property is exact. A test that fails for the
 wrong reason and is then loosened until it passes is how a gate quietly stops testing anything.
 
-## 11. v0 limits — what you cannot do yet
+## 11. Contract v1 limits — what you cannot do yet
 
-* **One interleaved audio input and one output.** Multi-port buffers arrive with the WO-008 executor,
-  which owns buffer pooling and per-path latency.
+* **Multi-port is here, with a fixed capacity:** at most **8 ports of one type in one direction**
+  (`MAX_PORTS_PER_CLASS`; a wider manifest is refused at validation), and at most **64 events per
+  output port per block** (`EVENTS_PER_BLOCK`; beyond it `push` returns `false` and the refusal is
+  counted). Both limits exist so the context and the sinks are fixed-size: the audio thread never
+  allocates. Need more events per block? The remedy is a smaller host block, not a bigger constant.
+* **`data` and `gpu` payloads are declared and validated but still not carried** — an edge to either
+  is refused at build in words (data waits for the schema/staleness machinery; `gpu` never rides the
+  audio thread and its display plumbing arrives with the ring publication). `atom` never travels
+  through `AudioCtx` at all: it is the control-thread `message()` door. `gpu` ports are first-party
+  T1 only until Phase 5 decides the tier question; `ana/tap` and `dsp/scope` are the Phase-0
+  modules that use them.
+* **`cv` fan-in still needs the explicit merge** (`util/mixer`, Phase 1, not yet built), and a cv
+  range mismatch still refuses naming `util/range` (Phase 1). `cv_interp = "spline"` is refused at
+  build until the host implements it — declare `hold` or `linear`.
+* **Delay edges are audio-only.** A `block_delay`/`unit_delay` edge on a cv or event wire is
+  refused; delayed control is WO-009's timing vocabulary.
+* **The musical clock is static** (`ctx.block.tick` stays 0): transport-synced modules (`mod/lfo`,
+  `mod/clk-div`) wait for WO-009. Host-injected events exist (the executor's control-side door) but
+  scheduling them BY TICK is WO-009's clock broker.
 * **No sub-block processing.** A module may not chop the host block into finer internal passes; there
   is no `internal_rate` field. Grain and event **onsets are still sample-accurate** — events arrive
   pre-sorted by sample offset and you render into the block buffer, so a granular cloud can start a
-  grain at sample 37 of 64. What v0 gives up is parameter *movement* inside a block. If you genuinely
-  need finer resolution, the remedy is a smaller **host** block (`BlockContext.frames` is a runtime
-  field, and 100 modules at 16 frames costs ~0.52 % of a core against ~0.13 % at 64), not a contract
-  change.
-* **`data` and `gpu` payloads are declared and validated but not yet carried**, and `event` payloads
-  are declared but not carried. `gpu` ports are first-party T1 only until Phase 5 decides the tier
-  question; `ana/tap` and `dsp/scope` are the Phase-0 modules that use them.
+  grain at sample 37 of 64. What v1 still gives up is parameter *movement* inside a block. If you
+  genuinely need finer resolution, the remedy is a smaller **host** block (`BlockContext.frames` is
+  a runtime field, and 100 modules at 16 frames costs ~0.52 % of a core against ~0.13 % at 64), not
+  a contract change.
 * **No hot reload** (Phase 1), **no wasm tier** (Phase 5), **no state migration chains beyond the
   declaration** — the schema id and version fields exist now so migration can be added without
   breaking manifests.

@@ -1,0 +1,17 @@
+[package]
+name = "sparq-music"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "sparq clocks + transport v0 (WO-009): the ClockBroker's three-clock map (ADR-006), play/stop/tempo/loop/tap, and the sample-accurate event queue"
+
+[dependencies]
+# The kernel owns the pure sample↔musical map (the piecewise Clock) and the block contract;
+# this crate owns the stream-facing broker (wall side, drift) and the transport state machine.
+sparq-kernel.workspace = true
+# Event is the contract's type: the transport emits exactly what a module's event port receives.
+sparq-module-api.workspace = true
+
+[lints]
+workspace = true

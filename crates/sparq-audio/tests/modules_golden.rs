@@ -15,7 +15,7 @@ use sparq_audio::modules::{
 };
 use sparq_kernel::alloc::{allocation_count, start_counting, stop_counting, CountingAllocator};
 use sparq_kernel::block::BlockContext;
-use sparq_module_api::module::{AudioCtx, BlockStatus, Resources};
+use sparq_module_api::module::{AudioCtx, BlockStatus, CvOut, Resources};
 use sparq_module_api::params::ParamSet;
 use sparq_module_api::registry::Registry;
 
@@ -43,9 +43,9 @@ fn res() -> Resources {
 }
 
 /// Render `blocks` blocks of the demo patch at 48 kHz/64/stereo. Returns the master samples, the
-/// rms tap VALUE (output[0] — the v0 cv convention; the tap node's meter would average the value
-/// against its zero-filled frame tail, which is arithmetic, not semantics), and the master's
-/// metered rms (the audio-node meter, which must agree with the tap).
+/// rms tap VALUE (contract v1: read from the node's declared block-rate `cv` port — the v0
+/// convention of riding in an audio `output[0]` the manifest never declared is gone), and the
+/// master's metered rms (the audio-node meter, which must agree with the tap).
 fn render_demo(blocks: usize) -> (Vec<f32>, f32, f32) {
     let mut reg = Registry::new();
     register_builtins(&mut reg).unwrap();
@@ -57,8 +57,8 @@ fn render_demo(blocks: usize) -> (Vec<f32>, f32, f32) {
         demo.executor.render_block(demo.gain, &mut out).unwrap();
         samples.extend_from_slice(&out);
     }
-    let tap =
-        demo.executor.node_output(demo.rms).and_then(|b| b.first().copied()).unwrap_or(f32::NAN);
+    // rms.level is manifest port 1 (the module's block-rate cv output).
+    let tap = demo.executor.node_cv_block(demo.rms, 1).unwrap_or(f32::NAN);
     let master_rms = demo.executor.meter(demo.gain).map(|m| m.rms).unwrap_or(f32::NAN);
     (samples, tap, master_rms)
 }
@@ -118,14 +118,17 @@ fn all_three_modules_make_zero_allocations_in_process() {
     gain.prepare(&res()).unwrap();
     let mut rms = create_rms();
     rms.prepare(&res()).unwrap();
+    // Contract v1: rms publishes on its cv port — the measured shape includes presenting it.
+    let mut cell = 0.0f32;
 
     let made = measure(|| {
         for _ in 0..5_000 {
-            let mut a = AudioCtx { block: &ctx, params: &params, input: &[], output: &mut out };
+            let mut a = AudioCtx::single(&ctx, &params, &[], &mut out);
             assert_eq!(sine.process(&mut a), BlockStatus::Ok);
-            let mut b = AudioCtx { block: &ctx, params: &params, input: &input, output: &mut out };
+            let mut b = AudioCtx::single(&ctx, &params, &input, &mut out);
             assert_eq!(gain.process(&mut b), BlockStatus::Ok);
-            let mut c = AudioCtx { block: &ctx, params: &params, input: &input, output: &mut out };
+            let mut c = AudioCtx::single(&ctx, &params, &input, &mut out)
+                .with_cv_out(CvOut::Block(&mut cell));
             assert_eq!(rms.process(&mut c), BlockStatus::Ok);
         }
     });
@@ -202,7 +205,7 @@ fn sine_golden_one_second() {
     let mut out = vec![0.0f32; FRAMES]; // mono use
     let mut samples: Vec<f32> = Vec::new();
     for _ in 0..750 {
-        let mut a = AudioCtx { block: &ctx, params: &params, input: &[], output: &mut out };
+        let mut a = AudioCtx::single(&ctx, &params, &[], &mut out);
         sine.process(&mut a);
         samples.extend_from_slice(&out);
     }
@@ -218,7 +221,7 @@ fn gain_golden_is_bit_exact_at_unity() {
     let params = ParamSet::new(1, &[1.0]).unwrap();
     let input: Vec<f32> = (0..FRAMES * CH).map(|i| (i as f32) * 0.001 - 0.064).collect();
     let mut out = vec![0.0f32; FRAMES * CH];
-    let mut a = AudioCtx { block: &ctx, params: &params, input: &input, output: &mut out };
+    let mut a = AudioCtx::single(&ctx, &params, &input, &mut out);
     gain.process(&mut a);
     assert_eq!(out, input, "unity gain must be bit-exact — this IS the golden");
 }
@@ -230,8 +233,10 @@ fn rms_golden_of_a_known_signal() {
     let ctx = block();
     let params = ParamSet::new(1, &[0.0]).unwrap();
     let input: Vec<f32> = (0..FRAMES * CH).map(|i| if i % 2 == 0 { 0.5 } else { -0.5 }).collect();
-    let mut out = vec![9.0f32; 1];
-    let mut a = AudioCtx { block: &ctx, params: &params, input: &input, output: &mut out };
+    // The declared cv port carries the value (contract v1); NAN so an unwritten cell fails.
+    let mut cell = f32::NAN;
+    let mut a =
+        AudioCtx::single(&ctx, &params, &input, &mut []).with_cv_out(CvOut::Block(&mut cell));
     rms.process(&mut a);
-    assert!((out[0] - 0.5).abs() < 1e-6, "rms of ±0.5 square is 0.5, got {}", out[0]);
+    assert!((cell - 0.5).abs() < 1e-6, "rms of ±0.5 square is 0.5, got {cell}");
 }

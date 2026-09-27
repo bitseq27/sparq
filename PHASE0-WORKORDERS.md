@@ -77,9 +77,17 @@ SATURN compiled the new `sparq-app` against the *previous* increment's `sparq-ui
 mechanism, on the side of the failure the stamp guard cannot see). Now `SYNC-STAMP.txt` +
 `tools/sync_check.py` verify the tree by sha256 *before* cargo runs, and `build.bat` purges the
 first-party fingerprints every build; `test005` reports both as step [00b]. Defect #78. **Awaiting device:** 60 fps at 200 nodes, real palm rejection (WM_POINTER, increment 2), full DPI matrix — none claimable over RDP. **Increment 3 (2026-09-25): shipped the browser, the inspector and wire re-patch — 519 tests, audit PASS with 19 smokes, goldens unchanged** (per-node param state in the model with `Op::SetParam`; the bridge renders node state, untouched patches bit-identical; fuzzy ranking deterministic; re-patch verdicts run on the post-removal graph, refusals restore byte-exact; one drag = one undo step for both moves and sliders). **Live wire levels stay parked** (need WO-008 executor taps — faking them from canvas data would be a lie in motion). Full entry below; device evidence is `test006` |
-| WO-008 | **in progress — increments 1–3 built and sandbox-green: graph core + executor + tasks 4–7 (swap, latency, watchdog, determinism); remaining: multi-port `AudioCtx` (contract v1), the cross-thread hot-swap primitive, and the device-side loaded soak** | `sparq-kernel::graph` (task 1): stable never-reused `NodeId`/`EdgeId`; `EdgeKind {Plain, UnitDelay, BlockDelay}` — §5.4's cycle vocabulary as a type; a topology **version** bumped on committed mutations only (latency edits are data, not topology); the **cached deterministic topological sort** (Kahn, smallest-id frontier — the same graph state always yields the identical order, which is what ADR-007 replay demands; `order_computes()` makes "recomputed only when the version changes" observable, ADR-009 decision 1); plain-edge **cycle refusal carrying the loop's path** in the error, rendered as a sentence that names the delay-edge remedy; delay edges close loops legally and stay out of the ordering; `remove_node` returns the detached edges for the journal/undo layer; per-node `latency_samples` stored for task 5. **Layering decision, recorded:** the kernel graph is *structural* — module-api sits above the kernel in the dependency order, so typed verdicts stay with `connect_*`'s single copy of the matrix and only validated edges are offered to the kernel. 12 tests incl. a 200-node/399-edge order at the acceptance scale; **430 tests total**, clippy/fmt/4 python gates clean, no new unsafe. **Increment 2 (same day):** `sparq-audio::executor` — builds a runnable patch from a kernel graph + contract modules and renders it block-by-block: channel negotiation (mono↔multi, buffer pool pre-allocated and pre-touched at build, budget reported per ADR-009 d4), one `Box<dyn Module>` dispatch per node per block (d7's hybrid), block-delay/unit-delay feedback memories refreshed at block end, `Failed` → silenced + flagged (never unwound), relaxed-atomic meters, deterministic fan-in sums, bit-identical renders across builds (hashed). **Measured: 0 allocations across 1000 blocks and across a 201-node block under the counting allocator**; 13 integration tests + 7 unit; the kernel gained the increment-2 cycle refinement (a `unit_delay` edge is in-block, so it ORDERS like a plain edge and cannot close a loop — loops must contain a `block_delay`; §5.4's own "keeps the executor a simple topological sort" clause, made structural, 2 new tests). **452 tests total**, clippy clean in three cells (workspace + both MSVC cross), goldens unchanged. **Increment 3 (2026-09-25) shipped tasks 4–7 — 549 tests, goldens unchanged:** the boundary-swap `Engine` (clock inheritance, retire-at-boundary, refusals in words) + **the 10 000-mutation stress** (10 001 blocks · 7 203 swaps · 2 797 refusals · **0 audio-path allocations** · hash bit-identical across debug/release); the kernel **per-path latency map** (version+edit-count cached; three hand-computed reference graphs) + the **raw/compensated switch** (per-edge fan-in alignment, no global offset, chains byte-identical); the **watchdog** (N consecutive overruns ⇒ auto-bypass + bounded journal + passthrough-or-silence, the rest of the graph keeps playing); the **determinism harness** (`sparq_audio::determinism` — scripted seeded replay, hash equality; it caught a real HashMap-order nondeterminism in the stress schedule on day one, fixed before shipping). **Remaining:** multi-port `AudioCtx` (contract v1) so cv/event payloads travel — until then a non-audio edge is REFUSED at build in words, never silently ignored; the cross-thread hot-swap primitive (ADR-009 d3's pointer swap, allowlisted-unsafe kernel work — the Engine is single-owner and declared so until it lands); the loaded soak (200 modules, 30 min, zero xruns) stays device-track |
-| WO-014 | **in progress — increments 1–2 built and sandbox-green: 9 first-party modules (the six audio-domain ones of batch 2 measured, goldens checked in, aliasing acceptance passed at −166.8 dB, docs generated from manifests)** | The three reference modules promoted from contract tests to library code (`sparq-audio::modules`: `syn/sine`, `util/gain`, `ana/rms`), with their manifests as real files under `modules/` **and** compiled in via `include_str!` — one copy, two consumers (disk discovery + built-in registry), and a test that fails if the file and the binary ever drift. `sparq modules` discovers all three from disk; §11 precedence demonstrated live (the disk copies shadow against the built-ins, reported not errored). New **`sparq exec`** command: registry → factories → kernel graph → executor → WAV with no device — prints the ADR-009 d4 budget line, the analysis-tap value, the master meters and the render's golden hash. **Goldens checked in** (demo patch 2.8 s = `53de3b1f3f40e3c9`, sine 1 s = `3f325d4f99ca2a01`); zero allocations measured per module (5 000 `process` calls each) and through the executor path (1 000 blocks); the rms tap value and the master's metered rms agree to the bit (0.16621882 — analysis-as-control-source, cross-validated). **468 tests**, clippy clean (workspace + ui + MSVC audio cross), existing goldens unchanged. **Increment 2 (2026-09-26): the six audio-domain modules** (`syn/noise` seeded+resettable, `syn/polyblep` bandlimited-additive with the aliasing acceptance MEASURED through the registry build at **−166.8 dB** vs the −60 dB bar, `flt/svf` five modes, `util/delay` with the set's first parametric latency declaration, `fx/bitcrush` seeded dither, `util/panner` two laws) + six module goldens + a full-chain golden + per-module zero-allocation gates + **`tools/module_docs.py`** (the generated-docs acceptance, `--check` wired into CI/justfile/gates.bat, proven failable). 559 tests, goldens unchanged, audit PASS 19 smokes, `modules --strict` 9/9. **Remaining:** the eight event/cv/multi-port/display modules — declared waiting on the multi-port `AudioCtx` (contract v1) and WO-009, because a trigger port that cannot receive a trigger is a lie with a manifest; per-module example patches (WO-015's study is the example patch; `.sparq` needs WO-011); the rms→filter modulation demo (needs cv edges = contract v1); the <15 %-of-a-core benchmark on the stage machine |
-| WO-009…WO-011, WO-015…WO-016 | not started | WO-009/010 follow WO-008 on the plan's own gate order. WO-013 builds directly on the shell: the gesture layer it needs (drag/pan/pinch/context/undo) is implemented and tested — but see #58: the canvas may not offer a converter module that does not yet exist |
+| WO-008 | **in progress — increments 1–4 built and sandbox-green: graph core + executor + tasks 4–7 (swap, latency, watchdog, determinism) + CONTRACT V1 (multi-port `AudioCtx`, cv/event payloads travel); remaining: the cross-thread hot-swap primitive and the device-side loaded soak** | `sparq-kernel::graph` (task 1): stable never-reused `NodeId`/`EdgeId`; `EdgeKind {Plain, UnitDelay, BlockDelay}` — §5.4's cycle vocabulary as a type; a topology **version** bumped on committed mutations only (latency edits are data, not topology); the **cached deterministic topological sort** (Kahn, smallest-id frontier — the same graph state always yields the identical order, which is what ADR-007 replay demands; `order_computes()` makes "recomputed only when the version changes" observable, ADR-009 decision 1); plain-edge **cycle refusal carrying the loop's path** in the error, rendered as a sentence that names the delay-edge remedy; delay edges close loops legally and stay out of the ordering; `remove_node` returns the detached edges for the journal/undo layer; per-node `latency_samples` stored for task 5. **Layering decision, recorded:** the kernel graph is *structural* — module-api sits above the kernel in the dependency order, so typed verdicts stay with `connect_*`'s single copy of the matrix and only validated edges are offered to the kernel. 12 tests incl. a 200-node/399-edge order at the acceptance scale; **430 tests total**, clippy/fmt/4 python gates clean, no new unsafe. **Increment 2 (same day):** `sparq-audio::executor` — builds a runnable patch from a kernel graph + contract modules and renders it block-by-block: channel negotiation (mono↔multi, buffer pool pre-allocated and pre-touched at build, budget reported per ADR-009 d4), one `Box<dyn Module>` dispatch per node per block (d7's hybrid), block-delay/unit-delay feedback memories refreshed at block end, `Failed` → silenced + flagged (never unwound), relaxed-atomic meters, deterministic fan-in sums, bit-identical renders across builds (hashed). **Measured: 0 allocations across 1000 blocks and across a 201-node block under the counting allocator**; 13 integration tests + 7 unit; the kernel gained the increment-2 cycle refinement (a `unit_delay` edge is in-block, so it ORDERS like a plain edge and cannot close a loop — loops must contain a `block_delay`; §5.4's own "keeps the executor a simple topological sort" clause, made structural, 2 new tests). **452 tests total**, clippy clean in three cells (workspace + both MSVC cross), goldens unchanged. **Increment 3 (2026-09-25) shipped tasks 4–7 — 549 tests, goldens unchanged:** the boundary-swap `Engine` (clock inheritance, retire-at-boundary, refusals in words) + **the 10 000-mutation stress** (10 001 blocks · 7 203 swaps · 2 797 refusals · **0 audio-path allocations** · hash bit-identical across debug/release); the kernel **per-path latency map** (version+edit-count cached; three hand-computed reference graphs) + the **raw/compensated switch** (per-edge fan-in alignment, no global offset, chains byte-identical); the **watchdog** (N consecutive overruns ⇒ auto-bypass + bounded journal + passthrough-or-silence, the rest of the graph keeps playing); the **determinism harness** (`sparq_audio::determinism` — scripted seeded replay, hash equality; it caught a real HashMap-order nondeterminism in the stress schedule on day one, fixed before shipping). **Increment 4 (2026-09-26) shipped contract v1** — the multi-port `AudioCtx` (audio ≤ 8/class, cv block+audio-rate views at the RECEIVER's declared rate, bounded sorted event ports), cv/event edges execute with every matrix rule enforced at build (data/gpu/atom still refuse, per type, in words), the WO-014 rms→filter acceptance PROVEN BIT-EXACT against a hand-driven reference (`sparq exec --patch mod-demo` is the audible artefact), the compat-matrix drift gate (defects #80–#83 below), and `ana/rms` + `flt/svf` 0.2.0 made honest by it. **614 tests**, every pre-existing golden unchanged, the stress hash `b42068ec7b206789` unchanged. Full entry below. **Remaining:** the cross-thread hot-swap primitive (ADR-009 d3's pointer swap, allowlisted-unsafe kernel work — the Engine is single-owner and declared so until it lands); the loaded soak (200 modules, 30 min, zero xruns) stays device-track |
+| WO-014 | **in progress — increments 1–4 built and sandbox-green: 14 first-party modules (batch 2's six audio-domain measured at −166.8 dB aliasing; batch 3's membrane/env-ad/mixer are contract v1's first consumers; batch 4's lfo/clk-div are WO-009's — the first event-PROCESSING module, and the lfo→svf sweep renders bit-identical to a hand-driven reference)** | The three reference modules promoted from contract tests to library code (`sparq-audio::modules`: `syn/sine`, `util/gain`, `ana/rms`), with their manifests as real files under `modules/` **and** compiled in via `include_str!` — one copy, two consumers (disk discovery + built-in registry), and a test that fails if the file and the binary ever drift. `sparq modules` discovers all three from disk; §11 precedence demonstrated live (the disk copies shadow against the built-ins, reported not errored). New **`sparq exec`** command: registry → factories → kernel graph → executor → WAV with no device — prints the ADR-009 d4 budget line, the analysis-tap value, the master meters and the render's golden hash. **Goldens checked in** (demo patch 2.8 s = `53de3b1f3f40e3c9`, sine 1 s = `3f325d4f99ca2a01`); zero allocations measured per module (5 000 `process` calls each) and through the executor path (1 000 blocks); the rms tap value and the master's metered rms agree to the bit (0.16621882 — analysis-as-control-source, cross-validated). **468 tests**, clippy clean (workspace + ui + MSVC audio cross), existing goldens unchanged. **Increment 2 (2026-09-26): the six audio-domain modules** (`syn/noise` seeded+resettable, `syn/polyblep` bandlimited-additive with the aliasing acceptance MEASURED through the registry build at **−166.8 dB** vs the −60 dB bar, `flt/svf` five modes, `util/delay` with the set's first parametric latency declaration, `fx/bitcrush` seeded dither, `util/panner` two laws) + six module goldens + a full-chain golden + per-module zero-allocation gates + **`tools/module_docs.py`** (the generated-docs acceptance, `--check` wired into CI/justfile/gates.bat, proven failable). 559 tests, goldens unchanged, audit PASS 19 smokes, `modules --strict` 9/9. **Increment 3 (2026-09-26) shipped the three modules contract v1 unblocked** — `syn/membrane`
+(trigger at sample 37 ⇒ hit at sample 37, measured), `env/ad` (event in → audio-rate cv out, NO
+audio ports, loop measured against the primitive's epsilon-arrival semantics), `util/mixer` (4×4
+stereo matrix, identity default bit-exact, the explicit merge) — plus `sparq exec --patch
+drum-demo` (host triggers at 120 BPM through the event door → membrane → mixer, golden
+`f2303f13aa0cf299`, kicks on exactly frames 0/24000/48000/72000) and defect #84 (TOPS gained
+`env`/`mod` table-first, with the field table's first drift pin). **627 tests**, all pre-existing
+goldens unchanged, `modules --strict` 12/12. Full entry below. **Contract v1 landed 2026-09-26 (WO-008 inc 4) and took the rms→filter modulation demo with it** — the acceptance is proven with arithmetic (the cv-wired filter renders BIT-IDENTICAL to a hand-driven reference set per block to the declared value; golden `1621e1f65b1b64e1`, `sparq exec --patch mod-demo` audible) — and `flt/svf` grew the `cutoff-mod` cv input for it (0.2.0, additive; at defaults bit-identical to inc 2, which its golden proves). **Increment 4 (2026-09-26) shipped the two the clocks unblocked** — `mod/lfo` (four shapes in 0..1, audio-rate unipolar cv, event phase-reset at exact samples; the range decision — unipolar until `util/range` ships — is recorded in the manifest header, not buried) and `mod/clk-div` (divide-from-the-first-input, multiply across the MEASURED interval, seeded probability gate; the first event-in-event-out module), plus the chain golden 16ths→÷4→membrane (`914d9063ce9d8a0f`, kicks on exactly frames 0/24576/49152/73728) and the lfo→svf bit-identical sweep. **665 tests**, `modules --strict` 14/14, all pre-existing goldens unchanged. Full entry below. **Remaining:** THREE modules — `ana/tap`, `dsp/scope` on the ring publication (ADR-009 d8), `out/main` on the canvas master handover — plus mixer's cv side and the delay's tempo-sync parameter path (LATER.md). Per-module example patches (WO-015's study is the example patch; `.sparq` needs WO-011); the <15 %-of-a-core benchmark on the stage machine |
+| WO-009 | **increment 1 built and sandbox-green (2026-09-26): the three-clock model's musical half, the transport, and the sample-accurate queue — all four acceptance criteria met in sandbox (the drift criterion's 30-min hardware box stays device-track, declared)** | Kernel `Clock` v2: the piecewise tempo map ADR-006 rule 2 specifies — segments anchored at exact `(sample, tick)` pairs with LINEAR BPM RAMPS (position continuous by anchoring, derivative continuous by inheritance — a mid-ramp change glides from the rate reached, never steps), quadratic integral inside ramps, `sample_at_tick` by EXACT INTEGER BISECTION consistent with the forward rounding, the constant-segment fast path bit-identical to v0 (why the phase-b goldens did not move), surface kept except `Copy` → `Clone` (declared). **`sparq-music`** (the planned crate's first contents): `ClockBroker` (position + the wall side — windowed-ratio drift estimator, one-pole smoothed, re-anchored, backwards readings refused-and-counted) and `Transport` (play/stop with FREEZE semantics, tempo-by-segments, loop region with block-granular fold, tap tempo with a 2 s memory, the tick-scheduled queue, bar/beat trigger emission, `advance_block` measured zero-allocation into a bounded 64-slot collector). Executor: `set_musical_position` — the transport computes, the executor carries; never-set renders the static `tick = 0` every golden knows (stress hash `b42068ec7b206789` unmoved). `sparq exec --patch drum-demo` is now TRANSPORT-driven and hashes to the batch-3 golden `f2303f13aa0cf299` — two independent trigger mechanisms, one bit pattern. **655 tests**, ±0-sample acceptance run against an INDEPENDENT integral implementation in the test. Remaining: external sync (Phase 4), the 30-min drift measurement (device), loop-relative beat phase for unaligned regions, sub-block transport (forbidden territory, declared). Full entry below |
+| WO-010, WO-011, WO-015…WO-016 | not started | WO-010/011 follow WO-009 on the plan's own gate order. WO-013 builds directly on the shell: the gesture layer it needs (drag/pan/pinch/context/undo) is implemented and tested — but see #58: the canvas may not offer a converter module that does not yet exist |
 
 **Phase A additions (Windows bring-up, so a first run on untested hardware is diagnosable rather than mysterious):**
 
@@ -1246,6 +1254,309 @@ rule); per-module example patches wait for WO-015 (the study IS the example patc
 flt/svf,util/delay,fx/bitcrush,util/panner}/sparqmod.toml`, `docs/modules/*.md`,
 `tools/module_docs.py`, `tests/modules_batch2.rs`.
 
+**WO-008 increment 4 — contract v1: the multi-port `AudioCtx`, cv/event payloads travel, and the
+rms→filter acceptance is arithmetic (2026-09-26, sandbox-built):** the increment the CHECKLIST
+called "THE unblocking increment" — and per the increment-3 note, a contract change got its own
+increment, not a rider. Four pieces, one argument: *the manifest's port list is now the truth the
+engine presents.*
+
+* **The contract (`sparq-module-api`).** `AudioCtx` v1: per-type port views in manifest order —
+  `audio_in/audio_out` (≤ `MAX_PORTS_PER_CLASS` = 8 per class, validation-enforced as
+  `E-CROSS-FIELD:ports`, the `MAX_PARAMS` pattern), `cv_in/cv_out` (`CvIn::Block(f32)` /
+  `CvIn::Audio(&[f32])` / `CvIn::Unconnected` — always at the RECEIVER's declared rate),
+  `events_in/events_out` (pre-sorted `&[Event]` in, bounded `EventSink` out). The v0 field pair
+  survives as methods over the first audio port (`input()`/`output()`/`has_input()`), so the nine
+  shipped modules migrated mechanically. Two shapes carried the design: input views escape with
+  the context's lifetime (the documented two-step — input first, output second — compiles; the
+  reversed order does not), and output views come in reborrowing AND `take_*` variants, because
+  two `&mut self` accessors cannot coexist but two TAKEN views can — that is the multi-output
+  module pattern (`util/mixer`'s shape), pinned in `api_snapshot.rs` and exercised by the
+  `MultiProc` test module. New `sparq_module_api::event`: `Event { kind, sample, channel, value,
+  words[4] }` over the closed six-dialect `EventKind`, `EventBuf`/`EventSink` at
+  `EVENTS_PER_BLOCK` = 64 with overflow **counted, never grown** (`dropped_total` is the run's
+  evidence), and `sort_by_sample` — a stable INSERTION sort, because `slice::sort_by`'s stability
+  costs an allocation the audio thread may not make. `Resources` grew the per-port channel arrays
+  §2's cascade rule needs. Manifest: `event_kinds` became modelled data (required on event ports,
+  closed domain, `E-ENUM-UNKNOWN` per item), `cv_reduce`/`cv_interp` became typed (`CvReduce` /
+  `CvInterp` — a policy the engine re-parsed from text would be a policy that can drift from the
+  vocabulary), and the G3/G4 cross-field rules gained their mirrors (`cv_interp` on a block-rate
+  input, either policy on an OUTPUT — the receiver owns rate changes, so an output declaring one
+  is a misunderstanding worth naming).
+* **The executor (`sparq-audio`).** cv/event edges EXECUTE; data/gpu/atom still refuse, now each
+  with its own sentence. cv: the receiver's `cv_reduce` collapses an audio-rate source (all six
+  policies, table-driven against hand-computed values on a permutation ramp — first ≠ last is the
+  ADR-007 argument, measured), `cv_interp` expands a block-rate one (`linear` ramps prev→cur
+  reaching cur at the NEXT boundary, prev is executor state refreshed in the wire pass; `spline`
+  is REFUSED at build — the vocabulary promises it, the host has not implemented it, and holding
+  instead would render differently than declared), range mismatch and fan-in refuse through
+  `connect_cv` at `Phase::Zero` naming `util/range`/`util/mixer` AND their phase (never offer a
+  converter that does not exist), fan-out is free. Event: `event_kinds` subset checked at build
+  (the default cell's `E-EVENTKIND-UNACCEPTED` sentence), fan-in merged by a linear k-way merge
+  of per-source sorted lists into build-reserved staging — ranks are host-queue first, then
+  EdgeId, then insertion order (G5 made mechanical), and the two-phase sort (stable insertion
+  sort per sink at its producer's dispatch, merge at the consumer) never allocates.
+  `push_host_event(node, port, ev)` is the control-side door — bounded, sorted-insert, consumed
+  in exactly one block; WO-009's transport will publish through the same door, and this increment
+  deliberately contains no clock. Multi-port audio: per-port buffers, per-port fan-in sums and
+  compensation, meters fold across a node's audio outputs (single-output nodes bit-identical to
+  inc 3, which is what keeps the golden meters), the v0 convention of giving cv sources a
+  1-channel AUDIO buffer is deleted — a cv payload riding in an audio buffer is a wire that lies
+  about its type. New readers: `node_cv_block`, `node_cv_audio`, `node_audio_out`,
+  `node_events`, `event_drops_total`.
+* **The modules.** All nine migrated; two became honest: **`ana/rms`** publishes on its declared
+  block-rate cv port (the output[0] hack is gone; `sparq exec`'s tap line reads the same
+  `0.16621882` through `node_cv_block`), and **`flt/svf`** (0.1.0 → 0.2.0, additive) grew the
+  `cutoff-mod` cv input + param 3 `mod`: `cutoff · 2^(2·mod·cv)`, clamped and **quantised to
+  f32 — the parameter's own precision, deliberately**, so a hand-driven reference renders
+  bit-identical. At `mod = 0` it is byte-for-byte the increment-2 filter, which every existing
+  golden then proved rather than assumed.
+* **The WO-014 acceptance item — rms→filter modulation — proven with arithmetic, not
+  adjectives.** `tests/contract_v1.rs`: two executors run the same patch; in A the cv wire is
+  live, in B it is absent and the filter's cutoff PARAMETER is set by hand, per block, to
+  `(200 · 2^(2·cell)) as f32` — **200 blocks, bit-identical outputs** — so the wire carried
+  exactly the declared value into exactly the declared formula. Plus the honest converse: a
+  mod=0 twin proves the wire is not a no-op. The audible artefact is `sparq exec --patch
+  mod-demo` (4 nodes, 4 edges, the cv line printed: `cv 0.166219 → effective cutoff 251.83
+  Hz`), golden `1621e1f65b1b64e1` checked in, debug == release.
+* **The compat-matrix debt (carried WO-007 → here), answered honestly.** New drift gate
+  `sparq-module-api/tests/compat_matrix.rs`: parses the TOML with the crate's OWN parser and pins
+  vocabularies, verdicts, adapter ids, per-type case counts and a representative outcome for
+  every audio/cv `when` cell against `connect_*`. Full mirror deletion stays open WITH A NAMED
+  REASON: several `when` cells are prose ("fan-out: one cv output -> many cv inputs") — shape
+  rules, not pair rules — so "read at discovery" needs the ratified table restructured into
+  machine predicates first (a review-packet change; `reviewed = false` is already pending).
+  Recorded in the ADR-005 addendum. The gate paid for itself on first run — defects #80–#82.
+* **The parser gap the gate hit immediately (defect #82's sibling, fixed):** `toml.rs` could not
+  read `[[same_type.cases]]` — a nested array-of-tables under an array parent — so the matrix,
+  written "as data, to be consumed by code" in WO-007, had never actually been parsed by the
+  crate that ships the parser. `push_array_table` now descends into the parent array's last
+  element (standard TOML), with a nesting test (each parent keeps its own children — the merge
+  bug the fix could have introduced) and a standing `the_compat_matrix_itself_parses` pin.
+
+**Defects contract v1 logs:**
+
+| # | Defect | Caught by |
+|---|---|---|
+| 80 | **The compiled HOA adapter offer named the wrong module.** `Adapter::Hoa.module_id()` returned `spa/objects` for spatial ↔ non-spatial conversions — the matrix names TWO modules (`spa/hoa-encode` entering spatial, `spa/hoa-decode` leaving), and an offer that names a module which does not do the conversion is the exact failure the "never offer a converter that does not exist" rule exists to prevent. Latent since WO-007 (Phase 5 gated, so never offered on screen yet). Fixed: the variant split into `HoaEncode`/`HoaDecode` with the matrix's ids, `connect_audio` picks by direction, and — while in there — objects ↔ non-spatial stopped offering HOA at all (the table names no converter for it; it now refuses, per the rule) | the new compat-matrix drift gate, on its first run — the gate's whole reason to exist, found before it shipped |
+| 81 | **The matrix's `cv→audio` adapter row was stale against its own settled decision.** The table said `syn/sine-or-offset` with "Naming to be settled"; the ADR-005 addendum (2026-09-22) settled it — `util/offset` joins Phase 1 — and `port.rs` had said `util/offset` since WO-007. The table's note invited the decision, the decision happened, the table did not move. Fixed in the table with a `decided =` line naming the gate run that caught it | the drift gate's cross-type adapter check (code id vs table id, set equality both ways) |
+| 82 | **`mono → ambisonics:N` is "compatible fan-out", not an encoder insertion — in BOTH copies, consistently.** The table lists the mono fan-out case before the spatial cases and the code's match arms follow, so replicating a mono channel into an AmbiX bed is offered as a silent up-mix, which is not valid spatial audio. NOT fixed here: the two copies agree (no drift), and moving one without the other is what the gate forbids; the behaviour is pinned by `the_mono_fanout_case_precedes_the_spatial_case_in_both_copies_flagged_for_review` and flagged for the matrix review the pending `reviewed = false` owes | writing the gate's representative table — a cell that could not be represented without deciding what it means |
+| 83 | **`log_check.py`'s BASELINE was frozen at WO-007 (388 tests, stamp `src 68f/1070593B`) through two sealed increments.** The CHECKLIST said the baseline "moves with" each increment's test count; nothing moved it, so SATURN's next `gates.bat` run would have hard-FAILed `stamp` and `tests_passed` against numbers three increments old — a tool that cries failure on a good run gets ignored (the defect #47 lesson, arriving anyway). Fixed: baseline now carries this increment's sealed state (614 tests + the new stamp), with the provenance comment updated | auditing the device-side baselines the CHECKLIST says move, before sealing a bundle that would have walked into the stale check |
+
+**Measured in sandbox:** **614 tests** (was 559; +55: contract_v1 17, compat_matrix 12,
+module-api validation/event/ctx 18, toml 2, executor +2 net, api_snapshot +1, port.rs +3) · fmt
+clean · clippy clean in the default, `bootstrap-audio`, `ui`, native `ui-window`/gles (`-j 1`,
+dev debuginfo off) and MSVC×5 cells (MSVC × `ui-window` remains unrunnable anywhere — the known
+1 GB `windows`-crate OOM) · **goldens UNCHANGED and verified, not assumed**:
+`ba577186c988db21` (selftest) · `0f5c3e86c7f117a9` (determinism) · `53de3b1f3f40e3c9` (exec
+demo, tap value `0.16621882` now read through the cv port) · `3f325d4f99ca2a01` (sine) · the six
+batch-2 module goldens + chain `9170415cd3852736` (svf at mod=0 is the inc-2 filter) · new:
+mod-demo `1621e1f65b1b64e1` · **stress hash `b42068ec7b206789` UNCHANGED** (10 001 blocks ·
+7 203 swaps · 2 797 refusals · 0 audio-path allocations — the determinism world never wires the
+payloads that changed, which is exactly what "bit-identical" here claims) · `selftest --golden`
+8/8 · `ui --audit` PASS 0 failures 19 smokes · `modules --strict` 9/9 · exec both patches ·
+5 Python gates clean + module_docs regenerated (svf 0.2.0). **Not claimed:** the eight pending
+modules (three — membrane, env/ad, mixer — are now unblocked and wait only on their own
+increment; lfo/clk-div wait on WO-009; tap/scope on the rings; out/main on the canvas
+handover), host-side `required`-input enforcement (declared v1 limit, its own increment), and
+`spline` interpolation. Artefacts: `sparq-module-api::{event, module v1, manifest/decode
+event_kinds, port CvReduce/CvInterp}`, `sparq-audio::executor v1`, `modules/flt/svf` 0.2.0,
+`sparq_audio::modules::mod_demo_patch`, `sparq exec --patch mod-demo`,
+`tests/contract_v1.rs`, `tests/compat_matrix.rs`, `tools/log_check.py` baseline.
+
+**WO-014 increment 3 — the three modules contract v1 unblocked: membrane, env/ad, mixer
+(2026-09-26, sandbox-built):** the module set reaches **twelve**, and the batch proves the
+contract rather than assuming it — every module here rides a payload that did not exist yesterday,
+and every claim below is a measurement in `tests/modules_batch3.rs` (12 gates), not a comment.
+
+* **`syn/membrane`** — the Phase-B kick topology (the recipe INSIDE the phase-b demo golden:
+  sine body + fixed 0.5/55 ms pitch envelope for the 909 click-then-body, gated seeded noise
+  burst, amplitude AD, body lowpass) promoted to a **trigger-driven voice**. The WO's stress is
+  "event-driven, sample-accurate start", and the gate is arithmetic: a trigger at sample 37
+  leaves frames 0..36 at EXACT zeros and lands the hit inside frame 37's own block. Parameters:
+  pitch/punch/decay/noise/damp; mono out; tail declared; `reset` replays the hit — at 96 kHz on
+  purpose, because the first draft of `reset` rebuilt the voice at the constructor's 48 kHz
+  reference and re-read the rate AFTERWARD, which a 48 kHz-only suite would never have caught
+  (fixed pre-ship; the ordering is now a comment where the bug was).
+* **`env/ad`** — contract v1 in its purest shape: an `event` input, an **audio-rate `cv` output,
+  no audio ports at all**, first-class in the executor (the master render is silence; the payload
+  lives on the cv port, read through `node_cv_audio`). Sample-accurate start (exact zeros before
+  the trigger's frame, monotone exp attack to ≈peak by its declared 1 ms), gate-off ignored PER
+  ITS MANIFEST (the module is AD, not ADSR — `AdsrEnv` exists; a gate-holding `env/adsr` is a
+  later module, not a hidden mode), and `loop` free-runs without a single event. **The loop test
+  earned its keep:** its first draft computed a 51 ms cycle from the parameter faces; the wrapped
+  `AdEnv`'s decay segment runs to epsilon ARRIVAL (the declared ms is the five-time-constant
+  point, the segment ends ≈2.3× later — the primitive's own measured semantics). The test now
+  records the measured cycle and says so — the primitive's semantics won, as they should.
+* **`util/mixer`** — the 4×4 stereo matrix with per-cell gains + output trims (20 of the 32
+  snapshot params, which is WHY it is 4×4: declared in the manifest header, not discovered by an
+  author at 3 a.m.). The first multi-port first-party module — eight audio ports, ridden through
+  contract v1's `take_*` output pattern. The explicit merge the connection rules require: audio
+  fan-in sums HERE, in a module the patch can see. The identity default is a **bit-exact wire**
+  (the `util/gain` transparency reference, at matrix scale, golden-pinned against a bare sine
+  render), and the routing gate checks the matrix against hand-computed f32 arithmetic
+  (`(0.5·s + 0.25·s) · 0.5` through the f64 accumulator — dyadic, so the comparison is exact,
+  not tolerant). All-unconnected inputs return `Silenced` — silence as a statement.
+* **`sparq exec --patch drum-demo`** — the stack artefact: host triggers at 120 BPM (the
+  control-side door, on the beat via `DrumDemoPatch::is_kick_block` — the schedule lives in ONE
+  function so the command and the golden cannot drift) → membrane → mixer(in-0→out-0, trim 0.6
+  for headroom: the recipe's transient peaks ≈1.5, and a demo that clips teaches the wrong
+  lesson) → master. The gate locates the four kicks at EXACTLY frames 0/24000/48000/72000,
+  asserts the frame before each hit is still the previous tail, the between-hits window at rest,
+  and pins the golden `f2303f13aa0cf299` (2 s, debug == release, two builds bit-identical).
+* **Defect #84, table-first:** `env/ad` could not declare its own `classification.top` — the
+  closed TOPS domain (16 entries, identical in `manifest.rs` and `manifest-fields.toml`) has no
+  `env` and no `mod`, while Appendix B's stable ids (`env/ad`, `mod/lfo`, `mod/clk-div`) and
+  WO-014's own artefact paths (`modules/{...,env,mod,...}/*`) name both families. Fixed the way
+  the contract says: the TABLE first (`manifest-fields.toml` domain row, with the reason inline),
+  then the code (`TOPS` 16 → 18), then a **new drift pin** — `manifest-fields.toml` gains its
+  first code consumer (`the_tops_vocabulary_matches_the_field_table` parses the table with the
+  crate's own parser and fails if either copy moves alone; the compat-matrix gate's pattern, one
+  table over). Also fixed while in there: `lib.rs`'s header referenced `tools/contract_check.py`,
+  which does not exist — the sentence now names the gates that DO.
+* **The executor's cv-fan-in refusal re-worded** (truth maintenance): it named `util/mixer` as
+  "Phase 1, not in this build" — the module now ships, as the AUDIO matrix; the refusal says
+  exactly that and points at LATER.md for the cv side. A refusal that lies about why is worse
+  than no refusal.
+
+**Defect WO-014 increment 3 logs:**
+
+| # | Defect | Caught by |
+|---|---|---|
+| 84 | **`classification.top`'s closed domain was missing the `env` and `mod` families in BOTH copies** (`manifest.rs`'s `TOPS` and `manifest-fields.toml`'s domain row — 16 entries, identical), while Appendix B's stable ids (`env/ad`, `mod/lfo`, `mod/clk-div`) and WO-014's own artefact-path list (`modules/{syn,flt,env,mod,util,fx,ana,dsp,out}/*`) name them. `env/ad` literally could not declare its own top: the module that unblocking contract v1 was built to ship was refused by its own taxonomy. Fixed table-first (the table row carries the reason inline), then the code (TOPS 16 → 18), then a drift pin so the copies move together: `the_tops_vocabulary_matches_the_field_table` is `manifest-fields.toml`'s first code consumer | trying to write `modules/env/ad/sparqmod.toml` — validation refused `top = "env"` with the closed-domain sentence, which is the error message doing exactly its job: it named a vocabulary that the plan had outgrown |
+
+**Measured in sandbox:** **627 tests** (was 614; +12 batch-3 gates, +1 field-table pin) · fmt
+clean · clippy clean in the default, `bootstrap-audio`, `ui`, native `ui-window`/gles and MSVC×5
+cells · **ALL goldens unchanged** (`ba577186c988db21`, `0f5c3e86c7f117a9`, `53de3b1f3f40e3c9` +
+tap `0.16621882`, `3f325d4f99ca2a01`, batch-2's six + chain, mod-demo `1621e1f65b1b64e1`) ·
+NEW goldens: membrane `1d1c84bd37c99b91`, drum-demo `f2303f13aa0cf299` (both debug == release) ·
+stress/determinism `b42068ec7b206789` unchanged · zero allocations: 15 000 `process` calls across
+the three new modules and 1000 drum-demo blocks with in-loop host-event pushes, counted ·
+`selftest --golden` 8/8 · `ui --audit` PASS 0 failures 19 smokes (three new module names checked
+against the browser's fuzzy scorer — the "exactly one gain" smoke still passes) ·
+`sparq modules --strict` **12/12** · exec all three patches · 5 Python gates + module docs
+regenerated (12). **Not claimed:** the five remaining modules (`mod/lfo`, `mod/clk-div` →
+WO-009; `ana/tap`, `dsp/scope` → the rings; `out/main` → the canvas handover), mixer's cv side,
+per-module example patches (WO-015/WO-011), the stage-machine benchmark. Artefacts:
+`modules/{syn/membrane,env/ad,util/mixer}/sparqmod.toml`, `sparq_audio::modules`
+(Membrane/EnvAd/Mixer + `drum_demo_patch`), `sparq exec --patch drum-demo`,
+`tests/modules_batch3.rs`, `docs/modules/*.md` (12), TOPS 18.
+
+**WO-009 increment 1 — clocks + transport v0: the map, the broker, the queue, and a cross-check
+that says it all in one hash (2026-09-26, sandbox-built):** the WO's risk line — "clock-math bugs
+that only appear at tempo automation extremes; write the continuity test before the feature" —
+was taken literally: the kernel's continuity/monotonicity/bisection tests were written against
+the map spec before the transport existed, and they caught the two finite-difference traps
+(half-increments at ramp edges; a step anchor's jump appearing one sample LATE) inside the first
+hour. The ADR-006 addendum carries the scored acceptance table; the headline:
+
+* **Kernel `Clock` v2** — the piecewise map rule 2 specifies: anchored segments, linear bpm
+  ramps (derivative continuous by INHERITANCE — a mid-ramp edit glides from the rate reached),
+  quadratic closed-form integral inside ramps, `sample_at_tick` by exact integer bisection with
+  nearest-rounding consistent with the forward direction, constant-segment fast path
+  **bit-identical to v0** (the phase-b goldens' protection), surface kept except the declared
+  `Copy` → `Clone`. A hostile 64-sample-anchor alternating sweep (step AND ramp edits) keeps the
+  map strictly monotone with deltas inside the fastest tempo's envelope.
+* **`sparq-music`** — the planned crate's first contents (ADR-000's "no empty crates" honoured:
+  it arrived with 13 unit tests + 5 acceptance tests). `ClockBroker`: position, tempo-anchored
+  edits, the wall side (windowed-ratio ppm estimator, one-pole smoothed, re-anchored every 1024
+  observations and on locate; **backwards wall readings refused and counted, never applied** — a
+  non-monotone OS clock is a fact about the machine, not a licence to corrupt the map).
+  `Transport`: play/stop (stop FREEZES — offline tape semantics, which is what makes criterion 4
+  exact rather than approximate), tempo as segments (a stream by construction), loop region
+  (block-granular fold, declared), tap tempo (≤4-tap mean, 2 s memory, clamped 20..300), the
+  tick-scheduled queue (absolute domain — the map is the truth, so a tempo edit MOVES a scheduled
+  event to where its tick now lives, tested), bar/beat emission on the absolute grid, and
+  `advance_block` → a bounded 64-slot `BlockEvents` collector, **zero allocations measured
+  across 10 000 blocks** with a live schedule, beats, bars and a loop.
+* **Executor integration is a door, not a dependency:** `set_musical_position((tick, ppqn))` —
+  the transport computes, the executor carries, and `sparq-audio` never learned what a tempo is.
+  Never-set renders the declared static `tick = 0`: the stress hash `b42068ec7b206789` and every
+  golden are unchanged **by construction**, then verified. `inherit_runtime` carries the musical
+  position across a boundary swap (the timeline is the stream's — task 4's own sentence).
+* **The ±0 acceptance, against an independent implementation:** `sparq-music/tests/wo009.rs`
+  carries its OWN segment-integral and its OWN bisection, written from the ADR's description —
+  1 000 seeded ticks at constant tempo, and 1 000 across a 10 ms glide + a step, all firing at
+  the test-computed samples exactly. Two implementations agreeing to the sample is the criterion;
+  one implementation agreeing with itself would be theatre.
+* **The cross-check:** `sparq exec --patch drum-demo` is now transport-driven (beat AND bar
+  triggers, tick positions live) and hashes to **`f2303f13aa0cf299` — the identical golden the
+  block-counter schedule produced in WO-014 inc 3**. Two independent trigger mechanisms, one bit
+  pattern: the clocks, the event door and the executor agree about where a beat lives. The stop/
+  start criterion runs through the same graph: freeze at block 500, resume at 900, kicks at
+  frames [0, 24000, 73600] — arithmetic, twice, identically.
+* **One defect caught by measurement before shipping (recorded in the transport header):** the
+  first draft placed beats inside a loop region PROPORTIONALLY (folded domain, no map) and a
+  boundary beat clamped to sample 23999 instead of 24000 — one sample early, every cycle. The
+  fix is the design now declared: beats ride the absolute map grid (`sample_at_tick`, exact);
+  for beat-aligned loops — the sane case — the grids coincide, and loop-relative beat phase for
+  unaligned regions is a LATER.md entry instead of a silent one-sample lie.
+
+**Measured in sandbox:** **655 tests** (was 627; +7 kernel clock, +13 music unit, +5 WO
+acceptance, +1 executor door, +2 app cross-check, +7 broker) · fmt clean · clippy clean (default,
+bootstrap-audio, ui, ui-window gles, MSVC×5 — the new crate is pure Rust and cross-lints free) ·
+**every pre-existing golden unchanged** incl. the stress hash and `f2303f13aa0cf299` (now proven
+from two directions) · `selftest --golden` 8/8 · audit PASS · exec all three patches · Python
+gates clean. **Not claimed:** the 30-minute drift measurement (device), listening to a tempo
+sweep (needs an editing surface), external sync (Phase 4), sub-block transport and unaligned-loop
+beat phase (declared limits). Artefacts: `sparq-kernel::clock` v2, `sparq-music::{broker,
+transport}`, `Executor::set_musical_position`, transport-driven `drum-demo`, ADR-006 addendum,
+`tests/wo009.rs`, `sparq-app/tests/transport_drum.rs`.
+
+**WO-014 increment 4 — the two modules the clocks unblocked: `mod/lfo`, `mod/clk-div`
+(2026-09-26, sandbox-built):** the module set reaches **fourteen**, and the `mod` taxonomy
+family defect #84 added to the closed domain ships its first citizens. Both ride WO-009's
+machinery end to end; `clk-div` is the set's first event-PROCESSING module (events in, events
+out), which is the contract-v1 wire proven from the consuming end.
+
+* **`mod/lfo`** — four shapes (sine/tri/saw/square) mapped into 0..1, an **audio-rate unipolar
+  `cv` output**, and phase reset from the `phase-reset` message OR a `sync` event at its EXACT
+  sample (the membrane's onset discipline on the modulation side — the transport's beat triggers
+  are the intended clock). Two decisions recorded in the manifest header where they are visible:
+  **unipolar, not bipolar** — the matrix REFUSES a bipolar→unipolar wire rather than silently
+  rescaling (G2), and its named converter (`util/range`) is Phase 1 and not built, so a bipolar
+  port today would be a module that cannot connect to a single shipped consumer; and **sync =
+  event-driven phase reset** — continuous tick-derived phase (rate in beats) needs a per-frame
+  tick view or a module-side bpm derivation, declared in LATER.md rather than approximated.
+  State is the 8-byte phase (the `syn/sine` promise). Gates: a saw at a **binary-exact rate**
+  (48000/2^15 Hz, so every phase is a dyadic rational) lands quarter-cycle values as
+  EQUALITIES and wraps on frame 32768 to the bit — the first draft used 2 Hz and its wrap
+  assert was one accumulated-ulp coin-flip from failing, which is the kind of thing an
+  arithmetic gate should not be; square is exactly its two levels; the sync reset is an exact
+  zero ON the event's frame; the state blob round-trips phase-continuous.
+* **`mod/clk-div`** — the WO's "event ports, transport as source" stress. Semantics stated in
+  the manifest and pinned by exact sample lists: DIVIDE counts from the first input (outputs on
+  inputs 1, 1+N, 1+2N… — a divider never swallows the downbeat of its own count); MULTIPLY
+  schedules M−1 sub-triggers evenly across the interval to the next passing input, MEASURED from
+  the previous arrival, fired from a bounded 32-slot internal schedule on exact samples in later
+  blocks (overflow dropped-and-counted internally — a multiplier over a stream faster than its
+  own capacity is a patching error, and the module degrades by dropping, never by growing on the
+  audio thread); PROBABILITY is an independent seeded draw per candidate (xorshift64 from the
+  state blob — same seed, same decision stream, tested both ways; p=0 and p=1 are exact, not
+  statistical). Gates: ÷4 of a 10 Hz stream fires at [0, 19200, 38400, 57600]; ×2 turns quarters
+  into eighths at [0, 4800, 7200, 9600, …]; seed 42 twice is the same stream, seed 43 is not,
+  and p=0.5 passes ~50 % of 500 inputs.
+* **The two acceptance-shaped gates:** *lfo → svf cutoff* renders **BIT-IDENTICAL to a
+  hand-driven reference** over 200 blocks (the contract-v1 acceptance pattern reused: audio-rate
+  cv reduced `last` into the block-rate input, the module's formula reproduced per block — final
+  effective cutoff 289.445 Hz and rising, the sweep real); and **host 16ths → clk-div ÷4 →
+  membrane** — event wire to event wire to audio — lands kicks on exactly frames
+  0/24576/49152/73728 with the chain golden **`914d9063ce9d8a0f`** pinned (2 s, debug ==
+  release). Both new modules: 5 000-call zero-allocation gates, and the divided-drum chain
+  renders 1 000 blocks allocation-free with in-loop host pushes.
+
+**Measured in sandbox:** **665 tests** (was 655; +10 batch-4 gates) · fmt clean · clippy clean
+in the default, `bootstrap-audio`, `ui`, native `ui-window`/gles and MSVC×6 cells · **ALL
+pre-existing goldens unchanged** (`ba577186c988db21`, `0f5c3e86c7f117a9`, `53de3b1f3f40e3c9`,
+`3f325d4f99ca2a01`, batch-2's six + chain, `1621e1f65b1b64e1`, `1d1c84bd37c99b91`,
+`f2303f13aa0cf299`) · stress hash `b42068ec7b206789` unchanged · NEW goldens: chain
+`914d9063ce9d8a0f` · `selftest --golden` 8/8 · `ui --audit` PASS 19 smokes (the browser smoke
+meets "LFO" and "Clock Divider" and still finds exactly one "gain") · `modules --strict`
+**14/14** · exec all three patches · 5 Python gates + docs regenerated (14). **Not claimed:**
+per-module example patches (WO-015/WO-011), the stage-machine benchmark, an exec patch for the
+lfo sweep (its gate is the bit-identical test; the audible artefact rides with WO-015's study).
+Artefacts: `modules/{mod/lfo,mod/clk-div}/sparqmod.toml`, `sparq_audio::modules` (Lfo/ClkDiv,
+BUILTINS 14), `tests/modules_batch4.rs`, `docs/modules/*.md` (14).
+
 ---
 
 ## 3. Work orders
@@ -1470,10 +1781,10 @@ flt/svf,util/delay,fx/bitcrush,util/panner}/sparqmod.toml`, `docs/modules/*.md`,
 **In scope.** `ClockBroker` maintaining `t_sample ↔ t_musical ↔ t_wall` as a smoothed piecewise-linear map; transport v0 (play/stop, tempo, tick position, loop region, tap-tempo); 960 PPQN default; **sample-accurate event queue** (events scheduled by tick, dispatched at the exact sample); transport as an event source (bar/beat triggers into the graph); tempo as a settable value now and as a *stream* by design (interface must allow it).
 **Out of scope.** External sync (Link/MIDI clock — Phase 4), metric modulation UI, per-track time signatures, count-in/metronome, recording.
 **Acceptance criteria.**
-- [ ] A trigger scheduled at tick T fires at exactly the corresponding sample index — verified for 1 000 random ticks against an analytically computed expectation (±0 samples).
-- [ ] Tempo change during playback produces **no discontinuity** in either direction (tick↔sample mapping stays monotonic and continuous); verified by a sweep test and by listening.
-- [ ] `t_wall` drift vs device clock is estimated and reported; over 30 min the reported drift matches an independent measurement within tolerance.
-- [ ] Transport stop/start is sample-accurate and repeatable (same event twice ⇒ same output).
+- [x] A trigger scheduled at tick T fires at exactly the corresponding sample index — verified for 1 000 random ticks against an analytically computed expectation (±0 samples). **Done 2026-09-26 (inc 1), twice**: constant tempo, and across a 10 ms glide + a step, with the expectation computed from an independent implementation of the segment integral inside the test.
+- [x] Tempo change during playback produces **no discontinuity** in either direction (tick↔sample mapping stays monotonic and continuous); verified by a sweep test and by listening. **Sweep done 2026-09-26 (inc 1)**: 6 000 blocks of 60→200→70 bpm at one target per block, plus the kernel's derivative-continuity tests (half-increments at ramp edges, worst-case 64-sample anchors). Listening needs a tempo-editing surface — device track, with `drum-demo` as the artefact.
+- [ ] `t_wall` drift vs device clock is estimated and reported; over 30 min the reported drift matches an independent measurement within tolerance. **Mechanism done 2026-09-26 (inc 1)** — estimator shipped and synthetic-verified (+1000 ppm converges to ±2; backwards readings refused and counted); **the 30-minute hardware box stays open** (device track: the HAL pump feeding `observe_wall` between blocks).
+- [x] Transport stop/start is sample-accurate and repeatable (same event twice ⇒ same output). **Done 2026-09-26 (inc 1)**: stop FREEZES the timeline; the same play/stop/play script twice renders bit-identical through the real drum-demo graph, beats at the arithmetic positions the freeze implies (`sparq-app/tests/transport_drum.rs`).
 **Tests/evidence.** Tick-accuracy test, tempo-sweep continuity test, drift report.
 **Artefacts.** `sparq-music::transport`, ADR-006 addendum (measured drift behaviour).
 **Risks.** Clock-math bugs that only appear at tempo automation extremes — write the continuity test before the feature.
@@ -1589,7 +1900,7 @@ Each module ships: manifest, implementation, golden reference render, unit tests
 - [ ] `syn/polyblep` aliasing measured: harmonics above Nyquist at least 60 dB below the fundamental at 48 kHz (record the actual spectrum plot).
 - [ ] A "typical Phase 0 patch" (16 modules, 3 voices of activity) uses **< 15 %** of one core at 96 kHz / 64 samples on the stage machine.
 - [ ] `dsp/scope` renders at ≥ 60 fps alongside audio with zero audio-thread cost.
-- [ ] `ana/rms` output demonstrably modulates a filter cutoff (the analysis-as-control-source principle proven end to end).
+- [x] `ana/rms` output demonstrably modulates a filter cutoff (the analysis-as-control-source principle proven end to end). **Done 2026-09-26, contract v1 (WO-008 inc 4):** `tests/contract_v1.rs` renders the cv-wired `flt/svf` bit-identical to a hand-driven reference over 200 blocks; `sparq exec --patch mod-demo` is the artefact, golden `1621e1f65b1b64e1`.
 - [ ] Docs for all modules are generated from manifests (no hand-written duplicates).
 **Tests/evidence.** Golden renders, aliasing spectrum plots, CPU benchmark, the rms→filter demo patch.
 **Artefacts.** `modules/{syn,flt,env,mod,util,fx,ana,dsp,out}/*`, `examples/phase0/*`.

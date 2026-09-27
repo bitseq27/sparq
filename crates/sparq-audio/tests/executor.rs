@@ -51,7 +51,7 @@ impl Module for Dc {
     }
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
         let v = ctx.param(0);
-        for s in ctx.output.iter_mut() {
+        for s in ctx.output().iter_mut() {
             *s = v;
         }
         BlockStatus::Ok
@@ -75,13 +75,14 @@ impl Module for Gain {
     }
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
         if !ctx.has_input() {
-            for s in ctx.output.iter_mut() {
+            for s in ctx.output().iter_mut() {
                 *s = 0.0;
             }
             return BlockStatus::Silenced;
         }
         let g = ctx.param(0);
-        for (o, i) in ctx.output.iter_mut().zip(ctx.input.iter()) {
+        let input = ctx.input();
+        for (o, i) in ctx.output().iter_mut().zip(input.iter()) {
             *o = *i * g;
         }
         BlockStatus::Ok
@@ -105,12 +106,13 @@ impl Module for Thru {
     }
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
         if !ctx.has_input() {
-            for s in ctx.output.iter_mut() {
+            for s in ctx.output().iter_mut() {
                 *s = 0.0;
             }
             return BlockStatus::Silenced;
         }
-        ctx.output.copy_from_slice(ctx.input);
+        let input = ctx.input();
+        ctx.output().copy_from_slice(input);
         BlockStatus::Ok
     }
     fn message(&mut self, _: &[u8]) -> Result<(), ModuleError> {
@@ -131,7 +133,7 @@ impl Module for Boom {
         Ok(())
     }
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
-        for s in ctx.output.iter_mut() {
+        for s in ctx.output().iter_mut() {
             *s = f32::NAN; // a module that misbehaves; the executor must overwrite this
         }
         BlockStatus::Failed
@@ -462,11 +464,11 @@ fn a_unit_delay_edge_shifts_by_one_sample() {
 }
 
 #[test]
-fn a_cv_edge_is_refused_at_build_in_words() {
-    // A cv→cv edge has no payload path in v0; the executor must refuse the whole build rather
-    // than silently ignore a wire. Reuse the real reference contract shape: an rms-style cv out.
-    // The Dc module with an extra cv OUTPUT, so the identity check passes and the refusal we
-    // provoke is the payload one (order of checks: identity first, edges second).
+fn a_cross_type_edge_is_refused_in_words_not_ignored() {
+    // The v0 shape of this test was "a cv edge is refused because the payload cannot travel".
+    // Contract v1 CARRIES cv→cv, so the honest refusal left in this graph is the cross-type one:
+    // a.port1 is a cv OUTPUT wired into b.port0, an AUDIO input — same-type-required (ADR-005),
+    // which the connect layer refuses upstream and the executor refuses again rather than guess.
     let mut cv_manifest =
         base("dc", vec![audio_port("out", "out", "mono")], vec![fparam("level", 0.0)]);
     cv_manifest.ports.push(PortSpec {
@@ -481,8 +483,6 @@ fn a_cv_edge_is_refused_at_build_in_words() {
     let mut graph = Graph::new();
     let a = graph.add_node(0);
     let b = graph.add_node(0);
-    // a.port1 is the cv out; b is a gain whose input is audio — a cv→audio edge, which the
-    // matrix would refuse upstream; the executor refuses it because the payload cannot travel.
     graph.connect(PortRef::new(a, 1), PortRef::new(b, 0), EdgeKind::Plain).unwrap();
     let builds = vec![
         (
@@ -503,8 +503,61 @@ fn a_cv_edge_is_refused_at_build_in_words() {
         ),
     ];
     let err = Executor::build(graph, builds, cfg(2)).unwrap_err();
-    assert!(matches!(err, ExecError::PayloadNotCarried { .. }), "got {err:?}");
-    assert!(err.to_string().contains("cv"), "the message names the payload: {err}");
+    assert!(matches!(err, ExecError::EdgeRefused { .. }), "got {err:?}");
+    assert!(err.to_string().contains("crosses port types"), "{err}");
+}
+
+#[test]
+fn data_gpu_and_atom_edges_are_still_refused_each_with_its_own_sentence() {
+    // Contract v1 carries audio, cv and event. The other three types keep the v0 promise — a
+    // drawn wire is never a silent no-op — but each refusal now says what WOULD carry it, so the
+    // operator gets a remedy instead of a dead end.
+    fn typed_port(id: &str, dir: &str, ty: &str) -> PortSpec {
+        PortSpec {
+            id: Some(id.into()),
+            name: Some(id.to_uppercase()),
+            direction: Some(dir.into()),
+            port_type: Some(ty.into()),
+            required: Some(false),
+            ..PortSpec::default()
+        }
+    }
+    for (ty, expect) in [("data", "schema"), ("gpu", "audio thread"), ("atom", "control-thread")] {
+        let mut src_manifest = base("dc", vec![audio_port("out", "out", "mono")], vec![]);
+        src_manifest.ports.push(typed_port("side-out", "out", ty));
+        let mut dst_manifest = base(
+            "thru",
+            vec![audio_port("in", "in", "mono"), audio_port("out", "out", "mono")],
+            vec![],
+        );
+        dst_manifest.ports.push(typed_port("side-in", "in", ty));
+        let mut graph = Graph::new();
+        let a = graph.add_node(0);
+        let b = graph.add_node(0);
+        graph.connect(PortRef::new(a, 1), PortRef::new(b, 2), EdgeKind::Plain).unwrap();
+        let builds = vec![
+            (
+                a,
+                NodeBuild {
+                    module: Box::new(Dc),
+                    manifest: validated(src_manifest),
+                    params: params(&[1.0]),
+                },
+            ),
+            (
+                b,
+                NodeBuild {
+                    module: Box::new(Thru),
+                    manifest: validated(dst_manifest),
+                    params: params(&[]),
+                },
+            ),
+        ];
+        let err = Executor::build(graph, builds, cfg(1)).unwrap_err();
+        assert!(matches!(err, ExecError::PayloadNotCarried { .. }), "{ty}: got {err:?}");
+        assert!(err.to_string().contains(ty), "the message names the payload: {err}");
+        assert!(err.to_string().contains(expect), "and its remedy: {err}");
+    }
 }
 
 #[test]
@@ -672,7 +725,7 @@ impl Module for Stall {
         Ok(())
     }
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
-        for s in ctx.output.iter_mut() {
+        for s in ctx.output().iter_mut() {
             *s = 0.0;
         }
         BlockStatus::Overrun
@@ -699,7 +752,7 @@ impl Module for Impulse {
         Ok(())
     }
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
-        for (i, s) in ctx.output.iter_mut().enumerate() {
+        for (i, s) in ctx.output().iter_mut().enumerate() {
             *s = if !self.fired && i == 0 { 1.0 } else { 0.0 };
         }
         self.fired = true;
@@ -730,12 +783,13 @@ impl Module for Delay128 {
     }
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
         if !ctx.has_input() {
-            for s in ctx.output.iter_mut() {
+            for s in ctx.output().iter_mut() {
                 *s = 0.0;
             }
             return BlockStatus::Silenced;
         }
-        for (o, &i) in ctx.output.iter_mut().zip(ctx.input.iter()) {
+        let input = ctx.input();
+        for (o, &i) in ctx.output().iter_mut().zip(input.iter()) {
             *o = self.hist[self.pos];
             self.hist[self.pos] = i;
             self.pos = (self.pos + 1) % 128;
@@ -870,7 +924,7 @@ fn an_overrun_streak_resets_on_a_good_block() {
         }
         fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
             self.0 += 1;
-            for s in ctx.output.iter_mut() {
+            for s in ctx.output().iter_mut() {
                 *s = 0.0;
             }
             // blocks 1,2 over; 3 ok (streak resets); 4..8 over → bypass engages at 8
@@ -1041,4 +1095,77 @@ fn compensation_of_an_untouched_chain_changes_nothing() {
         comp_ex.render_block(builds2.1, &mut b).unwrap();
         assert_eq!(a, b, "a chain is byte-identical under the switch");
     }
+}
+
+// ------------------------------------------------------------------ WO-009: the musical-position door
+
+/// Writes the block's musical position into its output — frame 0 carries `ctx.block.tick`,
+/// frame 1 carries `ctx.block.ppqn` — so a test can read back exactly what the executor handed
+/// every module for that block.
+struct TickProbe;
+impl Module for TickProbe {
+    fn id(&self) -> &str {
+        "sparq/test/tick-probe"
+    }
+    fn configure(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Ok(())
+    }
+    fn prepare(&mut self, _: &Resources) -> Result<(), ModuleError> {
+        Ok(())
+    }
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        // Scalars first, output view last — the v1 borrow discipline the author guide teaches.
+        let (tick, ppqn) = (ctx.block.tick as f32, ctx.block.ppqn as f32);
+        let out = ctx.output();
+        if let Some(s) = out.first_mut() {
+            *s = tick;
+        }
+        if let Some(s) = out.get_mut(1) {
+            *s = ppqn;
+        }
+        BlockStatus::Ok
+    }
+    fn message(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("tick-probe takes no messages"))
+    }
+}
+
+#[test]
+fn the_musical_position_door_carries_what_the_transport_says_and_nothing_more() {
+    // The executor performs no musical math (WO-009's placement rule): with no position set,
+    // modules see the declared static clock (tick 0 — the shape every golden was built against);
+    // with one set, every module sees exactly that value for the whole block; with None, the
+    // last value freezes rather than snapping back to zero.
+    let mut g = Graph::new();
+    let probe = g.add_node(0);
+    let mut ex = Executor::build(
+        g,
+        vec![(
+            probe,
+            NodeBuild {
+                module: Box::new(TickProbe),
+                manifest: validated(base(
+                    "tick-probe",
+                    vec![audio_port("out", "out", "mono")],
+                    vec![],
+                )),
+                params: params(&[]),
+            },
+        )],
+        cfg(1),
+    )
+    .unwrap();
+    let mut out = vec![9.0f32; FRAMES];
+
+    ex.render_block(probe, &mut out).unwrap();
+    assert_eq!(out[0], 0.0, "no transport, no tick — the v1 default, pinned");
+
+    ex.set_musical_position(Some((960, 480)));
+    ex.render_block(probe, &mut out).unwrap();
+    assert_eq!(out[0], 960.0, "the door carries the tick");
+    assert_eq!(out[1], 480.0, "and the ppqn it belongs to");
+
+    ex.set_musical_position(None);
+    ex.render_block(probe, &mut out).unwrap();
+    assert_eq!(out[0], 960.0, "None freezes the last position; it does not rewind to zero");
 }
