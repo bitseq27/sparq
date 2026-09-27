@@ -4,11 +4,11 @@
 > regenerate with `python3 tools/module_docs.py`; CI fails on a stale doc (`--check`).
 
 
-*4x4 stereo matrix with per-cell gain - the explicit merge, never implicit summing*
+*4x4 stereo matrix + 4-to-1 cv merge, per-cell gain - the explicit merge, never implicit summing*
 
 | | |
 |---|---|
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Host API | 1…1 |
 | Category | utility/mixer |
 | Kind / tier / stability | processor · t1 · stable |
@@ -27,6 +27,11 @@
 | `out-1` | Output 2 | out | audio | channel set: stereo | — | — | 0 |
 | `out-2` | Output 3 | out | audio | channel set: stereo | — | — | 0 |
 | `out-3` | Output 4 | out | audio | channel set: stereo | — | — | 0 |
+| `cv-0` | Cv 1 | in | cv | rate: block, range: unipolar | no | — | 0 |
+| `cv-1` | Cv 2 | in | cv | rate: block, range: unipolar | no | — | 0 |
+| `cv-2` | Cv 3 | in | cv | rate: block, range: unipolar | no | — | 0 |
+| `cv-3` | Cv 4 | in | cv | rate: block, range: unipolar | no | — | 0 |
+| `cv-out` | Cv Merge | out | cv | rate: block, range: unipolar | — | — | 0 |
 
 ## Parameters
 
@@ -52,6 +57,10 @@
 | 17 | `trim1` | Out 2 Trim | float | ratio | 0 | 2 | 1 |
 | 18 | `trim2` | Out 3 Trim | float | ratio | 0 | 2 | 1 |
 | 19 | `trim3` | Out 4 Trim | float | ratio | 0 | 2 | 1 |
+| 20 | `cvm0` | Cv 1 Gain | float | ratio | 0 | 2 | 1 |
+| 21 | `cvm1` | Cv 2 Gain | float | ratio | 0 | 2 | 0 |
+| 22 | `cvm2` | Cv 3 Gain | float | ratio | 0 | 2 | 0 |
+| 23 | `cvm3` | Cv 4 Gain | float | ratio | 0 | 2 | 0 |
 
 Parameter order is the snapshot order: `param(i)` in `process` reads row `i`.
 

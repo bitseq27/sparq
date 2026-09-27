@@ -1,19 +1,23 @@
 @echo off
 REM ===========================================================================
-REM  sparq test006 - WO-013 inc3: browser, inspector, wire re-patch on SATURN.
+REM  sparq test006 - WO-013 inc3+5: browser, inspector, re-patch, rename,
+REM  inspector scroll, the LOD walk and the cv wire, on SATURN.
 REM
 REM  THE CONTRACT: one file from Qwen - this script. Run it, answer the prompts,
 REM  send back ONE file: test006.log from the repo root - plus logs\ui.log if
 REM  the window session ran.
 REM
-REM  WHY. Increment 3 is sandbox-green - 518 tests, audit PASS with 19 smokes,
-REM  goldens unchanged. What the sandbox CANNOT prove: real fingers on the
-REM  browser sheet, the slider following a real drag, the wire-end rings under
-REM  a real touch, and - the one mechanical claim this script makes - that an
-REM  INSPECTOR EDIT REACHES THE RENDER. For that: step [04] leaves a baseline
-REM  canvas-render.wav rendered at manifest defaults; step [06] asks you to
-REM  edit a param in the window and render again; step [07] hashes both. Same
-REM  hash = the slider is a lie, and this script says so in words.
+REM  WHY. Increments 3, 4 and 5 are sandbox-green - 733 tests, audit PASS
+REM  with 25 smokes, goldens unchanged. What the sandbox CANNOT prove: real
+REM  fingers on the browser sheet, the slider following a real drag, the wire-
+REM  end rings under a real touch, the rename sheet under real keys, the
+REM  inspector scroll under real two fingers, the LOD renderings next to the
+REM  mockup, a cv wire lighting from its own value - and the one mechanical
+REM  claim this script makes: an INSPECTOR EDIT REACHES THE RENDER. For that:
+REM  step [04] leaves a baseline canvas-render.wav rendered at manifest
+REM  defaults; step [06] asks you to edit a param in the window and render
+REM  again; step [07] hashes both. Same hash = the slider is a lie, and
+REM  this script says so in words.
 REM
 REM  SAFE TO RE-RUN: the log appends with a dated banner per run.
 REM
@@ -46,7 +50,7 @@ del exec.wav >nul 2>&1
 >>"%LOG%" echo ===== test%TVER% RUN %DATE% %TIME% on %COMPUTERNAME% user %USERNAME% =====
 
 call :say ================================================================
-call :say  sparq test%TVER% - WO-013 increment 3: browser, inspector, re-patch
+call :say  sparq test%TVER% - WO-013 increments 3+4+5: browser, inspector, levels, rename, scroll, LOD
 call :say  at the end you send back ONE file: test%TVER%.log from the repo root
 call :say ================================================================
 
@@ -94,7 +98,7 @@ call :run "version stamp"
 
 REM ---- [02] modules --strict -------------------------------------------------
 call :say " "
-call :say [02] module registry - the three manifests, strict
+call :say [02] module registry - the seventeen manifests, strict
 set "CMD=target\release\sparq.exe modules --strict"
 call :run "modules --strict"
 set "RC02=!RC!"
@@ -108,12 +112,12 @@ set "RC03=!RC!"
 
 REM ---- [04] the canvas bridge via the audit --------------------------------------
 call :say " "
-call :say [04] canvas bridge - the audit drives synthetic touch through 19 smokes,
-call :say      including the three new ones: browser spawn, inspector slider with
-call :say      undo, wire-end re-patch with undo. Its RENDER WAV smoke writes
-call :say      canvas-render.wav at MANIFEST DEFAULTS - the baseline for step [07].
-set "CMD=target\release\sparq.exe ui --audit"
-call :run "ui --audit - 19 smokes incl. browser, inspector, re-patch, render chain"
+call :say [04] canvas bridge - the audit drives synthetic touch through 25 smokes,
+call :say      including the five new ones: rename commit + undo, rename cancel,
+call :say      the cv wire lit from its own port value, the inspector two-finger
+call :say      scroll, the LOD walk. Its RENDER WAV smoke writes canvas-render.wav
+call :say      at MANIFEST DEFAULTS - the baseline for step [07].
+call :run "ui --audit - 25 smokes incl. rename, cv levels, scroll, LOD walk"
 set "RC04=!RC!"
 
 REM ---- [05] baseline hash --------------------------------------------------------
@@ -141,6 +145,23 @@ call :say         canvas-render.wav WITH YOUR EDIT - step [07] hashes it.
 call :say      D. drag the small ring near a wire END onto another port - the wire
 call :say         moves. Three-finger tap - it returns, same wire.
 call :say      E. three-finger tap again - the slider drag undoes, value returns.
+call :say      F. long-press a NODE - tap RENAME - type a name - press ENTER:
+call :say         the header shows it. Three-finger tap: the old name is back.
+call :say         Reopen RENAME, press ESC or tap outside: cancels, name kept.
+call :say      G. add a Mixer via the browser, tap it: 20 rows, the last ones
+call :say         clipped. Two-finger drag UP inside the panel: the rows scroll,
+call :say         the thin thumb at the right edge moves, the CANVAS does not.
+call :say      H. bypass a node from its menu, then pinch two fingers together
+call :say         on the canvas to zoom out: first the boxes lose ALL text -
+call :say         states ride patterns now: hatched body = bypassed, dashed
+call :say         border = muted, double border = locked, header chip = master.
+call :say         Pinch further: dots and HAIRLINE wires; the bypassed dot is a
+call :say         hollow ring. Compare with design\mockups\design-mode.svg and
+call :say         write what differs into the H answer below.
+call :say      I. wire the thesis chain: spawn an SVF via the browser, drag
+call :say         gain OUT to svf IN, drag rms LEVEL to svf CUTOFF-MOD, then
+call :say         long-press empty canvas - RENDER WAV. The cyan cv wire lights
+call :say         from the rms value; the audio wires light as before.
 call :say      Then close the window; the script continues by itself.
 call :say      Over RDP the rasteriser is WARP - slow but functional; the 60 fps
 call :say      claim waits for the physical screen, as always.
@@ -154,12 +175,21 @@ set "B=n"
 set "C=n"
 set "D=n"
 set "E=n"
+set "F=n"
+set "G=n"
+set "H=n"
+set "I=n"
 set /p "A=      A: browser search spawned the Sine node where you pressed, y/n? "
 set /p "B=      B: the slider followed your finger and the log named the value, y/n? "
 set /p "C=      C: you tapped RENDER WAV after the edit, y/n? "
 set /p "D=      D: the wire end moved and one three-finger tap restored it, y/n? "
 set /p "E=      E: a second three-finger tap undid the slider edit, y/n? "
-call :say operator answers: A=!A! B=!B! C=!C! D=!D! E=!E!
+set /p "F=      F: rename committed with ENTER, one undo restored, ESC or outside cancelled, y/n? "
+set /p "G=      G: two-finger drag scrolled the inspector and the canvas stayed put, y/n? "
+set /p "H=      H: zoomed-out states read as patterns, dot wires are hairlines; what differed from the mockup? "
+set /p "I=      I: the cv wire lit from the rms value after RENDER WAV, y/n? "
+call :say operator answers: A=!A! B=!B! C=!C! D=!D! E=!E! F=!F! G=!G!
+call :say                 H=!H! I=!I!
 
 REM ---- [07] the mechanical claim: the edit reached the render ----------------------
 call :say " "
@@ -188,9 +218,9 @@ if defined RC00 call :verdict "[00b] tree matches SYNC-STAMP.txt" "!RC00!"
 if defined RC01 call :verdict "[01] build + stamp guard" "!RC01!"
 if defined RC02 call :verdict "[02] modules --strict" "!RC02!"
 if defined RC03 call :verdict "[03] exec offline render" "!RC03!"
-if defined RC04 call :verdict "[04] ui --audit, 19 smokes" "!RC04!"
+if defined RC04 call :verdict "[04] ui --audit, 25 smokes" "!RC04!"
 call :say [07] param edit reached the render : !CHG!
-call :say operator answers: A=!A! B=!B! C=!C! D=!D! E=!E!
+call :say operator answers: A=!A! B=!B! C=!C! D=!D! E=!E! F=!F! G=!G! H=!H! I=!I!
 call :say steps failing on rc: !FAILED!
 call :say " "
 call :say SEND BACK: %LOG%  and  logs\ui.log

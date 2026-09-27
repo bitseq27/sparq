@@ -42,11 +42,14 @@ mode the graph is inert (the stage pads own the screen) and everything routes to
 | `Activate` | node / wire / empty | select / select / deselect + close menu | Selection |
 | `Activate` | open-menu row | run that row's action (§4) | per action |
 | `Activate` | **browser row** (§4b) | spawn that module at the press, selected; the sheet closes | `AddNode` |
+| `Activate` | **rename sheet** (§4d) | inside: a note — the keyboard owns the buffer; outside: cancel, stated | `Rename` / Note |
 | `Activate` | **inspector slider row** | tap-to-set: the value jumps to the tapped x | `SetParam` |
 | `DoubleTap` | canvas | **zoom to fit** the graph | camera |
-| `Context` (long press) | node / wire / empty | open the context menu (§4) | Menu |
+| `Context` (long press) | node / wire / empty | open the context menu (§4); an open rename sheet cancels first | Menu |
 | `Pan` (two-finger) | canvas | pan the camera | camera |
+| `Pan` (two-finger) | **inspector panel** (§4c) | scroll the rows (content follows the fingers); the camera stays put; the panel speaks only at the ends | scroll |
 | `Zoom` (pinch/spread) | canvas | zoom about the pinch centre (token clamp 0.25…4.0), LOD follows | camera |
+| `Zoom` (pinch/spread) | **inspector panel** | declined — the panel owns the gesture and has no zoom; the canvas behind it must not move | — |
 | `Undo` (three-finger tap) | global | pop the undo stack, apply the inverse | Undo |
 
 `Rotate`, `Flick`, `DragFineChanged`, `TogglePanel`, `AllSoundOff`, `RecoveryMenu` are **not** canvas
@@ -107,15 +110,21 @@ Rows are 44 px (`touch.row_height_list`, class S), overlay ground, anchored at t
 into view. Only enabled rows are touch targets, so only they are audited (the shell's convention: a
 disabled control is drawn honestly and kept out of the audit).
 
-- **Node:** DUPLICATE · SET MASTER · BYPASS on/off · MUTE on/off · LOCK on/off · DELETE (shown
-  `DELETE (LOCKED)`, disabled, when locked — a locked node resists move *and* delete).
+- **Node:** RENAME (§4d) · DUPLICATE · SET MASTER · BYPASS on/off · MUTE on/off · LOCK on/off ·
+  DELETE (shown `DELETE (LOCKED)`, disabled, when locked — a locked node resists move *and*
+  delete).
 - **Wire:** DELETE WIRE.
 - **Empty:** ADD MODULE (disabled, `ADD MODULE (NONE INSTALLED)`, when the shell supplied no
   catalogue — #58 reaches the menu too) · SELECT ALL · ZOOM TO FIT · RENDER WAV · REDO (enabled
   only when there is something to redo).
 
-Flag states are also badged on the node header in **words** (BYPASS / MUTE / LOCK), never colour
-alone (look-board rule).
+Flag states ride **patterns at every LOD** (increment 5, look-board §4 "pattern first — colour is
+redundant"): BYPASS hatches the node body (the mockup's own `hatch8` encoding), MUTE dashes the
+border, LOCK doubles it, MASTER chips the header (a filled square in the badge accent). At **Full**
+LOD the words ride on top of the patterns (BYPASS / MUTE / LOCK / MASTER in the header) — redundant
+encoding, never either alone. At **Simplified** the patterns stand alone, because the level's
+contract is "no text"; at **Dot** the shapes carry it: hollow dot = bypassed, dimmed = muted,
+concentric ring = locked, accent ring = master.
 
 **RENDER WAV** (increment 2) asks the shell to render the drawn patch through the registry +
 executor to `canvas-render.wav` — no audio device involved; the evidence line (master, blocks,
@@ -159,17 +168,53 @@ trick applied to sliders). Tap sets the value at the tapped x; drag edits contin
   criterion's "undo restores graph **and param state**", proven by smoke 12).
 * `enum`/`text`/`blob` params are shown greyed with the kind named and refuse edits **in words**
   until manifest v1 grows `options[]` — drawn honestly, never silently dead.
-* Rows below the panel bottom are clipped and **not touchable** — an invisible control cannot be
-  hit by accident (scrolling is parked in `LATER.md`).
+* **Scrolling (increment 5):** when the rows outrun the panel, a **two-finger drag inside the
+  panel** scrolls them (one finger on a row is a slider edit — the panel's scroll rides the
+  two-finger gesture, routed by the pan's CENTRE: `GestureIntent::Pan` carries it, like `Zoom`
+  always has). The title row is a fixed header; rows slide under it; a hairline **thumb** on the
+  panel's right edge shows the position — drawn only when the panel actually scrolls. The offset
+  is transient view state (not undoable), clamped by the layout, and **resets when the inspected
+  node changes**. The honesty rule survives the offset in both directions: a row clipped at the
+  bottom is touchable through its visible sliver; a row under the header is refused by `row_at`
+  and skipped by the painter — what you cannot see you cannot touch. The panel speaks only at the
+  ends ("scrolled to the first/last row"); mid-scroll the moving rows are the feedback (the
+  camera-pan precedent). A pinch over the panel is declined — the canvas behind it must not move.
 * The bridge renders **node param state**; a never-touched node renders at its manifest defaults,
   so untouched patches are bit-identical to increment 2 (the goldens prove it).
+
+## 4d. The rename sheet (increment 5)
+
+**RENAME** opens the text-entry sheet at the press: a header naming the module, an inset well
+carrying the buffer **pre-filled with the current title** and its end-caret, and a hint row that
+states the contract — `ENTER COMMIT · ESC CANCEL · EMPTY = MODULE DEFAULT`. The sheet is the
+deepest modal (it opens FROM the menu): taps inside are answered in words (the keyboard owns the
+buffer), a tap outside **cancels, stated**, and louder gestures (long-press, drag) cancel it like
+they dismiss the menu and browser.
+
+* **Enter** commits through `Graph::op_rename` — an op like any other, so **one three-finger tap
+  undoes the rename**. Committing an **empty** buffer clears the custom name (the module default
+  is back); committing the **unchanged** buffer is a stated no-op that leaves history alone (an
+  undo step that undoes nothing is a lie).
+* The buffer is `sparq-ui::canvas::entry::TextEntry`: printables only, capped at
+  **`ENTRY_MAX_CHARS` = 32** — the node header's budget, so a name you can type is a name the
+  canvas can show. The caret is the end (v0, declared): insert appends, backspace pops.
+* The keyboard path is the shell's **unified modal feed**: egui raw events are parsed ONCE into a
+  normalised batch (text / backspace / arrows / Enter / Escape) that the rename sheet and the
+  browser query both consume — the shared text-entry surface the browser's provisional feed was
+  declared to be waiting for. Headless drivers call `rename_set_text` / `rename_commit` directly
+  (the `browser_set_query` convention).
 
 ## 5. Level of detail, snapping, and the audit
 
 - **LOD** (from `camera.zoom`, tokens `lod_*`): **Full** ≥ 0.6 — header text, port labels (name +
-  class letter), port rings; **Simplified** 0.35…0.6 — node box + coloured ports, no text, major
-  grid only; **Dot** < 0.35 — a colour-coded dot per node, hairline wires, no grid, ports not
-  targetable (a 24 px capture around an invisible dot would only mis-wire).
+  class letter), port rings, flag words over their patterns; **Simplified** 0.35…0.6 — node box +
+  coloured ports, **no text at all** (flags ride the §4 patterns, the master its chip), major grid
+  only; **Dot** < 0.35 — a colour-coded dot per node (state by dot SHAPE, §4), **hairline wires**
+  at last (increment 5 made the rendering match the contract this file always stated), no grid, no
+  grab handles, the SUM conversion word suppressed (unreadable at that scale by definition — the
+  class encoding survives and the word returns on zoom-in; declared, not silently dropped), ports
+  not targetable (a 24 px capture around an invisible dot would only mis-wire). The side-by-side
+  review against `design-mode.svg` stays a device acceptance box (test006).
 - **Snapping:** a committed move lands on the 8 px grid (`canvas.snap`). Live drag is unsnapped; the
   snap happens on `DragEnd`, so the op's `from`/`to` are both grid points and undo is exact.
 - **Touch-target audit:** node bodies register as **class L (72 px)** *only when their on-screen
@@ -198,7 +243,7 @@ no stroke pattern is hard-coded in widget code (`token_audit.py` R6).
 ## 7. Device-side acceptance (honest list)
 
 Proven headless in CI (sandbox, no GPU, no digitiser): the whole intent→op table above, via the
-`--audit` smokes and 31 canvas unit tests. **Needs SATURN, and cannot be proven over RDP-from-iPad:**
+`--audit` smokes (22 gesture cells as of increment 5) and the canvas unit tests. **Needs SATURN, and cannot be proven over RDP-from-iPad:**
 
 - 60 fps with a 200-node graph while panning/zooming (LOD engaging) — WARP over RDP is not the stage
   GPU; the frame-time histogram is a device measurement.
@@ -208,5 +253,11 @@ Proven headless in CI (sandbox, no GPU, no digitiser): the whole intent→op tab
 - The full DPI matrix and mixed-DPI dual monitor — RDP presents one virtual display.
 
 Over RDP you *can* and should touch-test the gesture table (drag, connect, refuse, undo, menu,
-pan/pinch, double-tap-fit) and the visual language; those are logic + rendering facts that survive
-the remote session.
+pan/pinch, double-tap-fit, the rename sheet, the inspector's two-finger scroll) and the visual
+language; those are logic + rendering facts that survive the remote session.
+
+**Increment 5 added to this list** (`test006.bat` steps F–I): the rename sheet under real keys;
+the inspector scroll under real two fingers (and the camera staying put behind it); the LOD walk
+against `design-mode.svg` — Simplified shows no text with the flag patterns readable, Dot shows
+hairline wires and shape-encoded dots; and a cv wire (`rms.level → svf.cutoff-mod`) lighting from
+its own published value after RENDER WAV while the rms node's folded audio meter stays at rest.

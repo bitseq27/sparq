@@ -20,9 +20,12 @@ pub enum Lod {
     /// Zoom ≥ `lod_1_below_zoom`: header text, port labels, port circles.
     #[default]
     Full,
-    /// `lod_2_below_zoom` ≤ zoom < `lod_1_below_zoom`: node box, coloured ports, no text.
+    /// `lod_2_below_zoom` ≤ zoom < `lod_1_below_zoom`: node box, coloured ports, NO TEXT — the
+    /// flag states ride body patterns instead (hatch = bypassed, dashed border = muted, double
+    /// border = locked) and the master wears a header chip (increment 5's rendering).
     Simplified,
-    /// Zoom < `lod_2_below_zoom`: a colour-coded dot per node, hairline wires.
+    /// Zoom < `lod_2_below_zoom`: a colour-coded dot per node, hairline wires. State by dot
+    /// SHAPE: hollow = bypassed, dimmed = muted, concentric ring = locked, accent ring = master.
     Dot,
 }
 

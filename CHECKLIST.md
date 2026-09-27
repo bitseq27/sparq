@@ -6,16 +6,24 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-09-27 (session handoff. WO-014 inc 5 + WO-013 inc 4 + the beat-rate
-follow-on were built, sealed as `sync-wo014-inc5+wo013-inc4.zip` (29 entries), and the user
-**confirmed the zip APPLIED 2026-09-27**. The first-party module set is COMPLETE at SEVENTEEN —
-`ana/tap`, `dsp/scope`, `out/main` on the analysis-payload contract that extends d8's ring from
-meters to waveforms; the canvas's live wire levels animate from the executor's real meters (not
-faked); and `mod/lfo` 0.2.0 + `util/delay` 0.2.0 derive bpm module-side (the beat-rate decision,
-shipped). Sandbox-green: 713 tests, every pre-existing golden unchanged, all runnable clippy cells
-clean, selftest 9/9, ui-audit 20 smokes, stamp `src 91f/1889639B`. **The next step is DEVICE
-EVIDENCE, not code** — see the device track below: `test004` (the 🔴 exclusive-acceptance blocker),
-`test006`, and `gates.bat` on SATURN, with the logs wanted back.)
+**Last updated:** 2026-09-27, third session (handoff. The user confirmed **`sync-wo013-inc5.zip`
+APPLIED** — its increment (the rename text entry + unified modal key feed, inspector scrolling on
+the pan's new `center`, per-cv wire levels, the LOD pass) is on the device. Then **WO-014
+increment 6** — the sandbox track's next buildable item (item 6 stays gated on WO-006's device
+acceptance) — was built and sealed as **`sync-wo014-inc6.zip` (13 entries)**: **`util/mixer`
+0.2.0, the cv merge side** the compat-matrix's fan-in cell always named — 4 block-rate unipolar cv
+inputs (`cv_reduce = "mean"` declared), per-input gains appended LAST (params 20..23), one summed
+`cv-out` clamped to the declared range, identity default (an untouched cv side is a bit-exact wire
+from `cv-0`). The executor's cv fan-in refusal stays — no implicit summing, ever — and now carries
+the working remedy in words. `tests/mixer_cv.rs` (9 gates). A gate caught a real fragility on the
+way: the inc-5 scroll smoke had overfitted the mixer's old param count; it now asserts the
+reveal-contract, not one module's arithmetic. Sandbox-green: **742 tests**, every pre-existing
+golden unchanged, stress hash unmoved (debug AND release), all runnable clippy cells clean,
+selftest 9/9, ui-audit **25 smokes**, stamp **`src 92f/1977302B`**.
+**`sync-wo014-inc6.zip` is WAITING for the device** — it
+goes with the evidence ask. **The next step is still DEVICE EVIDENCE, not code**: `test004` (the
+🔴 exclusive-acceptance blocker), `test006` (steps F–I), and `gates.bat` on SATURN, with the logs
+wanted back.)
 
 ---
 
@@ -25,20 +33,93 @@ EVIDENCE, not code** — see the device track below: `test004` (the 🔴 exclusi
   applied on SATURN (wo013-inc3 → wo006-inc13 → wo008-inc3 → wo014-inc2 → wo008-inc4 →
   wo014-inc3 → wo009-inc1), and **confirmed 2026-09-27 that `sync-wo014-inc5+wo013-inc4.zip`
   (29 entries) is APPLIED** — which, since the chain stacks in order, means the two waiting
-  predecessors (`sync-wo014-inc4.zip`, `sync-wo008-inc5.zip`) were applied ahead of it. So the
-  whole sealed chain is now on the device and **the next step is EVIDENCE, not code**: the pending
-  device runs cover seven increments of baseline — `test004` (exclusive acceptance — the #79 fix,
-  still the 🔴 blocker), `test006` (canvas window session — **now also: after RENDER WAV the
-  sine/gain wires should light with live levels**), `gates.bat` (**expected test count is now
-  713**, stamp = whatever `SYNC-STAMP.txt` says (`src 91f/1889639B`), `sparq modules --strict`
-  lists **17**, `selftest --golden` prints **PASS (9 gates)**, `ui --audit` **PASS (20 smokes)** —
-  smoke 20 is the live-wire-levels cell; `log_check.py`'s BASELINE moves with every seal since
-  defect #83), and the WO-008 **loaded soak** (200 modules, 30 min) when the HAL and the machine
-  are both free. WO-009's two device boxes: the **30-minute drift measurement** and a **listened
+  predecessors (`sync-wo014-inc4.zip`, `sync-wo008-inc5.zip`) were applied ahead of it.
+  **`sync-wo013-inc5.zip` (20 entries) is APPLIED — user-confirmed 2026-09-27, third session.**
+  **WAITING: `sync-wo014-inc6.zip` (13 entries, this session — mixer 0.2.0's cv merge side).**
+  The device runs then cover eight increments of baseline — `test004` (exclusive acceptance — the
+  #79 fix, still the 🔴 blocker), `test006` (canvas window session — after RENDER WAV the
+  sine/gain wires light with live levels, **and the new steps F–I: the rename sheet under real
+  keys, the inspector two-finger scroll, the LOD walk vs the mockup, the cv wire lighting from its
+  own value**), `gates.bat` (**expected test count is now 733**, stamp = whatever `SYNC-STAMP.txt`
+  says (`src 92f/1974470B`), `sparq modules --strict` lists **17**, `selftest --golden` prints
+  **PASS (9 gates)**, `ui --audit` **PASS (25 smokes)** — smokes 21–25 are the increment-5 cells;
+  `log_check.py`'s BASELINE moves with every seal since defect #83), and the WO-008 **loaded
+  soak** (200 modules, 30 min) when the HAL and the machine are both free. WO-009's two device boxes: the **30-minute drift measurement** and a **listened
   tempo sweep**. Evidence artefacts — **defect #85: run them with their pinned durations or the
   hashes will not match the goldens** (the CLI default renders 5 s): `sparq exec --patch drum-demo
   --seconds 2` (transport-driven, hash `f2303f13aa0cf299`), `--patch mod-demo --seconds 1`
   (`1621e1f65b1b64e1`), `--patch demo --seconds 2.8` (`53de3b1f3f40e3c9`).
+- **WO-014 increment 6 is BUILT and sandbox-green — `util/mixer` 0.2.0, the cv merge side:** the
+  sandbox track's next buildable item (item 6 — the live HAL through `SharedEngine` — stays gated
+  on WO-006's device acceptance; the plan of record is `WO014-INC6-PLAN.md`). The compat-matrix's
+  cv-fan-in cell always named `util/mixer` as the explicit merge; the module now IS one on both
+  sides: four block-rate unipolar cv inputs (`cv-0..3`, `cv_reduce = "mean"` DECLARED per G3),
+  per-input gains (params 20..23, **appended LAST** — every v0.1.0 snapshot index and every audio
+  golden keeps its bits; short snapshots read 0.0 past their end, so batch-3's 20-value tests are
+  unchanged BY CONSTRUCTION), one `cv-out` summing in f64 and clamped to the declared range (the
+  module's own documented rule). Identity default: an untouched cv side is a bit-exact wire from
+  `cv-0`. `BlockStatus` stays the AUDIO contract — all-unconnected audio ⇒ `Silenced` + exact
+  zeros while the cv side merges (a cv-only mixer is a legitimate citizen, pinned). Wrong-rate
+  presentation ⇒ `Failed` (the env/ad precedent). **The executor's fan-in refusal is RE-WORDED,
+  not removed** (no implicit summing, ever) and now names the built remedy: each source to its own
+  `cv-N`, destination fed from `cv-out` — `contract_v1`'s "names the merge module" pin passes on
+  the new text. `Adapter::Merge.first_phase` stays Phase 1 ON PURPOSE (the module exists; the
+  one-tap INSERT offer waits — a merge is a three-wire re-patch, not the inline pair shape the
+  mechanism fits; decision 8 of the plan). **`tests/mixer_cv.rs` (9 gates):** bit-exact identity
+  wire, hand-computed gain sum, exact 1.0 clamp, the declared mean reduce checked against the
+  source's OWN published buffer in the same block, the audio side re-proven at 24 values, status
+  decoupling, the remedy-naming refusal, zero allocations over 1 000 blocks, and the
+  snapshot-order pin (a future insert-instead-of-append fails here first, in words). **A gate
+  caught a real fragility mid-increment:** the inc-5 inspector-scroll smoke failed when the
+  mixer's param count moved 20 → 24 — its fixed drag had been tuned to the old `max_scroll`; the
+  smoke now asserts the CONTRACT (something hidden becomes visible AND touchable), not one
+  module's arithmetic. **742 tests** (was 733), every pre-existing golden re-verified unchanged
+  (incl. drum-demo through the mixer, the three pinned exec renders, stress `b42068ec7b206789`
+  debug AND release), selftest 9/9, `ui --audit` PASS 25 smokes, `modules --strict` 17/17, docs
+  regenerated (17) + `--check`, all runnable clippy cells clean (MSVC×8 now). Sealed as
+  **`sync wo014-inc6`** — WAITING for the device. Parked and declared: the bipolar cv side
+  (waits `util/range`), a 4×4 cv matrix (waits MAX_PARAMS), the canvas insert-offer for merges.
+- **WO-013 increment 5 is BUILT and sandbox-green — the "Else column" is empty:** the four items
+  increment 4 declared for its next pass all shipped, and nothing else (risk R1). **Rename text
+  entry:** NEW `sparq-ui::canvas::entry` (`TextEntry` — end-caret, printables-only, 32-char cap =
+  the node header's budget; `RenameState` — the sheet geometry on the browser's clamping rule),
+  the RENAME menu row (first on the node menu; the one test that hard-coded DUPLICATE at row 0 now
+  finds rows BY ACTION), commit through the increment-1 `Op::Rename` (undoable; EMPTY commits
+  `None` = the module default; an unchanged buffer is a stated no-op with no history entry —
+  catching the case `op_rename`'s equality cannot), cancel stated in words on Escape / outside tap
+  / drag / long-press. The shell's keyboard path is ONE feed now: `read_keys` parses egui events
+  into a normalised `KeyBatch` the rename sheet and the browser query both consume — the shared
+  surface the provisional feed was declared to be waiting for. **Inspector scrolling:**
+  `compute_at` with the offset clamped IN the layout, a fixed header the rows slide under, one
+  visibility rule for draw/hit-test/audit (`row_visible`/`visible_rows`: a bottom sliver stays
+  touchable, a row under the header is not), a hairline `thumb()` only when the panel scrolls
+  (deliberately not an audit element — the gesture is the input). The gesture rides the TWO-finger
+  pan (one finger on a row is a slider edit): **`GestureIntent::Pan` grew `center`** (the centroid
+  the recogniser already tracked; `Zoom`'s precedent) — centre in the panel ⇒ scroll, elsewhere ⇒
+  camera, exactly as before; a pinch over the panel is DECLINED so the canvas behind never moves,
+  which also keeps the recogniser's sequential-contact span wobble (measured: reciprocal
+  1.667/0.6 zoom factors on a straight two-finger drag) off the camera. Scroll is transient view
+  state, reset on selection change; the panel speaks only at its ends. **Per-cv wire levels**
+  (inc 4's DECLARED LIMIT, retired): `NodeLevels` grew per-port entries, `wire_level` prefers the
+  source PORT's level and falls back to the node's fold (audio semantics untouched — pinned by a
+  test), and `bridge::node_levels` reads each cv output's real published value (`node_cv_block` /
+  `node_cv_audio`, magnitude rule) — **the executor was not touched**, so the stress hash
+  `b42068ec7b206789` stands in debug AND release. Two bridge gates: the rms→svf thesis rig lights
+  the cv wire at the metered rms while the SAME node's folded meter stays at rest, and dropping
+  the sine's amp takes the level down. Per-port AUDIO meters + the ring extension stay parked for
+  the live-HAL increment. **The LOD pass:** Dot wires are hairlines and the SUM word is
+  suppressed there (declared); Simplified is truly text-free; states ride the look-board's
+  pattern-first language at every level — hatch = bypassed (the mockup's `hatch8`), dashed border
+  = muted, double border = locked, header chip / accent ring = master; at Dot, hollow = bypassed,
+  dimmed = muted, concentric ring = locked. Words ride on top at Full only — the mockup's own
+  redundant pairing. The side-by-side human review stays device-track (test006 step H). **Five
+  new audit smokes (25 total)**; the cv smoke reads the bridge DIRECTLY on purpose — a second
+  menu-driven render would overwrite `canvas-render.wav`, the file test006's step [05] hashes as
+  the manifest-defaults baseline (smoke 13 owns the menu path). **733 tests** (was 713), every
+  pre-existing golden re-verified unchanged, `modules --strict` 17/17, all runnable clippy cells
+  clean (MSVC×ui-window and MSVC×bootstrap-audio remain the documented `windows`-crate OOM
+  class). Sealed as **`sync wo013-inc5`** — APPLIED on the device 2026-09-27. Plan of record:
+  `WO013-INC5-PLAN.md`.
 - **WO-014 increment 5 is BUILT and sandbox-green — the module set is COMPLETE at seventeen:**
   the last three modules shipped on the contracts they waited for. **`ana/tap`** (the generic
   signal tap for displays): audio-rate bipolar `wave` (the mono monitor mix) + block-rate unipolar
@@ -271,8 +352,9 @@ EVIDENCE, not code** — see the device track below: `test004` (the 🔴 exclusi
 
 ## 🔴 THE BLOCKER (device track — waiting on SATURN, not on code)
 
-**WO-006 exclusive acceptance = the `test004` re-run** (bundles through `sync-wo008-inc4.zip`
-applied). History: `test004` attempt 1 (2026-09-24) passed the caps checkpoint (#77's format fix
+**WO-006 exclusive acceptance = the `test004` re-run** (every sealed bundle through
+`sync-wo013-inc5.zip` is APPLIED on the device, user-confirmed 2026-09-27;
+`sync-wo014-inc6.zip` is WAITING and does not touch the HAL). History: `test004` attempt 1 (2026-09-24) passed the caps checkpoint (#77's format fix
 verified on hardware) and failed every rung at `Initialize (exclusive): HRESULT 0x88890020` =
 `AUDCLNT_E_INVALID_DEVICE_PERIOD` — the open asked the 64-fr block (666.7 µs @ 96 kHz) as the
 device period against a 10 ms engine (**defect #79**, logged and fixed in inc 1.3). On the re-run,
@@ -287,23 +369,25 @@ default** (that deletion is gated on this device run — do not do it early).
 ## Next session's task list, in order
 
 **Device track (SATURN — the whole sealed chain is APPLIED; the remaining work is EVIDENCE):**
-1. **All bundles are APPLIED** (through `sync-wo009-inc1.zip` user-confirmed 2026-09-26;
-   `sync-wo014-inc4.zip` → `sync-wo008-inc5.zip` → `sync-wo014-inc5+wo013-inc4.zip` applied and
-   user-confirmed 2026-09-27). **Nothing left to apply — run the device gates and send the logs
-   back.** Run `scripts\test004.bat` (the exclusive acceptance — pass shape in
-   `WO006-INC13-RUN-SHEET.md`; the 🔴 blocker) and `scripts\test006.bat` (the inc-3 window session;
-   step [07] is the mechanical claim: slider edit must change the canvas-render.wav hash — **and
-   now, after RENDER WAV, eyeball that the sine/gain wires light with live levels**).
-   `scripts\gates.bat` now expects **713 passed / 0 failed / 1 ignored**, **17** modules,
-   **selftest PASS (9 gates)** and **`ui --audit` PASS (20 smokes)** — smoke 20 is the
-   live-wire-levels cell — with the stamp `log_check.py` in the bundle already knows (defect #83's
-   fix made moving it a seal step). Wanted evidence, **with the pinned durations** (defect #85):
+1. **All bundles are APPLIED** (through `sync-wo014-inc5+wo013-inc4.zip` user-confirmed
+   2026-09-27; **`sync-wo013-inc5.zip` applied and user-confirmed 2026-09-27, third session**).
+   **Nothing left to apply — run the device gates and send the logs back.** Run `scripts\test004.bat` (the exclusive acceptance — pass shape in
+   `WO006-INC13-RUN-SHEET.md`; the 🔴 blocker) and `scripts\test006.bat` (the window session;
+   step [07] is the mechanical claim: slider edit must change the canvas-render.wav hash — after
+   RENDER WAV the sine/gain wires light with live levels — **and the new steps F–I: the rename
+   sheet under real keys, the inspector two-finger scroll on a Mixer, the LOD walk vs
+   `design-mode.svg` (write what differs into the H answer), the cv wire lighting from its own
+   value**). `scripts\gates.bat` now expects **742 passed / 0 failed / 1 ignored**, **17**
+   modules (the mixer row reads v0.2.0, 13 ports, 24 params), **selftest PASS (9 gates)** and
+   **`ui --audit` PASS (25 smokes)** — with the stamp `log_check.py` in the bundle already knows
+   (`src 92f/1977302B`; defect #83's fix made moving it a seal step). Wanted evidence, **with the pinned durations** (defect #85):
    `sparq exec --patch mod-demo --seconds 1` (`1621e1f65b1b64e1`), `sparq exec --patch drum-demo
    --seconds 2` (`f2303f13aa0cf299`), `sparq exec --patch demo --seconds 2.8` (`53de3b1f3f40e3c9`),
    and — when the HAL is free — the two WO-009 device boxes: a LISTENED tempo sweep and the 30-min
    drift run. No drift-repair copy step was needed (the pristine clone passes `sync_check --quiet`;
-   defect #86 was repaired in the wo008-inc5 bundle). **Wanted back: `test004.log`, `test006.log`,
-   `gates.log`, `logs\ui.log`** — those close the device boxes the sandbox cannot.
+   defect #86 was repaired in the wo008-inc5 bundle). **Wanted back: `test004.log`,
+   `test006.log` (now with the F–I answers), `gates.log`, `logs\ui.log`** — those close the
+   device boxes the sandbox cannot.
 2. If test004's 2 h soak passes → **WO-006 acceptance closes** → sandbox increment: ADR-008 exit
    (delete the cpal bootstrap, HAL becomes `play`'s default) **plus routing the live HAL stream
    through `SharedEngine`** — the cross-thread halves now exist (inc 5), so `play`'s callback
@@ -314,13 +398,16 @@ default** (that deletion is gated on this device run — do not do it early).
    and since inc 5 also the paced-real-time half of allowlist entry 6's stress sentence.
 
 **Sandbox track (buildable now, in value order):**
-4. ~~**WO-013 increment 4** — live wire levels~~ **DONE (2026-09-27, this session):** the
-   signature sparq image ships — wires animate from the executor's REAL meters (`bridge::node_levels`
-   → `CanvasState.levels` → the painter's class-colour→glow blend), toolkit-independent
-   `canvas::levels` model, audit smoke 20, and the `out/main` master-handover rule. **Remaining
-   from inc 4's "Else" column** (declared, next pass): rename text entry (shared with the browser's
-   provisional keyboard feed), inspector scrolling, LOD visual iteration vs `design-mode.svg`, and
-   per-cv wire levels (needs per-port meters — the rings can carry port ids).
+4. ~~**WO-013 increment 4** — live wire levels~~ **DONE (2026-09-27)** ~~and its "Else"
+   column~~ **DONE TOO (2026-09-27, second session — WO-013 increment 5):** rename text entry (the
+   shared `canvas::entry` surface + the unified modal key feed), inspector scrolling (the
+   two-finger pan routed by its new `center`), per-cv wire levels (the bridge reads the executor's
+   real cv publications; the executor untouched) and the LOD pass (Dot hairlines, text-free
+   Simplified, the pattern-first state language). What remains is declared in LATER.md §WO-013:
+   numeric param entry (one parse step from the same `TextEntry`), caret movement/IME, browser
+   drag-scroll, per-port AUDIO meters + ring port ids and the continuous level refresh (both ride
+   the live-HAL-through-`SharedEngine` increment), randomise (the seed tree), and the device
+   side-by-side LOD review (test006 step H).
 5. ~~**WO-014 increment 5** — the last three modules~~ **DONE (2026-09-27, this session): the
    first-party set is COMPLETE at seventeen** — `ana/tap`, `dsp/scope`, `out/main` shipped on the
    analysis-payload contract (`AnalysisUpdate` extends d8's ring from meters to waveforms), with the
@@ -337,8 +424,9 @@ default** (that deletion is gated on this device run — do not do it early).
    measurement, STA retry for #75, clock-drift re-derivation per #76).
 7. Studio-session evidence still open: real-finger canvas touch-test, DPI matrix walk
    (WO-012/WO-013), WO-001 hardware sheets, dispatch-bench C/D numbers for ADR-009.
-8. Small, well-specified, declared in LATER.md: mixer's cv merge side (retires the last of the
-   cv-fan-in refusal); `cv_interp = "spline"` (refused at build until implemented); host-side
+8. Small, well-specified, declared in LATER.md: ~~mixer's cv merge side~~ **DONE (WO-014 inc 6,
+   this session)**; `cv_interp = "spline"` (refused at build until implemented — the next
+   candidate in this list); host-side
    `required`-unconnected enforcement (moves stress refusal counters — its own increment on
    purpose); the compat-matrix review packet (`reviewed = false`, defect #82's ordering question
    inside it); loop-relative beat phase for unaligned loop regions (WO-009's declared limit);
@@ -348,6 +436,20 @@ default** (that deletion is gated on this device run — do not do it early).
 
 ## Done (most recent first)
 
+- [x] **WO-014 inc 6** (2026-09-27, third session) — `util/mixer` 0.2.0, the cv merge side:
+      4→1 block-rate unipolar merge with declared mean-reduce, per-input gains appended last,
+      identity default, clamped publish; the executor's fan-in refusal re-worded to its built
+      remedy (the rule stands); `tests/mixer_cv.rs` 9 gates; the inc-5 scroll smoke hardened
+      against param-count drift. 742 tests, every golden unchanged. Sealed `sync wo014-inc6`.
+- [x] **WO-013 inc 5** (2026-09-27, second session) — the "Else column" pass: the rename text
+      entry (`canvas::entry`, the RENAME row, the `Op::Rename` commit with its empty-clears and
+      unchanged-no-op edges, the unified modal key feed), inspector scrolling (`compute_at` + the
+      fixed-header visibility rule + the thumb; `Pan.center` routing; pinch-over-panel declined),
+      per-cv wire levels (`NodeLevels` per-port entries, `wire_level` port-first, the bridge
+      reading the executor's real cv values — executor untouched, stress hash unmoved), and the
+      LOD pass (Dot hairline wires, text-free Simplified, the hatch/dash/double/chip state
+      patterns at every level, shape-encoded dots). 733 tests, every golden unchanged, audit PASS
+      25 smokes, test006 steps F–I. Sealed `sync wo013-inc5` — APPLIED 2026-09-27.
 - [x] **WO-014 inc 5** (2026-09-27, this session) — the module set COMPLETE at seventeen:
       `ana/tap` (wave golden cross-validates == the sine golden), `dsp/scope` (the no-op display;
       scope-rig golden == the out/main golden, proving zero-cost bit-transparency), `out/main`
@@ -409,15 +511,18 @@ default** (that deletion is gated on this device run — do not do it early).
 
 ## Environment notes (sandbox) — re-read every session
 
-- **`.git` is NOT durable in this workspace** (observed three times now: 2026-09-25 twice,
-  2026-09-26 the clone arrived without history and was re-inited). Do not rely on git for state;
+- **`.git` is NOT durable in this workspace** (observed three times: 2026-09-25 twice,
+  2026-09-26 the clone arrived without history and was re-inited; the 2026-09-27 clone DID
+  arrive with the rebuilt history intact and commits held all session — treat that as luck, not
+  as a change of rule). Do not rely on git for state;
   the integrity tool is `sync_check.py` (content hashes) and the seal is the zip. Re-init for
   in-session diffs if useful, expect it gone next session. **And the pushed tree can drift from
   the sealed one** (defect #86, found 2026-09-27): run `sync_check.py --quiet` against the
   PRISTINE clone at session start — if it fails, the drift list IS the repair list, and the
   bundle must carry the repairs plus the device-side forensics step.
-- Toolchain wipes **between and mid-sessions** (again 2026-09-26: `/opt` arrived empty — rustup,
-  cargo, gcc and the apt packages all reinstalled from scratch in ~3 min with warm apt). Lives in
+- Toolchain wipes **between and mid-sessions** (again 2026-09-26 and 2026-09-27: `/opt` arrived
+  empty — rustup, cargo, gcc and the apt packages all reinstalled from scratch, ~84 s with warm
+  apt; within one conversation the install persists across turns). Lives in
   `/opt`, deliberately outside the snapshot. Restore:
   ```bash
   apt-get update && apt-get install -y curl ca-certificates gcc libasound2-dev pkg-config
@@ -431,10 +536,14 @@ default** (that deletion is gated on this device run — do not do it early).
   gotcha entirely — the installer honours them.)
 - Every cargo call needs the exports above (shell state does not persist between tool calls).
 - **1 GB RAM is the binding constraint.** `ui-window`/wgpu tree: build/clippy with `-j 1` and
-  `CARGO_PROFILE_DEV_DEBUG=0` (proven again this session, 2 m 11 s clean). `ui --audit` +
+  `CARGO_PROFILE_DEV_DEBUG=0` (proven again 2026-09-27, 1 m 33 s clean). `ui --audit` +
   goldens: run release with `CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`
-  — SATURN builds with the repo profile. The MSVC×ui-window cell does not fit even single-job
-  (`windows` crate OOM).
+  **and `CARGO_PROFILE_RELEASE_DEBUG=0`** (observed this session: the repo profile's release
+  debuginfo=1 OOM-kills `read-fonts` at the default -j; with all three the release ui build is
+  minutes, not a corpse) — SATURN builds with the repo profile. TWO cells do not fit even
+  single-job, both the `windows`-crate rustc OOM class: MSVC×ui-window (standing) and
+  MSVC×bootstrap-audio (observed this session — cpal pulls `windows` for the MSVC target; the
+  documented bootstrap-audio cell is the NATIVE one, which passes).
 - Background processes do NOT survive between tool calls — run long builds synchronously.
 - Default workspace build has zero third-party deps → `cargo test --workspace` is cheap (~70 s).
 - Gates sequence (`just gates` equivalent, plain commands): `cargo fmt --all --check` → clippy
@@ -485,6 +594,17 @@ default** (that deletion is gated on this device run — do not do it early).
   sync_check.py restored to the six-root definition, and the inc-5 bundle carries BOTH files as
   declared drift repairs — **the device must copy its sealed versions to `logs\` BEFORE
   extracting** (the run sheet says so) and send them back for the diff of what the rebuild lost.
+- **#87 — FIXED (WO-014 inc 6): the inc-5 inspector-scroll smoke was overfitted to one module's
+  panel.** Its fixed two-finger drag distance (480 px) had been tuned so the mixer's LAST row was
+  revealed at the 20-param `max_scroll`; when mixer 0.2.0 grew to 24 params the drag fell short
+  and the gate failed on a healthy feature. No device exposure: the fragile cell only fails in
+  combination with mixer 0.2.0, and both halves ship in the same bundle (`sync-wo014-inc6.zip`) —
+  a device that applied wo013-inc5 alone runs the old smoke against the old mixer and passes.
+  Fixed the right way: the smoke now asserts the CONTRACT (the panel overflowed before the drag;
+  after it, some previously-hidden row is visible AND touchable where drawn) instead of a chosen
+  row index or a distance. Lesson for smoke authors: a gate that encodes one module's arithmetic
+  instead of the behaviour's shape will fail on the next additive version bump — which is exactly
+  when it should pass.
 - #69 — `build.bat` cmd-parser death: probe ships, culprit statement not yet named (stays open)
 - compat-matrix mirror in `port.rs` vs `docs/api/compat-matrix.toml` — **re-worded (contract
   v1):** the drift gate pins the two together; full deletion waits on restructuring the table's
@@ -504,13 +624,12 @@ default** (that deletion is gated on this device run — do not do it early).
   fold a node's outputs (per-port later), `play` still pumps the static WO-005 graph (HAL
   integration waits on WO-006's acceptance)
 - MSVC × `ui-window` clippy cell: never run anywhere (sandbox OOM, no CI cell)
-- Device-side baselines that MOVE with this increment: gates.log test count **713** (log_check
-  already moved — #83's discipline), stamp **`src 91f/1889639B`**, `sparq modules` count **17**
-  (was 14), `selftest --golden` prints **PASS (9 gates)** (unchanged), `ui --audit` **PASS (20
-  smokes)** (was 19 — smoke 20 is the live-wire-levels cell), exec has three patch names (`demo`,
-  `mod-demo`, `drum-demo` — the last transport-driven) and its evidence hashes need the pinned
-  `--seconds` (#85), and the NEW goldens are `75bc7f2f18cac9d5` (out/main master, and the scope
-  rig), `3f325d4f99ca2a01` (tap wave — which is also the sine golden, by cross-validation), and
-  `db4013f41d1fa678` (beat-locked lfo at 120 bpm). NOTE: `mod/lfo` and `util/delay` are now
-  **v0.2.0** (5 and 6 params) — additive; at their defaults they render byte-identical to v0.1.0,
-  which the unchanged batch-2/batch-4 goldens prove.
+- Device-side baselines that MOVE with the waiting increment (wo014-inc6; wo013-inc5's are on the
+  device): gates.log test count **742** (log_check already moved — #83's discipline), stamp
+  **`src 92f/1977302B`**, `sparq modules` count **17** (unchanged — the mixer row now
+  reads v0.2.0, 13 ports, 24 params), `selftest --golden` prints **PASS (9 gates)** (unchanged),
+  `ui --audit` **PASS (25 smokes)** (unchanged count; the scroll smoke is hardened, not new),
+  exec's three pinned evidence hashes are UNCHANGED (`demo` 2.8 s `53de3b1f3f40e3c9`, `mod-demo`
+  1 s `1621e1f65b1b64e1`, `drum-demo` 2 s `f2303f13aa0cf299` — the render path did not move, and
+  the drum-demo golden renders THROUGH the mixer), no new audio goldens, and test006's steps F–I
+  (wo013-inc5) are the standing window-session asks.

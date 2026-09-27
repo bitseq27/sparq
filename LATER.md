@@ -82,7 +82,32 @@ Everything here is a **no** for now. The rule: if an idea isn't in a work order,
 * egui default typeface → the chosen WO-002 faces once `chosen` is filled (sizes already token-correct).
 * `preview.html` / `tokens.css` HC rendering: the COLOR_HC_* constants exist and drive the in-app theme switch, but the static preview emitters still render only the base palette — add an HC swatch section when the preview page is next touched.
 
-## WO-013 increment 4+ (parked from the graph canvas, updated 2026-09-27 — increment 4 shipped live wire levels)
+## WO-013 increment 5+ (parked from the graph canvas, updated 2026-09-27 — increment 5 shipped the "Else column": rename, inspector scroll, per-cv levels, the LOD pass)
+
+**Shipped in increment 5 (2026-09-27)**: the four items increment 4 declared for its next pass.
+**Rename text entry** — `sparq-ui::canvas::entry` (`TextEntry`: end-caret, printables-only,
+32-char cap = the node header's budget; `RenameState`: the sheet geometry on the browser's
+clamping rule), the RENAME menu row, commit through `Op::Rename` (undoable since increment 1 —
+EMPTY commits `None` = the module default, an unchanged buffer is a stated no-op), and the
+shell's **unified modal key feed** (`read_keys` parses egui events ONCE; the rename sheet and
+the browser query both consume the batch — the shared surface the provisional feed waited for).
+**Inspector scrolling** — `compute_at` with a clamped offset, a fixed header the rows slide
+under, `row_at`/`row_visible` one rule both directions (a bottom sliver is touchable, a row
+under the header is not), a hairline thumb drawn only when the panel scrolls, and the gesture:
+the two-finger `Pan` — which now carries its `center`, like `Zoom` always has — scrolls the
+panel when the centre lands in it; a pinch over the panel is DECLINED so the canvas behind it
+never moves (which also keeps the recogniser's sequential-contact span wobble off the camera).
+Scroll is transient view state; it resets when the inspected node changes. **Per-cv wire
+levels** — `NodeLevels` grew per-port entries, `wire_level` prefers the source PORT's level and
+falls back to the node fold (audio semantics untouched, pinned), and `bridge::node_levels` reads
+each cv output's real published value (`node_cv_block`/`node_cv_audio`, magnitude rule) — the
+increment-4 declared limit, retired without touching the executor. **The LOD pass** — Dot wires
+are hairlines (the contract this file always stated), Simplified is truly text-free, and states
+ride the look-board's pattern language at every LOD: hatch = bypassed (the mockup's `hatch8`),
+dashed border = muted, double border = locked, header chip / accent ring = master; at Dot,
+hollow = bypassed, dimmed = muted, concentric ring = locked. The SUM word is suppressed at Dot
+(declared). Five new audit smokes (25 total); the canvas-render.wav baseline semantics were
+protected on purpose (the cv smoke reads the bridge directly, smoke 13 owns the menu path).
 
 **Shipped in increment 4 (2026-09-27)**: **live wire levels** — the "signature sparq image". Wires
 now animate from the executor's REAL meters: `sparq-ui::canvas::levels` (`NodeLevels` + `wire_level`,
@@ -99,10 +124,14 @@ sliders (per-node param state in the model, `Op::SetParam`, one drag = one undo 
 renders node state), and wire endpoint re-patch (grab handles the layout computes; the verdict
 runs on the post-removal graph; refusals restore byte-exact).
 
-* **Numeric entry for params**: sliders only in v0 — exact-value entry needs the text-entry
-  surface (shared with rename below); until then the log line reports every committed value.
-* **Inspector scrolling**: rows below the panel bottom are clipped and NOT touchable (honest, but
-  a 32-param module shows only its first ~10); a scroll gesture for the panel is parked here.
+* **Numeric entry for params**: sliders only in v0 — the text-entry surface now EXISTS
+  (`canvas::entry`, increment 5), so this is one parse step away: a numeric row opens the same
+  sheet, the buffer parses as a number, the model clamps/snaps as it always does. Until then the
+  log line reports every committed value.
+* ~~**Inspector scrolling**~~ **SHIPPED (increment 5)**: two-finger pan inside the panel, fixed
+  header, clamped offset, thumb, reset on selection change. Still parked HERE: a scroll gesture
+  over the BROWSER sheet (rows past one page still ride arrows + selection-scrolling), mouse-wheel
+  piping for desktop sessions, and keyboard paging for the inspector.
 * **`enum`/`text`/`blob` param editing**: shown greyed with the kind named; the manifest schema
   grows `options[]` first (v1), then the inspector grows an options row.
 * **Multi-select inspection**: exactly one selected node inspects; multi-select param editing
@@ -110,22 +139,34 @@ runs on the post-removal graph; refusals restore byte-exact).
 * **Browser scroll gestures + two-finger-tap search**: rows past one page are reachable by arrows
   (keyboard) and selection-scrolling only; a drag-to-scroll sheet and the `DoubleTap` command
   surface ride the same plumbing when it lands.
-* **Browser keyboard feed is provisional**: `feed_browser_keys` reads egui input events while the
-  sheet is modal (no widget, no focus policy); a real text-entry surface replaces it (rename too).
+* ~~**Browser keyboard feed is provisional**~~ **UNIFIED (increment 5)**: one `read_keys` parse
+  feeds both modal sheets (rename first, then the browser) — no widget, no focus policy, the
+  wrap-egui rule intact. What stays parked: caret MOVEMENT (the caret is the buffer end in v0),
+  selection/copy-paste, IME composition, and a focus policy for multiple simultaneous fields
+  (there is never more than one modal sheet).
 * **Render length + transport binding** (WO-009): `bridge::render_wav` renders a fixed, stated 5.0 s until transport exists; then RENDER WAV renders the arrangement (or the loop range), and the evidence line says which.
 * **Master handover to `out/main`** (WO-014): SET MASTER + the resolve rule are the bridge-era answer to "which node feeds the listener"; when `out/main` ships, an out node in the patch supersedes the rule and the MASTER badge moves to it.
 * **Live wire levels** ~~(the "signature sparq image")~~ **SHIPPED (increment 4)** for AUDIO
-  signal flow. What stays parked: **cv-wire levels** — a node's meter folds its AUDIO outputs, so a
-  cv wire out of a cv-only source (`mod/lfo`, `env/ad`, `ana/rms`) reads at rest. Lighting cv wires
-  from their own values needs per-port / per-cv meters (the rings can carry port ids) — declared
-  above, not faked here. And the **continuous play-time refresh**: inc 4 fills `CanvasState.levels`
-  from an offline preview render (after RENDER WAV); the per-frame `read_meters` fill rides the
-  live-HAL-through-`SharedEngine` increment (WO-013 inc 4 shipped the offline half and the whole
-  painter path, so that increment only swaps the level SOURCE).
-* **LOD visual iteration against `design-mode.svg`**: the three levels are computed from tokens and switch correctly, but the Simplified/Dot *renderings* are first-pass — the WO risk column ("LOD making the graph unreadable when zoomed out — iterate on the mockup first") is still open.
+  signal flow, and **cv-wire levels SHIPPED (increment 5)**: `NodeLevels` carries per-port
+  entries, `wire_level` prefers the source PORT's level, and the bridge reads each cv output's
+  real published value from the executor (`node_cv_block` / `node_cv_audio`, magnitude for a
+  bipolar swing, clamped). What stays parked: **per-port AUDIO levels** — an audio wire still
+  carries its source NODE's folded meter, so one wire out of a multi-output node (`util/mixer`)
+  shows the fold, not its own channel; per-port meters + the ring extension (port ids on
+  `MeterUpdate`) ride the live-HAL-through-`SharedEngine` increment, which would also light a
+  scope's per-channel display. And the **continuous play-time refresh**: the canvas `levels` field
+  still fills from an offline preview render (after RENDER WAV); the per-frame `read_meters` fill
+  rides that same increment (the painter path and the model are done — it only swaps the SOURCE).
+* **LOD visual iteration against `design-mode.svg`**: **the sandbox pass shipped (increment 5)** —
+  the renderings now match the declared contracts (Dot = hairline wires; Simplified = no text) and
+  the look-board's pattern-first state language at all three levels. What remains is the WO
+  acceptance box itself: the **side-by-side human review** on the stage screen (test006 step H
+  asks the operator to write what differs) — a mockup comparison is a judgement, not a gate, and
+  it stays device-track until a real eye has signed it.
 * **WM_POINTER contact area → real palm rejection while wiring**: the recogniser's palm path is proven with synthetic areas only (winit reports none); shared with WO-012 increment 2, and the wiring case ("palm resting on the screen while drawing a wire causes zero spurious input") is the acceptance criterion that needs it.
 * **Grid-dot draw cost**: at Full LOD the world-anchored dot grid emits ~1000 circles/frame (the headless frame-logic median is grid-dominated); cache to a tile/texture or cull to the major grid when the Phase 6 rasteriser lands. Correctness is fine; this is a device-fps concern.
-* **Rename / randomise context rows**: need text entry (rename) and the seed tree (randomise, ADR-007) — the `Op::Rename` value and the menu plumbing exist, the rows are deferred until their surfaces do.
+* ~~**Rename**~~ **SHIPPED (increment 5)**. **Randomise** stays parked on the seed tree
+  (ADR-007): the menu row lands the moment a node can own a derivable seed.
 * **Sub-graph / patch nesting** (Phase 1) and **mapping canvas** (Phase 5) remain out of scope per the WO.
 
 ## WO-014 increment 5+ (parked from the module set, updated 2026-09-27 — increments 3, 4 AND 5 shipped; the set is complete at SEVENTEEN)
@@ -215,12 +256,20 @@ audio thread allocates nothing while publishing).
   integration (WO-011/WO-013 territory), not clock math.
 * **Metric modulation UI + per-track time signatures + count-in/metronome/recording**: out of
   the WO's scope by name; `Clock::reanchored` is the primitive metric modulation will use.
-* **`util/mixer`'s cv merge side**: the module ships as the AUDIO 4×4 matrix; the compat-matrix's
-  cv-fan-in cell names `util/mixer` as the merge, so the executor's refusal now says exactly that
-  — the audio side shipped, the cv side did not. Adding cv-in/cv-out ports to the mixer (or a
-  dedicated `util/cv-mix`) is a small increment; until then cv fan-in stays refused in words.
-* **`util/mixer` is 4×4, not 8×8**: 16 cells + 4 trims = 20 of the 32 snapshot parameters. The
-  matrix grows when `MAX_PARAMS` does (its manifest header says so).
+* ~~**`util/mixer`'s cv merge side**~~ **SHIPPED as v0.2.0 (WO-014 increment 6, 2026-09-27):**
+  four block-rate unipolar cv inputs (`cv_reduce = "mean"`, declared per G3), per-input gains
+  (params 20..23, appended LAST so every v0.1.0 snapshot keeps its indices and bits), one summed
+  `cv-out` clamped to the declared range — the identity default makes an untouched cv side a
+  bit-exact wire from `cv-0`. The executor's fan-in refusal STAYS (no implicit summing, ever) and
+  now carries the working remedy in words: wire each source to its own `cv-N` and feed the
+  destination from `cv-out`. `tests/mixer_cv.rs` (9 gates) proves it. What stays parked: the
+  BIPOLAR cv side (waits for `util/range`, Phase 1 — a bipolar port today would refuse every
+  unipolar source in the shipped set), a 4×4 cv matrix (16 more cells = 36 > MAX_PARAMS), and the
+  canvas's one-tap INSERT offer for merges (`Adapter::Merge.first_phase` stays Phase 1 on
+  purpose: the merge is a three-wire re-patch, not the inline pair shape the insert mechanism
+  fits — recorded in `WO014-INC6-PLAN.md` §8).
+* **`util/mixer` is 4×4, not 8×8**: 16 cells + 4 trims + 4 cv gains = 24 of the 32 snapshot
+  parameters (v0.2.0). The matrix grows when `MAX_PARAMS` does (its manifest header says so).
 * **Per-module example patches**: WO-015's study is the example patch that matters, and a `.sparq`
   project file needs WO-011's format writer — parked until then rather than inventing a format.
 * ~~The rms→filter modulation demo~~ **SHIPPED with contract v1 (2026-09-26):**

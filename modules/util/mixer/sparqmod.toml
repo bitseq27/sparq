@@ -1,4 +1,4 @@
-# sparq module manifest — util/mixer (WO-014 increment 3).
+# sparq module manifest — util/mixer (WO-014 increment 3; cv merge side: increment 6, v0.2.0).
 # Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
 #
 # The 4×4 stereo matrix with per-cell gain — the explicit merge the connection rules require
@@ -6,17 +6,27 @@
 # stress per WO-014: "channel sets, multichannel readiness" — eight audio ports, the first
 # multi-port first-party module, riding contract v1's take_* output pattern.
 #
-# Why 4×4 and not 8×8: the parameter snapshot cap is 32 (MAX_PARAMS), and 16 cells + 4 output
-# trims = 20 of them. A wider matrix waits for the cap to move — declared, not discovered.
-# The cv fan-in refusal also names this module; its AUDIO side ships here, and the cv merge side
-# (cv inputs summing to a cv output) is declared open in LATER.md rather than faked.
+# v0.2.0 grows the CV MERGE SIDE the compat-matrix's fan-in cell always named: four block-rate
+# unipolar cv inputs, per-input gains, one summed cv output. The cv fan-in REFUSAL stays — no
+# implicit summing, ever — but its remedy now exists: wire each source to its own cv-N input and
+# feed the destination from cv-out. Additive by construction: the cv ports append after out-3 and
+# the four cv gains append LAST (params 20..23), so every audio port index and every existing
+# parameter snapshot keeps its meaning and the audio goldens keep their bits.
+#
+# Why 4×4 and not 8×8 (audio): the parameter snapshot cap is 32 (MAX_PARAMS), and 16 cells + 4
+# output trims + 4 cv gains = 24 of them. A wider matrix waits for the cap to move — declared,
+# not discovered. Why 4→1 and not 4×4 (cv): 16 more cells would be 36 > 32, and the merge the
+# fan-in rule needs is N→1. Why unipolar: every shipped modulation source and consumer is
+# unipolar; a bipolar side waits for util/range (Phase 1) rather than refusing the whole
+# ecosystem today. cv inputs declare cv_reduce = "mean" — the honest block summary of a merge,
+# declared in the manifest as G3 demands, never re-decided in code.
 
 [identity]
 id = "sparq/util/mixer"
-version = "0.1.0"
+version = "0.2.0"
 host_api = { min = 1, max = 1 }
 display_name = "Mixer"
-summary = "4x4 stereo matrix with per-cell gain - the explicit merge, never implicit summing"
+summary = "4x4 stereo matrix + 4-to-1 cv merge, per-cell gain - the explicit merge, never implicit summing"
 authors = ["sparq"]
 license = "MIT"
 
@@ -86,6 +96,58 @@ name = "Output 4"
 direction = "out"
 type = "audio"
 channel_set = "stereo"
+
+# The cv merge side (v0.2.0), appended after the audio ports so every audio port index — and
+# every canvas wire and kernel edge that names one — keeps its meaning. Block rate, unipolar
+# (the shipped modulation ecosystem's range; bipolar waits for util/range), and the reduce
+# policy an audio-rate source is summarised by is DECLARED here: mean.
+[[ports]]
+id = "cv-0"
+name = "Cv 1"
+direction = "in"
+type = "cv"
+rate = "block"
+range = "unipolar"
+cv_reduce = "mean"
+required = false
+
+[[ports]]
+id = "cv-1"
+name = "Cv 2"
+direction = "in"
+type = "cv"
+rate = "block"
+range = "unipolar"
+cv_reduce = "mean"
+required = false
+
+[[ports]]
+id = "cv-2"
+name = "Cv 3"
+direction = "in"
+type = "cv"
+rate = "block"
+range = "unipolar"
+cv_reduce = "mean"
+required = false
+
+[[ports]]
+id = "cv-3"
+name = "Cv 4"
+direction = "in"
+type = "cv"
+rate = "block"
+range = "unipolar"
+cv_reduce = "mean"
+required = false
+
+[[ports]]
+id = "cv-out"
+name = "Cv Merge"
+direction = "out"
+type = "cv"
+rate = "block"
+range = "unipolar"
 
 # The matrix, row-major: c<in><out>. Defaults are the IDENTITY wiring (each input passes to the
 # equally numbered output at unity, everything else silent), so an untouched mixer is four
@@ -269,6 +331,46 @@ unit = "ratio"
 min = 0.0
 max = 2.0
 default = 1.0
+
+# Appended LAST on purpose (the flt/svf 0.2.0 discipline): the parameter snapshot order is the
+# manifest order, so params 0-19 keep their indices and every checked-in golden keeps its bits.
+# Defaults are the cv IDENTITY: cv-0 passes at unity, the rest contribute nothing — an untouched
+# cv side is a bit-exact wire, exactly like the untouched audio matrix.
+[[params]]
+id = "cvm0"
+name = "Cv 1 Gain"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 1.0
+
+[[params]]
+id = "cvm1"
+name = "Cv 2 Gain"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "cvm2"
+name = "Cv 3 Gain"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
+
+[[params]]
+id = "cvm3"
+name = "Cv 4 Gain"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 0.0
 
 [state]
 schema_id = "sparq/util/mixer/state"

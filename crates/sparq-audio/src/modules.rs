@@ -1301,17 +1301,28 @@ pub fn create_env_ad() -> Box<dyn Module> {
 
 // --------------------------------------------------------------------------- util/mixer
 
-/// The 4×4 stereo matrix (WO-014 increment 3): the explicit merge the connection rules require —
-/// audio fan-in sums HERE, in a module the patch can see, never silently in the host. Eight
-/// audio ports make it the first multi-port first-party module, riding contract v1's `take_*`
-/// output pattern; per-cell gains plus per-output trims are 20 of the 32 snapshot parameters,
-/// which is why the matrix is 4×4 and not 8×8 (declared in the manifest header, not discovered
-/// by an author at 3 a.m.).
+/// The 4×4 stereo matrix (WO-014 increment 3) plus the 4→1 cv merge side (increment 6, v0.2.0):
+/// the explicit merge the connection rules require — fan-in sums HERE, in a module the patch can
+/// see, never silently in the host. Eight audio ports made it the first multi-port first-party
+/// module, riding contract v1's `take_*` output pattern; per-cell gains plus per-output trims
+/// plus the four cv gains are 24 of the 32 snapshot parameters, which is why the audio matrix is
+/// 4×4 and not 8×8 and the cv side is 4→1 and not 4×4 (declared in the manifest header, not
+/// discovered by an author at 3 a.m.).
 ///
-/// Defaults are the IDENTITY wiring — an untouched mixer is four parallel bit-exact
-/// pass-throughs, and the golden pins exactly that. Cell order in the snapshot is row-major:
-/// `param(n*4 + m)` is In n → Out m; `param(16 + m)` is Out m's trim. Sums accumulate in f64
-/// (plan §5.4's rule for every summing path) and are written once, as f32.
+/// Defaults are the IDENTITY wiring on BOTH sides — an untouched mixer is four parallel
+/// bit-exact audio pass-throughs AND a bit-exact cv wire from `cv-0`, and the goldens pin
+/// exactly that. Snapshot order is the manifest order: `param(n*4 + m)` is In n → Out m,
+/// `param(16 + m)` is Out m's trim, `param(20 + i)` is Cv i+1's merge gain (appended LAST, so
+/// every pre-0.2.0 snapshot keeps its indices and its bits). Sums accumulate in f64 (plan §5.4's
+/// rule for every summing path) and are written once, as f32.
+///
+/// The cv side's declared behaviour (v0.2.0): inputs clamp to the unipolar range they declare
+/// (the svf receiver precedent), the f64 sum clamps to 0..1 on publish (the module's own stated
+/// rule, like the lfo's "mapped into 0..1" — never a silent host transformation), and an
+/// audio-rate source arrives already reduced by the port's DECLARED `cv_reduce = "mean"` (G3:
+/// the receiving module owns the rate change's policy, the host does the work). `BlockStatus`
+/// stays the AUDIO contract: all audio inputs unconnected ⇒ zeros + `Silenced` even while the
+/// cv side merges and publishes — a cv-only mixer is a legitimate patch citizen.
 ///
 /// v0 state is empty and says so: the matrix IS the parameter snapshot, which the project
 /// already saves.
@@ -1375,6 +1386,29 @@ impl Module for Mixer {
         }
         for (t, slot) in trims.iter_mut().enumerate() {
             *slot = ctx.param(16 + t).clamp(0.0, 2.0);
+        }
+
+        // The cv merge side (v0.2.0): four block-rate unipolar inputs, per-input gains at
+        // params 20..23, summed in f64 and published on the one cv output, clamped to the
+        // declared range. Computed BEFORE the audio-side early return — BlockStatus is the
+        // audio contract, and a cv-only mixer still merges. An `Audio` slot on a port declared
+        // block-rate is a host bug, failed loudly (the env/ad precedent), never guessed at.
+        {
+            use sparq_module_api::module::CvIn;
+            let mut cv_acc = 0.0f64;
+            for i in 0..4 {
+                match ctx.cv_in(i) {
+                    Some(CvIn::Block(v)) => {
+                        let g = f64::from(ctx.param(20 + i).clamp(0.0, 2.0));
+                        cv_acc += g * f64::from(v.clamp(0.0, 1.0));
+                    },
+                    Some(CvIn::Audio(_)) => return BlockStatus::Failed,
+                    Some(CvIn::Unconnected) | None => {},
+                }
+            }
+            if let Some(mut cv) = ctx.take_cv_out(0) {
+                cv.set((cv_acc as f32).clamp(0.0, 1.0));
+            }
         }
 
         let connected = ins.iter().flatten().any(|i| !i.is_empty());

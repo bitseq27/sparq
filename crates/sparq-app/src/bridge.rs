@@ -216,14 +216,15 @@ pub const LEVEL_PREVIEW_BLOCKS: usize = 64;
 ///
 /// The level is the node's PEAK across its audio outputs in the last previewed block: peak is the
 /// honest "is signal flowing right now" reading for a wire glow (rms would under-read transients).
-/// A node with no audio output (an `ana/rms`, a `dsp/scope`) reads 0.0 — at rest — which is true:
-/// it publishes no audio to carry. DECLARED LIMIT: because a node's meter folds its AUDIO outputs,
-/// a `cv` wire out of a cv-only source (`mod/lfo`, `env/ad`, `ana/rms`) reads at rest — the level
-/// animation tracks AUDIO signal flow, not cv magnitudes. Per-port / per-cv meters (the rings can
-/// carry port ids) are the LATER.md item that would light cv wires from their own values; this
-/// increment animates what the meters actually measure, and says so rather than faking a cv level.
-/// When the live HAL stream routes through `SharedEngine`, the same canvas field is filled from
-/// `read_meters` instead of a preview render; the mapping is identical.
+/// A node's folded meter covers its AUDIO outputs, so a cv-only source (`ana/rms`, `mod/lfo`,
+/// `env/ad`) reads 0.0 there — which is true of its audio, and useless as a wire level. So the
+/// set carries a second kind of entry (WO-013 increment 5, retiring increment 4's declared limit):
+/// each cv OUTPUT port's own level, read from the value the executor already holds for that port
+/// (`node_cv_block` / `node_cv_audio`) as a magnitude, and `wire_level` prefers it for a wire out
+/// of that port. Still read, never invented. Parked and still not faked: per-port AUDIO levels
+/// (the rings can carry port ids) and the continuous play-time fill, both of which ride the
+/// live-HAL-through-`SharedEngine` increment; when that lands the same canvas field is filled
+/// from `read_meters` instead of a preview render, and the mapping is identical.
 ///
 /// # Errors
 /// Exactly what [`build_with_map`] or the render reports.
@@ -238,9 +239,31 @@ pub fn node_levels(
         ex.render_block(k_master, &mut out).map_err(|e| format!("level preview failed: {e}"))?;
     }
     let mut levels = sparq_ui::canvas::levels::NodeLevels::new();
-    for (canvas_id, kernel_id) in map {
-        if let Some(m) = ex.meter(kernel_id) {
-            levels.set(canvas_id, m.peak);
+    for (canvas_id, kernel_id) in &map {
+        if let Some(m) = ex.meter(*kernel_id) {
+            levels.set(*canvas_id, m.peak);
+        }
+    }
+    // Per-port cv levels (WO-013 increment 5). A node's folded meter covers its AUDIO outputs, so
+    // a cv-only source (`mod/lfo`, `env/ad`, `ana/rms`) read at rest and its cv wire never lit —
+    // increment 4's declared limit. The executor already holds what each cv output published this
+    // block (`node_cv_block` for a block-rate value, `node_cv_audio` for an audio-rate buffer), so
+    // the level is READ, not invented: the magnitude of the real signal on that port. Audio wires
+    // keep the folded node meter — per-port AUDIO levels ride the live-HAL increment.
+    for n in graph.nodes() {
+        let Some(&kernel_id) = map.get(&n.id) else { continue };
+        for (port, p) in n.spec.ports.iter().enumerate() {
+            if p.direction != sparq_module_api::port::Direction::Out
+                || p.port_type != sparq_module_api::port::PortType::Cv
+            {
+                continue;
+            }
+            let idx = u32::try_from(port).unwrap_or(u32::MAX);
+            let level = ex.node_cv_audio(kernel_id, idx).map_or_else(
+                || ex.node_cv_block(kernel_id, idx).map(f32::abs).unwrap_or(0.0),
+                |buf| buf.iter().fold(0.0f32, |a, &s| a.max(s.abs())),
+            );
+            levels.set_port(n.id, port, level);
         }
     }
     Ok(levels)
@@ -415,6 +438,83 @@ mod tests {
         assert!(before > 0.4, "unity gain is hot: {before}");
         assert!(after < 0.06, "gain 0.1 over a 0.5 sine peaks near 0.05: {after}");
         assert!(after < before, "the level FOLLOWS the signal down");
+    }
+
+    /// The increment-5 cv rig: sine → { svf.in, rms.in }, rms.level → svf.cutoff-mod — the
+    /// analysis-as-control-source patch the mockup calls the thesis wire, as a canvas graph.
+    /// Returns (graph, sine id, rms id, the cv wire's id, the audio wire's id).
+    fn cv_rig(reg: &Registry) -> (CanvasGraph, CanvasNodeId, CanvasNodeId, u32, u32) {
+        let spec =
+            |id: &str| -> NodeSpec { NodeSpec::from_manifest(reg.get(id).unwrap().manifest()) };
+        let mut g = CanvasGraph::new();
+        let sine = g.op_add_node(spec("sparq/syn/sine"), Vec2::ZERO);
+        let svf = g.op_add_node(spec("sparq/flt/svf"), Vec2::new(320.0, 0.0));
+        let rms = g.op_add_node(spec("sparq/ana/rms"), Vec2::new(320.0, 240.0));
+        let (sid, fid, rid) = (node_id(&sine), node_id(&svf), node_id(&rms));
+        let w_audio = g.op_add_wire(
+            sparq_ui::canvas::model::PortRef::new(sid, 0),
+            sparq_ui::canvas::model::PortRef::new(fid, 0),
+        );
+        let _w_tap = g.op_add_wire(
+            sparq_ui::canvas::model::PortRef::new(sid, 0),
+            sparq_ui::canvas::model::PortRef::new(rid, 0),
+        );
+        let w_cv = g.op_add_wire(
+            sparq_ui::canvas::model::PortRef::new(rid, 1),
+            sparq_ui::canvas::model::PortRef::new(fid, 2),
+        );
+        let wid = |op: &sparq_ui::canvas::model::Op| match op {
+            sparq_ui::canvas::model::Op::AddWire(w) => w.id,
+            _ => unreachable!(),
+        };
+        (g, sid, rid, wid(&w_cv), wid(&w_audio))
+    }
+
+    #[test]
+    fn a_cv_wire_lights_from_its_own_published_value() {
+        // Increment 4's declared limit, retired: the rms node carries NO audio, so its folded
+        // meter reads at rest — but its `level` cv port publishes a real value every block, and
+        // the wire out of that port must light from THAT, read from the executor, never faked.
+        let reg = registry();
+        let (g, sid, rid, w_cv, w_audio) = cv_rig(&reg);
+        let master = CanvasState::new().resolve_master(&g).expect("the svf is the master");
+        let levels = super::node_levels(&g, master, &reg).unwrap();
+
+        assert_eq!(levels.get(rid), 0.0, "the rms node folds no audio: its NODE level is at rest");
+        let cv = levels.port(rid, 1).expect("the cv port publishes its own level");
+        assert!(
+            (0.1..0.5).contains(&cv),
+            "the cv level is the metered magnitude of the 0.5 sine's rms: {cv}"
+        );
+        assert_eq!(
+            sparq_ui::canvas::levels::wire_level(&g, &levels, w_cv),
+            cv,
+            "the cv wire carries its SOURCE PORT's own level"
+        );
+        // The audio side keeps the increment-4 semantics exactly: the node's folded peak meter.
+        let sine_peak = levels.get(sid);
+        assert!((sine_peak - 0.5).abs() < 1e-2, "the sine's folded meter: {sine_peak}");
+        assert_eq!(sparq_ui::canvas::levels::wire_level(&g, &levels, w_audio), sine_peak);
+        assert_eq!(
+            levels.port(sid, 0),
+            None,
+            "AUDIO ports publish no per-port level yet — the parked half stays parked, pinned"
+        );
+    }
+
+    #[test]
+    fn the_cv_level_follows_the_signal_not_the_canvas() {
+        // The "not faked" proof for the cv half: turn the sine down and the cv wire's level falls
+        // with it. A value synthesised from canvas data could not track the rendered signal.
+        let reg = registry();
+        let (mut g, sid, rid, _, _) = cv_rig(&reg);
+        let master = CanvasState::new().resolve_master(&g).unwrap();
+        let before = super::node_levels(&g, master, &reg).unwrap().port(rid, 1).unwrap();
+        let amp = g.node(sid).unwrap().spec.params.iter().position(|p| p.id == "amp").unwrap();
+        g.op_set_param(sid, amp, 0.1).unwrap();
+        let after = super::node_levels(&g, master, &reg).unwrap().port(rid, 1).unwrap();
+        assert!(before > 0.1, "the full-amplitude rig is hot: {before}");
+        assert!(after < before * 0.5, "amp 0.5 → 0.1 takes the rms level down with it: {after}");
     }
 
     #[test]

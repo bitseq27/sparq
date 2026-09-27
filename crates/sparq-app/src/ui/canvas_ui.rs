@@ -50,6 +50,7 @@ pub fn draw(
     draw_marquee(p, pal, canvas);
     draw_menu(p, pal, canvas, view, audit);
     draw_browser(p, pal, canvas, view, audit);
+    draw_rename(p, pal, canvas, view, audit);
 }
 
 // --------------------------------------------------------------------- colour helpers
@@ -138,6 +139,34 @@ fn with_alpha(c: Color32, a: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (a.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
+/// Hatch a rect with 45° hairlines — the BYPASS state pattern (increment 5, the mockup's
+/// `hatch8`: 8 px horizontal pitch, hairline weight, low alpha over the body fill). A pattern,
+/// not a colour: it survives greyscale and it survives LOD, which words do not (look-board §4:
+/// "states use pattern first — colour is redundant").
+fn hatch_rect(p: &Painter, r: egui::Rect, col: Color32) {
+    let step = LAYOUT_SPACE_2 as f32 * std::f32::consts::SQRT_2; // 8 px horizontal pitch at 45°
+    let stroke = Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, col);
+    let mut c = r.min.x + r.min.y;
+    let end = r.max.x + r.max.y;
+    while c <= end {
+        // The segment of the diagonal x + y = c that lies inside the rect.
+        let lo = (c - r.max.y).max(r.min.x);
+        let hi = (c - r.min.y).min(r.max.x);
+        if hi >= lo {
+            p.line_segment([Pos2::new(lo, c - lo), Pos2::new(hi, c - hi)], stroke);
+        }
+        c += step;
+    }
+}
+
+/// Stroke a rect's outline as a dash run — the MUTE state pattern (increment 5). The dash
+/// lengths ride the 8 px space scale (on = `space.2`, off = `space.1`), the same budget the wire
+/// class encodings use, so no dash number here is invented either.
+fn dashed_rect(p: &Painter, r: egui::Rect, stroke: Stroke) {
+    let pts = vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+    draw_dashed(p, &pts, LAYOUT_SPACE_2 as f32, LAYOUT_SPACE_1 as f32, stroke);
+}
+
 // --------------------------------------------------------------------- grid
 
 fn draw_grid(p: &Painter, pal: &Palette, canvas: &CanvasState, view: Rect) {
@@ -208,7 +237,16 @@ fn draw_wires(
         } else {
             0.0
         };
-        let width = if selected { LAYOUT_STROKE_EMPHASIS as f32 } else { class_width(w.class) };
+        // Width: selection emphasises at any LOD; otherwise the Dot contract is literal —
+        // "a colour-coded dot per node, HAIRLINE wires" (camera.rs) — the class widths belong to
+        // the zoomed-in language, where the dash/double encodings are actually legible.
+        let width = if selected {
+            LAYOUT_STROKE_EMPHASIS as f32
+        } else if layout.lod == Lod::Dot {
+            LAYOUT_STROKE_HAIRLINE as f32
+        } else {
+            class_width(w.class)
+        };
         let colour = if selected {
             class_glow(w.class, pal)
         } else if level > 0.0 {
@@ -239,8 +277,11 @@ fn draw_wires(
             p.line(pts.clone(), stroke);
         }
 
-        if w.conversion {
-            // The one silent conversion (multi → mono) is flagged in WORDS, not colour alone.
+        if w.conversion && layout.lod != Lod::Dot {
+            // The one silent conversion (multi → mono) is flagged in WORDS, not colour alone —
+            // at every LOD where words are legible. At Dot the word is suppressed (unreadable at
+            // that scale by definition); the class encoding survives and the flag returns on
+            // zoom-in. Declared, not silently dropped.
             if let Some(mid) = midpoint(&pts) {
                 p.text(mid, Align2::CENTER_CENTER, "SUM", font_xs(), pal.warning);
             }
@@ -360,7 +401,7 @@ fn draw_nodes(
         let selected = canvas.selection.nodes.contains(&nl.id);
         let is_master = master_id == Some(nl.id);
         match layout.lod {
-            Lod::Dot => draw_node_dot(p, pal, node, nl, selected),
+            Lod::Dot => draw_node_dot(p, pal, node, nl, selected, is_master),
             Lod::Simplified => draw_node_box(p, pal, node, nl, selected, is_master, false, audit),
             Lod::Full => draw_node_box(p, pal, node, nl, selected, is_master, true, audit),
         }
@@ -380,15 +421,43 @@ fn dominant_class(node: &Node) -> SignalClass {
     pick(Direction::Out).or_else(|| pick(Direction::In)).unwrap_or(SignalClass::Neutral)
 }
 
-fn draw_node_dot(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout, selected: bool) {
+/// A node at Dot LOD, with its states as SHAPES (increment 5 — the Dot contract is "a
+/// colour-coded dot per node", and at 8 px words are not an option): bypassed = a HOLLOW ring
+/// (the signal goes around it), muted = a DIMMED fill, locked = a concentric hairline ring,
+/// master = a `selected`-colour hairline ring (selection's own ring is emphasis-WEIGHT at the
+/// same radius, so the two never rely on colour alone to tell them apart).
+fn draw_node_dot(
+    p: &Painter,
+    pal: &Palette,
+    node: &Node,
+    nl: &NodeLayout,
+    selected: bool,
+    master: bool,
+) {
     let c = pos(nl.screen.center());
     let r = LAYOUT_SPACE_2 as f32;
     let col = class_colour(dominant_class(node), pal);
-    p.circle_filled(
-        c,
-        r,
-        if node.flags.bypassed || node.flags.muted { col.gamma_multiply(0.4) } else { col },
-    );
+    let dimmed = node.flags.bypassed || node.flags.muted;
+    let fill_col = if dimmed { col.gamma_multiply(0.4) } else { col };
+    if node.flags.bypassed {
+        p.circle_stroke(c, r, Stroke::new(LAYOUT_STROKE_SIGNAL as f32, fill_col));
+    } else {
+        p.circle_filled(c, r, fill_col);
+    }
+    if node.flags.locked {
+        p.circle_stroke(
+            c,
+            r + LAYOUT_SPACE_1 as f32 * 0.5,
+            pal.hairline(pal.hairline_strong, LAYOUT_STROKE_HAIRLINE as f32),
+        );
+    }
+    if master {
+        p.circle_stroke(
+            c,
+            r + LAYOUT_SPACE_1 as f32,
+            Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, pal.selected),
+        );
+    }
     if selected {
         p.circle_stroke(
             c,
@@ -415,13 +484,37 @@ fn draw_node_box(
     let fill = if dimmed { pal.ground_panel.gamma_multiply(0.6) } else { pal.ground_panel };
     p.rect_filled(body, corner, fill);
 
-    // Border: selected wears the selection accent at emphasis width; else the regular hairline.
+    // State patterns (increment 5, look-board §4 "pattern first — colour is redundant"): the
+    // shapes survive the LOD reduction AND the monochrome test, which words and tints do not.
+    // BYPASSED hatches the body — the mockup's own encoding (`design-mode.svg`'s `hatch8`).
+    // The header band draws over the hatch, so the pattern reads as "the body is bypassed".
+    if node.flags.bypassed {
+        hatch_rect(p, body, pal.hairline_colour.gamma_multiply(0.35));
+    }
+
+    // Border: selected wears the selection accent at emphasis width; else the regular hairline —
+    // and a MUTED node's border is dashed (the state pattern; the selection accent outranks it,
+    // because "which node am I editing" beats "which node is silent" at the border's one job).
     let border = if selected {
         Stroke::new(LAYOUT_STROKE_EMPHASIS as f32, pal.selected)
     } else {
         pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32)
     };
-    p.rect_stroke(body, corner, border, StrokeKind::Middle);
+    if node.flags.muted && !selected {
+        dashed_rect(p, body, border);
+    } else {
+        p.rect_stroke(body, corner, border, StrokeKind::Middle);
+    }
+    // LOCKED: a second, inset border — the "double" pattern the stroke language already uses for
+    // a doubled signal, here meaning "this node is pinned in place".
+    if node.flags.locked {
+        p.rect_stroke(
+            body.shrink(LAYOUT_SPACE_1 as f32),
+            corner,
+            pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
+            StrokeKind::Middle,
+        );
+    }
 
     // Header band.
     let header = egui_rect(nl.header_screen);
@@ -439,24 +532,41 @@ fn draw_node_box(
             font_s(),
             if dimmed { pal.text_disabled } else { pal.text_primary },
         );
+    } else if master {
+        // MASTER at Simplified: the word is gone with every other text, but the role must still
+        // be readable — a filled chip in the badge's own accent sits where the word would be.
+        // The pattern set (hatch/dash/double) stays distinguishable from it: those are outlines
+        // on the body, this is a solid on the header.
+        let chip = LAYOUT_SPACE_2 as f32;
+        let c = header.right_center() - egui::vec2(LAYOUT_SPACE_2 as f32 + chip / 2.0, 0.0);
+        p.rect_filled(
+            egui::Rect::from_center_size(c, egui::vec2(chip, chip)),
+            LAYOUT_CORNER_MICRO as u8,
+            pal.selected,
+        );
     }
 
-    // Flag badges, in words (never colour alone).
-    let mut badge_x = header.right_center().x - LAYOUT_SPACE_2 as f32;
-    for (on, label, col) in [
-        (master, "MASTER", pal.selected),
-        (node.flags.locked, "LOCK", pal.text_tertiary),
-        (node.flags.muted, "MUTE", pal.text_disabled),
-        (node.flags.bypassed, "BYPASS", pal.warning),
-    ] {
-        if !on {
-            continue;
+    // Flag badges, in WORDS — at Full LOD only (increment 5: the Simplified contract is "node
+    // box, coloured ports, NO TEXT", and the patterns above are what carries the states down
+    // there). At Full the word rides ON TOP of the pattern: redundant encoding, never either
+    // alone — the mockup shows exactly this pairing for bypass (hatch + "bypassed").
+    if full {
+        let mut badge_x = header.right_center().x - LAYOUT_SPACE_2 as f32;
+        for (on, label, col) in [
+            (master, "MASTER", pal.selected),
+            (node.flags.locked, "LOCK", pal.text_tertiary),
+            (node.flags.muted, "MUTE", pal.text_disabled),
+            (node.flags.bypassed, "BYPASS", pal.warning),
+        ] {
+            if !on {
+                continue;
+            }
+            let g = font_xs();
+            let w = label.len() as f32 * LAYOUT_SPACE_2 as f32;
+            badge_x -= w;
+            p.text(Pos2::new(badge_x, header.center().y), Align2::LEFT_CENTER, label, g, col);
+            badge_x -= LAYOUT_SPACE_2 as f32;
         }
-        let g = font_xs();
-        let w = label.len() as f32 * LAYOUT_SPACE_2 as f32;
-        badge_x -= w;
-        p.text(Pos2::new(badge_x, header.center().y), Align2::LEFT_CENTER, label, g, col);
-        badge_x -= LAYOUT_SPACE_2 as f32;
     }
 
     // Ports.
@@ -645,6 +755,74 @@ fn draw_repatch(
             Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, pal.warning),
         );
     }
+}
+
+// --------------------------------------------------------------------- rename sheet
+
+/// The rename text-entry sheet (increment 5): header names the module, the inset well carries
+/// the buffer with its caret, the hint row states the keys and the empty-commits-default rule.
+/// Geometry is `RenameState`'s own — the same rects `CanvasState::rename_contains` hit-tests, so
+/// the sheet you see is the sheet that captures your taps.
+fn draw_rename(
+    p: &Painter,
+    pal: &Palette,
+    canvas: &CanvasState,
+    view: Rect,
+    audit: &mut Vec<InteractiveElement>,
+) {
+    let Some(r) = canvas.rename() else { return };
+    let (max_w, _) = browser::caps(view);
+    let origin = r.sheet_origin(view, max_w);
+    let sheet = Rect::from_min_size(origin, Vec2::new(r.width(max_w), r.height()));
+    let eg = egui_rect(sheet);
+    p.rect_filled(eg, LAYOUT_CORNER_PANEL as u8, pal.ground_overlay);
+    p.rect_stroke(
+        eg,
+        LAYOUT_CORNER_PANEL as u8,
+        pal.hairline(pal.hairline_strong, LAYOUT_STROKE_HAIRLINE as f32),
+        StrokeKind::Middle,
+    );
+
+    // Header: what is being renamed, in words.
+    let hr = r.row_rect(origin, 0, max_w);
+    p.text(
+        pos(hr.min) + egui::vec2(LAYOUT_SPACE_3 as f32, hr.height() / 2.0),
+        Align2::LEFT_CENTER,
+        r.header_text(),
+        font_xs(),
+        pal.text_tertiary,
+    );
+
+    // The entry well: inset ground (the token language for "a field"), the buffer with its caret.
+    let er = r.row_rect(origin, 1, max_w);
+    let well = Rect::new(
+        Vec2::new(er.min.x + LAYOUT_SPACE_3 as f32, er.min.y + LAYOUT_SPACE_1 as f32),
+        Vec2::new(er.max.x - LAYOUT_SPACE_3 as f32, er.max.y - LAYOUT_SPACE_1 as f32),
+    );
+    p.rect_filled(egui_rect(well), LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+    p.text(
+        pos(well.min) + egui::vec2(LAYOUT_SPACE_2 as f32, well.height() / 2.0),
+        Align2::LEFT_CENTER,
+        r.entry.caret_text(),
+        font_s(),
+        pal.text_primary,
+    );
+    audit.push(InteractiveElement {
+        id: "canvas/rename/entry".to_string(),
+        class: TouchClass::M,
+        rect: er,
+        dense_allowed: false,
+    });
+
+    // The hint row: the keys and the empty rule, stated — the sheet explains itself.
+    let kr = r.row_rect(origin, 2, max_w);
+    p.text(
+        pos(kr.min) + egui::vec2(LAYOUT_SPACE_3 as f32, kr.height() / 2.0),
+        Align2::LEFT_CENTER,
+        sparq_ui::canvas::entry::RENAME_HINT,
+        font_xs(),
+        pal.text_disabled,
+    );
 }
 
 // --------------------------------------------------------------------- module browser

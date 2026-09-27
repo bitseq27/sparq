@@ -135,6 +135,24 @@ pub struct ShellUi {
     canvas_layout: CanvasLayout,
 }
 
+/// One frame's keyboard input, normalised: the five facts the modal sheets consume. A value,
+/// parsed once per frame from the toolkit's raw events (`ShellUi::read_keys`) — the rename entry
+/// and the browser query ride the same batch, which is what makes the text-entry path shared
+/// rather than two provisional feeds.
+#[derive(Clone, Debug, Default)]
+struct KeyBatch {
+    /// Printable characters typed this frame.
+    text: String,
+    /// Backspace presses.
+    backs: usize,
+    /// Arrow navigation, signed (up = -1, down = +1 per press).
+    nav: i64,
+    /// Enter was pressed.
+    enter: bool,
+    /// Escape was pressed.
+    escape: bool,
+}
+
 /// Per-frame inputs the host (window or headless driver) supplies.
 pub struct FrameInput<'a> {
     /// Normalised pointer events since the last frame (winit adapter or synthetic).
@@ -260,14 +278,15 @@ impl ShellUi {
             }
         }
 
-        // 3b. the browser's provisional text path: while the sheet is modal, typed characters,
-        //     Backspace, Enter, Escape and the arrows go to it. This is an INPUT-EVENT feed, not
-        //     an egui widget — the wrap-egui rule holds (no widget owns input behind the
-        //     recogniser's back); a real text-entry surface (rename, search history) is its own
-        //     future increment. Headless drivers call `browser_set_query` directly.
-        if self.canvas.browser().is_some() {
-            self.feed_browser_keys(ui, canvas_rect);
-        }
+        // 3b. the modal sheets' keyboard path (increment 5 unified it): while a sheet is modal,
+        //     typed characters, Backspace, Enter, Escape and the arrows go to it — the rename
+        //     entry first (the deepest modal), then the browser. This is an INPUT-EVENT feed,
+        //     not an egui widget — the wrap-egui rule holds (no widget owns input behind the
+        //     recogniser's back). The parse happens ONCE (`read_keys`); both sheets consume the
+        //     same normalised batch, which is the shared text-entry surface the browser's
+        //     provisional feed was declared to be waiting for. Headless drivers call
+        //     `browser_set_query` / `rename_set_text` directly.
+        self.feed_modal_keys(ui, canvas_rect);
 
         // 4. Recompute the shell layout so this frame's toggles are reflected in what we draw and
         //    in `last_layout` (step 2's effective layout predates the intents, and exists only to
@@ -291,7 +310,10 @@ impl ShellUi {
                 let node = self.graph.node(id)?;
                 let hb = LAYOUT_SHELL_PANEL_HEADER_HEIGHT as f32;
                 let content = Rect::new(Vec2::new(panel.min.x, panel.min.y + hb), panel.max);
-                Some(sparq_ui::canvas::inspector::compute(node, content))
+                // The stored scroll rides along — and `compute_at` clamps it, so the layout that
+                // comes back is the truth `set_inspector` stores (one copy of the clamp).
+                let scroll = self.canvas.inspector_scroll(id);
+                Some(sparq_ui::canvas::inspector::compute_at(node, content, scroll))
             })
         } else {
             None
@@ -302,57 +324,90 @@ impl ShellUi {
         self.last_layout = Some(layout);
     }
 
-    /// The browser's keyboard feed (step 3b of `frame`): characters append to the query,
-    /// Backspace deletes, the arrows move the selection, Enter spawns it, Escape closes. Every
+    /// Feed the open modal sheet from this frame's keyboard events (step 3b of `frame`). The
+    /// rename entry is the deepest modal and takes the whole batch; the browser takes it when no
+    /// rename is open; with neither open the keys belong to the window, not to the shell. Every
     /// action logs through the same event path the gestures use — one voice for the shell.
-    fn feed_browser_keys(&mut self, ui: &egui::Ui, canvas_rect: Rect) {
-        let mut q = self.canvas.browser().map_or(String::new(), |b| b.query().to_string());
-        let mut query_changed = false;
-        let mut nav = 0i64;
-        let mut confirm = false;
-        let mut escape = false;
+    fn feed_modal_keys(&mut self, ui: &egui::Ui, canvas_rect: Rect) {
+        if self.canvas.rename().is_none() && self.canvas.browser().is_none() {
+            return;
+        }
+        let keys = Self::read_keys(ui);
+        let mut ev = Vec::new();
+        if self.canvas.rename().is_some() {
+            // The rename sheet: characters and Backspace edit the buffer (silently — the sheet
+            // SHOWS the buffer with its caret), Enter commits, Escape cancels. The arrows mean
+            // nothing to a single-line buffer and are declined without a log line.
+            if !keys.text.is_empty() {
+                self.canvas.rename_insert(&keys.text);
+            }
+            for _ in 0..keys.backs {
+                self.canvas.rename_backspace();
+            }
+            if keys.escape {
+                ev.extend(self.canvas.rename_cancel());
+            } else if keys.enter {
+                ev.extend(self.canvas.rename_commit(&mut self.graph));
+            }
+        } else if let Some(b) = self.canvas.browser() {
+            let mut q = b.query().to_string();
+            let mut query_changed = false;
+            if !keys.text.is_empty() {
+                q.push_str(&keys.text);
+                query_changed = true;
+            }
+            if keys.backs > 0 {
+                for _ in 0..keys.backs {
+                    q.pop();
+                }
+                query_changed = true;
+            }
+            if keys.escape {
+                ev.extend(self.canvas.browser_close());
+            } else {
+                if query_changed {
+                    ev.extend(self.canvas.browser_set_query(&q));
+                }
+                if keys.nav != 0 {
+                    self.canvas.browser_navigate(keys.nav, canvas_rect);
+                }
+                if keys.enter {
+                    ev.extend(self.canvas.browser_confirm(&mut self.graph));
+                }
+            }
+        }
+        for e in ev {
+            self.push_log(e.message());
+        }
+    }
+
+    /// The toolkit half of the shared text entry: egui raw events → the five facts both modal
+    /// sheets consume (printable text, backspaces, arrow navigation, Enter, Escape). Parsing
+    /// lives here, in the wrap-egui layer; the entry MODEL (`sparq_ui::canvas::entry`) and the
+    /// sheets never see a toolkit type.
+    fn read_keys(ui: &egui::Ui) -> KeyBatch {
+        let mut keys = KeyBatch::default();
         ui.input(|i| {
             for ev in &i.raw.events {
                 match ev {
                     egui::Event::Text(t) => {
-                        // Control characters arrive as Text on some backends; the query is printables only.
-                        if t.chars().all(|c| !c.is_control()) {
-                            q.push_str(t);
-                            query_changed = true;
-                        }
+                        // Control characters arrive as Text on some backends; printables only.
+                        let clean: String = t.chars().filter(|c| !c.is_control()).collect();
+                        keys.text.push_str(&clean);
                     },
                     egui::Event::Key { key, pressed: true, .. } => match key {
-                        egui::Key::Backspace => {
-                            q.pop();
-                            query_changed = true;
-                        },
-                        egui::Key::ArrowUp => nav -= 1,
-                        egui::Key::ArrowDown => nav += 1,
-                        egui::Key::Enter => confirm = true,
-                        egui::Key::Escape => escape = true,
+                        egui::Key::Backspace => keys.backs += 1,
+                        egui::Key::ArrowUp => keys.nav -= 1,
+                        egui::Key::ArrowDown => keys.nav += 1,
+                        egui::Key::Enter => keys.enter = true,
+                        egui::Key::Escape => keys.escape = true,
                         _ => {},
                     },
                     _ => {},
                 }
             }
         });
-        let mut ev = Vec::new();
-        if escape {
-            ev.extend(self.canvas.browser_close());
-        } else {
-            if query_changed {
-                ev.extend(self.canvas.browser_set_query(&q));
-            }
-            if nav != 0 {
-                self.canvas.browser_navigate(nav, canvas_rect);
-            }
-            if confirm {
-                ev.extend(self.canvas.browser_confirm(&mut self.graph));
-            }
-        }
-        for e in ev {
-            self.push_log(e.message());
-        }
+        keys
     }
 
     /// The audit over the elements registered in the last drawn frame.
@@ -478,7 +533,7 @@ impl ShellUi {
                     if cancelled { " (CANCELLED)" } else { "" }
                 ));
             },
-            GestureIntent::Pan { delta } => {
+            GestureIntent::Pan { delta, .. } => {
                 self.push_log(format!("t={now_ms}ms pan ({:.0}, {:.0})", delta.x, delta.y));
             },
             GestureIntent::Zoom { factor, .. } => {
@@ -964,13 +1019,11 @@ impl ShellUi {
                     pal.text_disabled,
                 );
             }
-            for row in &il.rows {
+            for row in il.visible_rows() {
                 let Some(desc) = node.spec.params.get(row.index) else { continue };
-                // Rows below the panel bottom are not drawn — and the core refuses to hit-test
-                // them, so the clip is honest in both directions.
-                if row.track.min.y >= insp.max.y {
-                    break;
-                }
+                // `visible_rows` is the layout's own clip (rows under the fixed header or below
+                // the panel bottom are skipped) — and `row_at` refuses exactly the same rows, so
+                // the clip is honest in both directions: what you cannot see you cannot touch.
                 let value = node.param_value(row.index).unwrap_or(desc.default as f32);
                 p.text(
                     egui::pos2(row.label.min.x, row.label.center().y),
@@ -1015,6 +1068,17 @@ impl ShellUi {
                     rect: Rect::new(row.label.min, row.value.max),
                     dense_allowed: false,
                 });
+            }
+            // The scrollbar thumb (increment 5): drawn only when the panel actually scrolls — a
+            // scrollbar that cannot move is chrome pretending to be a control. It is an
+            // indicator, not a v0 touch target (the two-finger pan is the gesture), so it is
+            // deliberately NOT registered in the audit.
+            if let Some(thumb) = il.thumb() {
+                p.rect_filled(
+                    egui_rect(thumb),
+                    LAYOUT_CORNER_NONE as u8,
+                    pal.hairline_colour.gamma_multiply(pal.hairline_regular),
+                );
             }
             return;
         }

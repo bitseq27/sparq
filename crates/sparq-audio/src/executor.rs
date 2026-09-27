@@ -48,7 +48,8 @@
 //!   invisible transformation ADR-005 exists to prevent). Range mismatches are refused through
 //!   `port.rs::connect_cv` at `Phase::Zero` — the matrix names `util/range`, which is Phase 1
 //!   and not in this build, so the refusal says that instead of offering a tap that does nothing.
-//!   `cv` fan-in is refused naming `util/mixer` (same reason); `cv` fan-out is free.
+//!   `cv` fan-in is refused naming `util/mixer` — whose cv merge side (v0.2.0) makes the refusal
+//!   a routing instruction rather than a dead end; `cv` fan-out is free.
 //! * **`event`**: fan-in is free and total-ordered — host-injected events first, then edges by
 //!   id, then insertion order within a source (matrix G5), merged by a linear k-way merge of
 //!   per-source sorted lists, so the receiving module's §9 guarantee ("pre-sorted by sample
@@ -867,9 +868,9 @@ impl Executor {
                             edge: e.id,
                             why: "cv fan-in requires an explicit merge — no implicit summing \
                                   (compat-matrix G-cell `fan-in`). The named module `util/mixer` \
-                                  ships as the AUDIO 4×4 matrix; its cv merge side is not built \
-                                  yet (declared in LATER.md), so until it is: remove one of the \
-                                  edges into this input"
+                                  IS the merge (v0.2.0): wire each source to its own `cv-0`…`cv-3` \
+                                  input and feed this input from the mixer's `cv-out` — or remove \
+                                  one of the edges"
                                 .to_string(),
                         });
                     }

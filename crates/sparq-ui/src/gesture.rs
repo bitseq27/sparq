@@ -92,6 +92,11 @@ pub enum GestureIntent {
     Pan {
         /// Centre-of-mass movement since the previous event, logical px.
         delta: Vec2,
+        /// Midpoint of the two pointers. A surface scrolls itself when the pan happens OVER it
+        /// (the inspector, WO-013 increment 5) and otherwise passes the camera through — same
+        /// reason [`Self::Zoom`] has carried its centre since WO-012: where the fingers are is
+        /// part of what the gesture means, and only the recogniser knows that.
+        center: Vec2,
     },
     /// Two-finger pinch/spread. `factor` is the *incremental* span ratio since the previous
     /// event; surfaces accumulate it into their zoom.
@@ -542,7 +547,7 @@ impl GestureRecognizer {
                     || (span - last_span).abs() >= self.cfg.two_pointer_dead_zone_px;
                 if moved_enough && !self.lockout {
                     if engaged || d_center.length() >= self.cfg.two_pointer_dead_zone_px {
-                        out.push(GestureIntent::Pan { delta: d_center });
+                        out.push(GestureIntent::Pan { delta: d_center, center });
                     }
                     // Pinch: only once the span itself is meaningful (token: 40 px minimum).
                     if span.max(last_span) >= self.cfg.pinch_min_span_px && last_span > 1e-3 {
@@ -963,6 +968,17 @@ mod tests {
             "two pointers moving together must pan: {:?}",
             intents(&out)
         );
+        // The pan carries WHERE it happens (increment 5): a surface scrolls itself when the
+        // gesture is over it, so the centre is part of the intent's meaning, not a diagnostic.
+        // It is the midpoint of the two live contacts, at the moment of the emission.
+        for i in &out {
+            if let GestureIntent::Pan { center, .. } = i {
+                assert!(
+                    center.x > 100.0 && center.x < 240.0 && center.y > 100.0 && center.y < 220.0,
+                    "the centre sits between the two contacts: {center:?}"
+                );
+            }
+        }
     }
 
     #[test]

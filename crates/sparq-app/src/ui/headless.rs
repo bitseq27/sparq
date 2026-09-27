@@ -221,6 +221,10 @@ pub fn run_audit(_opts: &UiOptions) -> i32 {
     println!("gesture smoke (synthetic pointers through the real recogniser + dispatch):");
     run_gesture_smoke(&mut failures);
 
+    // ------------------------------------------------------------ increment 5 smoke
+    println!("increment 5 smoke (rename entry, cv wire levels, inspector scroll, the LOD walk):");
+    run_inc5_smokes(&mut failures);
+
     println!(
         "ui audit: {} ({} failure(s))",
         if failures.is_empty() { "PASS" } else { "FAIL" },
@@ -785,6 +789,370 @@ fn run_gesture_smoke(failures: &mut Vec<String>) {
     check(
         "drag a wire end → it re-patches to the new port; one undo restores the original",
         repatch_ok,
+        failures,
+    );
+}
+
+// ------------------------------------------------------------------ increment 5 smokes
+
+/// Long-press `node_c`'s node and tap its RENAME row through the real recogniser. Returns
+/// whether the rename sheet opened. A function, not a closure: the frames it drives need
+/// `&mut shell`, which a closure capturing the same shell cannot be handed.
+fn open_rename_sheet(
+    shell: &mut ShellUi,
+    ctx: &egui::Context,
+    dims: (f32, f32),
+    t: &mut f64,
+    now: &mut u64,
+    node_c: sparq_ui::geom::Vec2,
+) -> bool {
+    macro_rules! fr {
+        ($pts:expr) => {{
+            *t += 1.0 / 60.0;
+            step(shell, ctx, dims.0, dims.1, *t, *now, &$pts);
+        }};
+    }
+    *now += 400;
+    fr!([finger(40, node_c.x, node_c.y, PointerPhase::Down, *now)]);
+    *now += 400;
+    fr!([]); // the long press fires → the node menu
+    *now += 16;
+    fr!([finger(40, node_c.x, node_c.y, PointerPhase::Up, *now)]); // swallowed by the context
+    let tap = shell.canvas.menu.clone().and_then(|m| {
+        let r = shell.last_layout.as_ref().map(|l| l.canvas)?;
+        let origin = shell.canvas.menu_origin(r)?;
+        let row = m
+            .rows
+            .iter()
+            .position(|x| matches!(x.action, sparq_ui::canvas::interact::MenuAction::Rename))?;
+        Some(m.row_rect(origin, row).center())
+    });
+    let Some(tap) = tap else { return false };
+    *now += 400;
+    fr!([finger(41, tap.x, tap.y, PointerPhase::Down, *now)]);
+    *now += 80;
+    fr!([finger(41, tap.x, tap.y, PointerPhase::Up, *now)]);
+    shell.canvas.rename().is_some()
+}
+
+/// WO-013 increment 5's proof cells: the rename text entry (commit + undo + cancel), the cv wire
+/// lit from its own port's published value after RENDER WAV, the inspector's two-finger scroll,
+/// and the LOD walk down to Dot where ports stop being targetable. Same discipline as the
+/// increment-3/4 smokes: real recogniser, real dispatch, assertions on STATE — log lines are
+/// read only where the words themselves are the contract.
+#[allow(clippy::too_many_lines)]
+fn run_inc5_smokes(failures: &mut Vec<String>) {
+    use sparq_ui::canvas::model::{Graph, NodeSpec, Op, PortRef};
+    use sparq_ui::geom::Vec2 as SpVec2;
+
+    let ctx = egui::Context::default();
+    adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
+    let (w, h) = (1920.0_f32, 1080.0_f32);
+    let mut shell = ShellUi::new();
+    let mut t = 0.0_f64;
+    let mut now = 0_u64;
+    macro_rules! frame {
+        ($pts:expr) => {{
+            t += 1.0 / 60.0;
+            step(&mut shell, &ctx, w, h, t, now, &$pts)
+        }};
+    }
+    frame!([]); // frame 1: registry + demo graph laid out
+
+    let Some(rect) = shell.last_layout.as_ref().map(|l| l.canvas) else {
+        failures.push("no canvas rect for the inc-5 smokes".to_string());
+        return;
+    };
+    let canvas_c = rect.center();
+    let Some((n0_id, n0_c)) =
+        shell.canvas_layout().nodes.first().map(|n| (n.id, n.screen.center()))
+    else {
+        failures.push("demo node 0 was not laid out".to_string());
+        return;
+    };
+
+    // 14. RENAME: long-press the node → RENAME → the sheet opens pre-filled → type (the
+    //     documented headless path) → ENTER (rename_commit) → the title changes → ONE
+    //     three-finger tap undoes the rename (graph AND name state, the acceptance criterion).
+    let opened = open_rename_sheet(&mut shell, &ctx, (w, h), &mut t, &mut now, n0_c);
+    let pre_filled = shell.canvas.rename().map(|r| r.entry.text() == "Sine").unwrap_or(false);
+    let mut committed = false;
+    if opened && pre_filled {
+        shell.canvas.rename_set_text("Kick");
+        let _ = frame!([]); // the painter draws the sheet — a frame with it open is proven
+        let ev = shell.canvas.rename_commit(&mut shell.graph);
+        let _ = frame!([]);
+        committed = shell.graph.node(n0_id).map(|n| n.title() == "Kick").unwrap_or(false)
+            && shell.canvas.rename().is_none()
+            && ev.iter().any(|e| e.message().contains("renamed to `Kick`"));
+    }
+    // undo: three-finger tap on empty canvas → the name returns
+    now += 400;
+    frame!([
+        finger(42, canvas_c.x - 40.0, canvas_c.y + 300.0, PointerPhase::Down, now),
+        finger(43, canvas_c.x, canvas_c.y + 300.0, PointerPhase::Down, now + 5),
+        finger(44, canvas_c.x + 40.0, canvas_c.y + 300.0, PointerPhase::Down, now + 10),
+    ]);
+    now += 60;
+    frame!([
+        finger(42, canvas_c.x - 40.0, canvas_c.y + 300.0, PointerPhase::Up, now),
+        finger(43, canvas_c.x, canvas_c.y + 300.0, PointerPhase::Up, now + 5),
+        finger(44, canvas_c.x + 40.0, canvas_c.y + 300.0, PointerPhase::Up, now + 10),
+    ]);
+    let undone = shell.graph.node(n0_id).map(|n| n.title() == "Sine").unwrap_or(false);
+    check(
+        "long-press → RENAME → type → ENTER commits the title; one three-finger undo restores it",
+        opened && pre_filled && committed && undone,
+        failures,
+    );
+
+    // 15. The cancel path: open again, type, tap OUTSIDE → the sheet closes, stated in words,
+    //     and the buffer is dropped (a cancel is not a commit — the name is untouched).
+    let opened2 = open_rename_sheet(&mut shell, &ctx, (w, h), &mut t, &mut now, n0_c);
+    let mut cancelled = false;
+    if opened2 {
+        shell.canvas.rename_set_text("Nope");
+        let _ = frame!([]);
+        now += 400;
+        let outside = SpVec2::new(canvas_c.x + 300.0, canvas_c.y + 300.0);
+        frame!([finger(45, outside.x, outside.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(45, outside.x, outside.y, PointerPhase::Up, now)]);
+        cancelled = shell.canvas.rename().is_none()
+            && shell.graph.node(n0_id).map(|n| n.title() == "Sine").unwrap_or(false)
+            && shell.log().iter().any(|l| l.contains("rename cancelled"));
+    }
+    check(
+        "an outside tap cancels the rename sheet — stated in words, the name untouched",
+        opened2 && cancelled,
+        failures,
+    );
+
+    // 16. cv wire levels (increment 4's declared limit, retired): wire the demo's rms.level into
+    //     a spawned svf's cutoff-mod, make the svf the master, RENDER WAV through the menu — the
+    //     cv wire must light from the value the rms port PUBLISHED (read from the executor after
+    //     a real render), while the rms node's folded audio meter stays at rest (it has no audio
+    //     output). Not faked: the folded zero and the hot port sit on the same node.
+    let mut cv_ok = false;
+    let svf_spec =
+        shell.modules.get("sparq/flt/svf").map(|reg| NodeSpec::from_manifest(reg.manifest()));
+    let rms_id =
+        shell.graph.nodes().iter().find(|n| n.spec.module_id == "sparq/ana/rms").map(|n| n.id);
+    let gain_id = rms_id
+        .and_then(|rid| shell.graph.wires().iter().find(|w| w.to.node == rid).map(|w| w.from.node));
+    match (svf_spec, rms_id, gain_id) {
+        (Some(spec), Some(rid), Some(gid)) => {
+            let op = shell.graph.op_add_node(spec, SpVec2::new(640.0, 0.0));
+            let svf_id = match &op {
+                Op::AddNode(n) => n.id,
+                _ => u32::MAX,
+            };
+            // gain.out → svf.in (audio); the demo ALREADY wires gain.out → rms.in, so the only
+            // new wire the rig needs is the cv one — a duplicate canvas wire would be refused by
+            // the kernel's single-input rule and the render would (correctly) not happen.
+            let _audio = shell.graph.op_add_wire(PortRef::new(gid, 1), PortRef::new(svf_id, 0));
+            let cv_op = shell.graph.op_add_wire(PortRef::new(rid, 1), PortRef::new(svf_id, 2));
+            let cv_wire = match &cv_op {
+                Op::AddWire(w) => w.id,
+                _ => u32::MAX,
+            };
+            shell.canvas.master = Some(svf_id); // the explicit master (SET MASTER's field)
+                                                // Read the levels through the bridge directly — the same call the shell makes after
+                                                // RENDER WAV (smoke 13 proves THAT path end to end). Deliberately NOT the menu flow:
+                                                // a second menu-driven render here would overwrite `canvas-render.wav` — the file
+                                                // test006's step [05] hashes as the manifest-defaults baseline — with this rig's
+                                                // render, and the device A/B would compare two different graphs instead of proving
+                                                // the slider reached the samples.
+            let master = shell.canvas.resolve_master(&shell.graph).unwrap_or(svf_id);
+            match crate::bridge::node_levels(&shell.graph, master, &shell.modules) {
+                Ok(lv) => {
+                    let port = lv.port(rid, 1).unwrap_or(0.0);
+                    let wire = sparq_ui::canvas::levels::wire_level(&shell.graph, &lv, cv_wire);
+                    cv_ok = port > 0.1
+                        && (wire - port).abs() < 1e-6
+                        && lv.get(rid) == 0.0
+                        && lv.max_level() > 0.4;
+                },
+                Err(e) => failures.push(format!("the cv rig refused to render: {e}")),
+            }
+        },
+        _ => failures.push("could not build the cv rig for the level smoke".to_string()),
+    }
+    check(
+        "the cv wire lights from its own port's published value (per-port levels, not faked)",
+        cv_ok,
+        failures,
+    );
+
+    // 17. The inspector's two-finger scroll, on a tablet-minimum shell with a 20-param mixer:
+    //     a hidden row becomes touchable and the camera stays put.
+    let ctx2 = egui::Context::default();
+    adapter::apply_style(&ctx2, ThemeChoice::PhosphorDark);
+    let (w2, h2) = (1280.0_f32, 800.0_f32);
+    let mut sh2 = ShellUi::new();
+    let mut t2 = 0.0_f64;
+    let mut now2 = 0_u64;
+    macro_rules! frame2 {
+        ($pts:expr) => {{
+            t2 += 1.0 / 60.0;
+            step(&mut sh2, &ctx2, w2, h2, t2, now2, &$pts)
+        }};
+    }
+    frame2!([]);
+    // One mixer, alone: the 20-param module the parked item named.
+    sh2.graph = Graph::new();
+    let mut scroll_ok = false;
+    if let Some(reg) = sh2.modules.get("sparq/util/mixer") {
+        let op =
+            sh2.graph.op_add_node(NodeSpec::from_manifest(reg.manifest()), SpVec2::new(80.0, 80.0));
+        let mid = match &op {
+            Op::AddNode(n) => n.id,
+            _ => u32::MAX,
+        };
+        let _ = frame2!([]);
+        // tap the node → the inspector computes for it
+        let nc = sh2.canvas_layout().nodes.iter().find(|n| n.id == mid).map(|n| n.screen.center());
+        if let Some(nc) = nc {
+            now2 += 400;
+            frame2!([finger(50, nc.x, nc.y, PointerPhase::Down, now2)]);
+            now2 += 80;
+            frame2!([finger(50, nc.x, nc.y, PointerPhase::Up, now2)]);
+            now2 += 100;
+            frame2!([]);
+            let il = sh2.canvas.inspector().cloned();
+            let panel = sh2.last_layout.as_ref().and_then(|l| l.inspector);
+            if let (Some(il), Some(panel)) = (il, panel) {
+                // The contract, not a chosen row: the panel overflowed before the drag, and
+                // AFTER it some row that was hidden is visible AND touchable where it is drawn.
+                // Deliberately not hard-coded to a row index or a scroll distance — mixer 0.2.0
+                // grew the param count mid-session and a fixed-distance smoke broke on it; the
+                // thing under test is the reveal, not the arithmetic of one module's panel.
+                let overflowed = il.rows.iter().any(|r| !il.row_visible(r));
+                let cam_before = sh2.canvas.camera.origin;
+                let (px, py) = (panel.center().x, panel.min.y + panel.height() * 0.6);
+                // Three successive two-finger drags UP, 160 px each — every centroid staying
+                // INSIDE the panel, because a pan whose centre leaves the panel belongs to the
+                // canvas (that is the routing rule; the smoke respects it). 480 px of scroll
+                // outruns what the last row needs; the clamp decides where the panel ends.
+                let mut fid = 51_u64;
+                for _ in 0..3 {
+                    now2 += 400;
+                    frame2!([
+                        finger(fid, px - 30.0, py, PointerPhase::Down, now2),
+                        finger(fid + 1, px + 30.0, py, PointerPhase::Down, now2 + 5),
+                    ]);
+                    for dy in [80.0_f32, 160.0] {
+                        now2 += 16;
+                        frame2!([
+                            finger(fid, px - 30.0, py - dy, PointerPhase::Moved, now2),
+                            finger(fid + 1, px + 30.0, py - dy, PointerPhase::Moved, now2 + 5),
+                        ]);
+                    }
+                    now2 += 16;
+                    frame2!([
+                        finger(fid, px - 30.0, py - 160.0, PointerPhase::Up, now2),
+                        finger(fid + 1, px + 30.0, py - 160.0, PointerPhase::Up, now2 + 5),
+                    ]);
+                    fid += 2;
+                }
+                now2 += 100;
+                frame2!([]);
+                if let Some(il2) = sh2.canvas.inspector() {
+                    let revealed = il2.rows.iter().any(|r| {
+                        let was_hidden = il
+                            .rows
+                            .iter()
+                            .find(|o| o.index == r.index)
+                            .is_some_and(|o| !il.row_visible(o));
+                        was_hidden
+                            && il2.row_visible(r)
+                            && il2.row_at(r.track.center()) == Some(r.index)
+                    });
+                    scroll_ok = il2.max_scroll > 0.0
+                        && overflowed
+                        && il2.scroll > il.scroll + 50.0
+                        && revealed
+                        && sh2.canvas.camera.origin == cam_before;
+                }
+            }
+        }
+    }
+    check(
+        "inspector: a two-finger drag scrolls the rows — a hidden row becomes touchable, the camera stays put",
+        scroll_ok,
+        failures,
+    );
+
+    // 18. The LOD walk on the MAIN shell (it has the wired rig): pinch in twice → Simplified,
+    //     then Dot (the zoom clamp floor). At Dot a port-to-port drag wires NOTHING — ports are
+    //     not targetable where they are not drawn at scale (what you cannot see you cannot touch).
+    let wires_before = shell.graph.wire_count();
+    // stage 1: span 240 → 120 (factor 0.5): zoom 1.0 → 0.5 → Simplified
+    now += 400;
+    frame!([
+        finger(60, canvas_c.x - 120.0, canvas_c.y + 200.0, PointerPhase::Down, now),
+        finger(61, canvas_c.x + 120.0, canvas_c.y + 200.0, PointerPhase::Down, now + 5),
+    ]);
+    now += 16;
+    frame!([
+        finger(60, canvas_c.x - 60.0, canvas_c.y + 200.0, PointerPhase::Moved, now),
+        finger(61, canvas_c.x + 60.0, canvas_c.y + 200.0, PointerPhase::Moved, now + 5),
+    ]);
+    now += 16;
+    frame!([
+        finger(60, canvas_c.x - 60.0, canvas_c.y + 200.0, PointerPhase::Up, now),
+        finger(61, canvas_c.x + 60.0, canvas_c.y + 200.0, PointerPhase::Up, now + 5),
+    ]);
+    now += 100;
+    frame!([]);
+    let simplified = shell.log().iter().any(|l| l.contains("LOD Simplified"));
+    // stage 2: span 120 → 60 (factor 0.5): zoom 0.5 → 0.25 → Dot
+    now += 400;
+    frame!([
+        finger(62, canvas_c.x - 60.0, canvas_c.y + 200.0, PointerPhase::Down, now),
+        finger(63, canvas_c.x + 60.0, canvas_c.y + 200.0, PointerPhase::Down, now + 5),
+    ]);
+    now += 16;
+    frame!([
+        finger(62, canvas_c.x - 30.0, canvas_c.y + 200.0, PointerPhase::Moved, now),
+        finger(63, canvas_c.x + 30.0, canvas_c.y + 200.0, PointerPhase::Moved, now + 5),
+    ]);
+    now += 16;
+    frame!([
+        finger(62, canvas_c.x - 30.0, canvas_c.y + 200.0, PointerPhase::Up, now),
+        finger(63, canvas_c.x + 30.0, canvas_c.y + 200.0, PointerPhase::Up, now + 5),
+    ]);
+    now += 100;
+    frame!([]);
+    let dot = shell.log().iter().any(|l| l.contains("LOD Dot"));
+    // At Dot, a port-to-port drag adds no wire (it moves a node instead — the honest fallback).
+    let from = shell.canvas_layout().nodes.iter().find_map(|n| {
+        n.ports.iter().find(|p| p.dir == sparq_module_api::port::Direction::Out).map(|p| p.screen)
+    });
+    let to = shell.canvas_layout().nodes.iter().skip(3).find_map(|n| {
+        n.ports.iter().find(|p| p.dir == sparq_module_api::port::Direction::In).map(|p| p.screen)
+    });
+    let mut no_wire = false;
+    if let (Some(from), Some(to)) = (from, to) {
+        now += 400;
+        frame!([finger(64, from.x, from.y, PointerPhase::Down, now)]);
+        now += 16;
+        frame!([finger(
+            64,
+            (from.x + to.x) / 2.0,
+            (from.y + to.y) / 2.0,
+            PointerPhase::Moved,
+            now
+        )]);
+        now += 16;
+        frame!([finger(64, to.x, to.y, PointerPhase::Moved, now)]);
+        now += 16;
+        frame!([finger(64, to.x, to.y, PointerPhase::Up, now)]);
+        no_wire = shell.graph.wire_count() == wires_before;
+    }
+    check(
+        "the LOD walk logs Simplified then Dot, and at Dot a port drag wires nothing (ports are not targetable)",
+        simplified && dot && no_wire,
         failures,
     );
 }

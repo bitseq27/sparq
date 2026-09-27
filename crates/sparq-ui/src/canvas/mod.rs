@@ -14,7 +14,10 @@
 //!   functions so the compatibility matrix keeps its single copy (the discipline WO-007 shipped).
 //! * [`browser`] — the module browser: fuzzy ranking over a shell-supplied catalogue and the
 //!   sheet geometry, so the row you see is the row you touch.
-//! * [`inspector`] — the parameter panel: computed row/slider geometry for the selected node.
+//! * [`inspector`] — the parameter panel: computed row/slider geometry for the selected node,
+//!   under a clamped scroll offset (a fixed header, rows that slide under it).
+//! * [`entry`] — text entry: the single-line buffer and sheet geometry the rename modal runs on,
+//!   the surface the browser's provisional keyboard feed was declared to be waiting for.
 //! * [`interact`] — [`interact::CanvasState`], the intent→operation table: gestures in, ops and
 //!   *explained* refusals out.
 //!
@@ -26,6 +29,7 @@
 pub mod browser;
 pub mod camera;
 pub mod connect;
+pub mod entry;
 pub mod inspector;
 pub mod interact;
 pub mod layout;
@@ -41,6 +45,7 @@ pub const OUT_MAIN_ID: &str = "sparq/out/main";
 pub use browser::{fuzzy_score, rank, BrowserHit, BrowserItem, BrowserState};
 pub use camera::{Camera, Lod};
 pub use connect::{ConnectContext, ConnectOutcome, Rejection};
+pub use entry::{RenameState, TextEntry, ENTRY_MAX_CHARS, RENAME_HINT};
 pub use inspector::{InspectorLayout, ParamRow};
 pub use interact::{CanvasEvent, CanvasState, Interaction, MenuRow, MenuTarget};
 pub use layout::{CanvasLayout, Hit, NodeLayout, PortLayout, WireEndSide, WireLayout};

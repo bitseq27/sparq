@@ -148,6 +148,10 @@ pub enum MenuAction {
     RenderWav,
     /// Open the module browser at the long-press position (increment 3).
     OpenBrowser,
+    /// Open the rename text-entry sheet for this node (increment 5). The sheet commits an
+    /// [`Op::Rename`] — the value and its inverse have been in the model since increment 1;
+    /// this is the surface that was parked until a text entry existed.
+    Rename,
 }
 
 /// One row of the context menu.
@@ -256,6 +260,8 @@ pub enum CanvasEvent {
     /// The browser's query changed; carries the match count (the shell's log shows the ranking
     /// is alive while the user types).
     BrowserQuery(usize),
+    /// The rename text-entry sheet opened (`true`) or closed (`false`) — increment 5.
+    Rename(bool),
 }
 
 impl CanvasEvent {
@@ -278,6 +284,10 @@ impl CanvasEvent {
             Self::Browser(true) => "canvas: module browser open".to_string(),
             Self::Browser(false) => "canvas: module browser closed".to_string(),
             Self::BrowserQuery(n) => format!("canvas: browser query — {n} match(es)"),
+            Self::Rename(true) => {
+                "canvas: rename entry open — type, ENTER commits, ESC cancels".to_string()
+            },
+            Self::Rename(false) => "canvas: rename entry closed".to_string(),
         }
     }
 }
@@ -301,6 +311,17 @@ pub struct CanvasState {
     pub master: Option<crate::canvas::model::NodeId>,
     /// The open module browser, if any (increment 3). Modal over the canvas like the menu.
     pub browser: Option<BrowserState>,
+    /// The open rename text-entry sheet, if any (increment 5). The DEEPEST modal: it is opened
+    /// FROM the menu, so while it is open it captures taps (an outside tap cancels) and the
+    /// shell's key feed (type → buffer, Enter → commit, Escape → cancel). Like the browser, its
+    /// keyboard path is an input-event feed, not a toolkit widget — the wrap-egui rule holds.
+    pub rename: Option<crate::canvas::entry::RenameState>,
+    /// The inspector's requested scroll offset, px (increment 5). TRANSIENT view state like
+    /// `levels` — not undoable, because where a panel is scrolled is not an edit to the patch.
+    /// The layout clamps it every frame; it resets when the inspected node changes.
+    insp_scroll: f32,
+    /// Which node `insp_scroll` belongs to — a selection change starts the new panel at the top.
+    insp_node: Option<NodeId>,
     /// The module catalogue the browser ranks: what the registry actually has, supplied by the
     /// shell at startup — the canvas never invents modules (defect #58, structurally).
     catalog: Vec<BrowserItem>,
@@ -337,8 +358,11 @@ impl CanvasState {
             history: UndoStack::new(),
             master: None,
             browser: None,
+            rename: None,
             catalog: Vec::new(),
             inspector: None,
+            insp_scroll: 0.0,
+            insp_node: None,
             levels: crate::canvas::levels::NodeLevels::new(),
         }
     }
@@ -409,10 +433,163 @@ impl CanvasState {
         }
     }
 
+    // ------------------------------------------------------------ rename entry (increment 5)
+
+    /// The open rename sheet, for the painter.
+    #[must_use]
+    pub fn rename(&self) -> Option<&crate::canvas::entry::RenameState> {
+        self.rename.as_ref()
+    }
+
+    /// Open the rename sheet for `node`, anchored where the menu was. Refuses a missing node in
+    /// words — the same rule every menu action obeys.
+    pub fn rename_open(&mut self, graph: &Graph, id: NodeId, anchor: Vec2) -> Vec<CanvasEvent> {
+        let Some(node) = graph.node(id) else {
+            return vec![CanvasEvent::Refused("no such node".to_string())];
+        };
+        self.rename = Some(crate::canvas::entry::RenameState::open(
+            id,
+            node.spec.module_id.as_str(),
+            node.title(),
+            anchor,
+        ));
+        vec![CanvasEvent::Rename(true)]
+    }
+
+    /// Typed text into the open sheet (the shell pipes printables here). Silent: the sheet shows
+    /// the buffer with its caret, so the feedback is the thing being edited, not a log line.
+    pub fn rename_insert(&mut self, text: &str) {
+        if let Some(r) = &mut self.rename {
+            r.entry.insert(text);
+        }
+    }
+
+    /// One backspace into the open sheet.
+    pub fn rename_backspace(&mut self) {
+        if let Some(r) = &mut self.rename {
+            r.entry.backspace();
+        }
+    }
+
+    /// Replace the sheet's buffer — the documented headless path, mirroring
+    /// [`Self::browser_set_query`].
+    pub fn rename_set_text(&mut self, text: &str) {
+        if let Some(r) = &mut self.rename {
+            r.entry.set_text(text);
+        }
+    }
+
+    /// Commit the sheet (the shell's Enter): an EMPTY buffer clears the rename — the node falls
+    /// back to its module's display name, which is the hint row's stated rule — otherwise the
+    /// typed name is set. The op is undoable like every edit; an unchanged commit says so in
+    /// words and leaves the history alone (an undo step that undoes nothing is a lie).
+    pub fn rename_commit(&mut self, graph: &mut Graph) -> Vec<CanvasEvent> {
+        let Some(r) = self.rename.take() else { return Vec::new() };
+        // The buffer is what it opened with: nothing was typed, nothing is recorded. This catches
+        // the case `op_rename`'s equality cannot — committing the MODULE DEFAULT verbatim on a
+        // node with no custom name would otherwise pin a rename that changes no visible name.
+        if r.entry.is_unchanged() {
+            return vec![
+                CanvasEvent::Rename(false),
+                CanvasEvent::Note("the name is unchanged".to_string()),
+            ];
+        }
+        let text = r.entry.committed();
+        let to = if text.is_empty() { None } else { Some(text) };
+        let msg = match &to {
+            Some(t) => format!("renamed to `{t}`"),
+            None => "name cleared — the module default is back".to_string(),
+        };
+        match graph.op_rename(r.node, to) {
+            Some(op) => {
+                self.history.push(op);
+                vec![CanvasEvent::Rename(false), CanvasEvent::Applied(msg)]
+            },
+            None => {
+                vec![CanvasEvent::Rename(false), CanvasEvent::Note("the name is unchanged".into())]
+            },
+        }
+    }
+
+    /// Cancel the sheet (Escape, an outside tap, or a louder gesture opening over it): the
+    /// buffer is dropped and the name untouched — stated, never silent.
+    pub fn rename_cancel(&mut self) -> Vec<CanvasEvent> {
+        if self.rename.take().is_some() {
+            vec![
+                CanvasEvent::Rename(false),
+                CanvasEvent::Note("rename cancelled — the name is unchanged".to_string()),
+            ]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Whether a screen point lands inside the open rename sheet — the modal's capture test, on
+    /// the sheet's own geometry (one clamping rule, shared with the menu and the browser).
+    #[must_use]
+    pub fn rename_contains(&self, pos: Vec2, view: Rect) -> bool {
+        let Some(r) = &self.rename else { return false };
+        let (max_w, _) = crate::canvas::browser::caps(view);
+        r.contains(pos, view, max_w)
+    }
+
     /// Store this frame's inspector geometry (the shell computes it from the selection and the
-    /// shell layout's inspector rect).
+    /// shell layout's inspector rect). The layout carries the CLAMPED offset, so storing it back
+    /// here is what keeps the request and the geometry from drifting apart.
     pub fn set_inspector(&mut self, il: Option<InspectorLayout>) {
+        match &il {
+            Some(l) => {
+                self.insp_node = Some(l.node);
+                self.insp_scroll = l.scroll;
+            },
+            None => {
+                self.insp_node = None;
+                self.insp_scroll = 0.0;
+            },
+        }
         self.inspector = il;
+    }
+
+    /// The scroll offset to lay `node`'s panel out at: the stored one when it is the same node
+    /// still being inspected, else zero — selecting a different node starts at its first row.
+    #[must_use]
+    pub fn inspector_scroll(&self, node: NodeId) -> f32 {
+        if self.insp_node == Some(node) {
+            self.insp_scroll
+        } else {
+            0.0
+        }
+    }
+
+    /// Scroll the inspector by `delta_y` screen px (content follows the fingers: a downward pan
+    /// reveals earlier rows). The offset is clamped by the panel geometry every call.
+    ///
+    /// Logging follows the camera-pan precedent — continuous direct manipulation is its own
+    /// feedback (the rows move, the thumb tracks), so the panel speaks only at the DISCRETE
+    /// moments: when the scroll hits an end and further panning does nothing. An input that did
+    /// nothing stays explainable; an input that is visibly working does not narrate itself.
+    /// A panel with `max_scroll == 0` shows every row and no thumb — visibly nothing to scroll.
+    pub fn scroll_inspector(&mut self, delta_y: f32) -> Vec<CanvasEvent> {
+        let Some((max_scroll, n)) =
+            self.inspector.as_ref().map(|il| (il.max_scroll, il.rows.len()))
+        else {
+            return Vec::new();
+        };
+        if max_scroll <= 0.0 || n == 0 {
+            return Vec::new();
+        }
+        let before = self.insp_scroll;
+        let after = (before - delta_y).clamp(0.0, max_scroll);
+        self.insp_scroll = after;
+        let hit_top = after <= f32::EPSILON && before > f32::EPSILON;
+        let hit_end = after >= max_scroll - f32::EPSILON && before < max_scroll - f32::EPSILON;
+        if hit_top {
+            vec![CanvasEvent::Note("inspector: scrolled to the first row".to_string())]
+        } else if hit_end {
+            vec![CanvasEvent::Note(format!("inspector: scrolled to the last row ({n} rows)"))]
+        } else {
+            Vec::new()
+        }
     }
 
     /// The inspector geometry, for the painter.
@@ -514,13 +691,19 @@ impl CanvasState {
         ctx: &ConnectContext<'_>,
     ) -> Vec<CanvasEvent> {
         match intent {
-            GestureIntent::Pan { delta } => {
-                self.camera.pan_by_screen(delta);
-                self.lod_events()
-            },
+            GestureIntent::Pan { delta, center } => self.pan(delta, center),
             GestureIntent::Zoom { factor, center } => {
-                self.camera.zoom_about(factor, center, view);
-                self.lod_events()
+                if self.over_inspector(center) {
+                    // The panel owns the gesture: it has no zoom of its own, and the canvas
+                    // BEHIND it must not move because fingers pinched over the panel. (This is
+                    // also what keeps the sequential-contact span wobble of a two-finger drag —
+                    // the recogniser processes contacts one event at a time, so a straight
+                    // vertical drag momentarily reads as a pinch — off the camera.)
+                    Vec::new()
+                } else {
+                    self.camera.zoom_about(factor, center, view);
+                    self.lod_events()
+                }
             },
             GestureIntent::Undo => self.undo(graph),
             GestureIntent::DoubleTap { .. } => self.zoom_to_fit(graph, view),
@@ -543,6 +726,27 @@ impl CanvasState {
             | GestureIntent::AllSoundOff
             | GestureIntent::RecoveryMenu => Vec::new(),
         }
+    }
+
+    /// The two-finger pan, routed by WHERE it happens (increment 5): over the inspector panel it
+    /// scrolls the panel — one finger on a row is a slider edit, so the panel's scroll rides the
+    /// two-finger gesture — and anywhere else it pans the camera, exactly as before. The
+    /// recogniser's `center` is what tells the two apart, the same reason `Zoom` has carried its
+    /// centre since WO-012.
+    fn pan(&mut self, delta: Vec2, center: Vec2) -> Vec<CanvasEvent> {
+        if self.over_inspector(center) {
+            return self.scroll_inspector(delta.y);
+        }
+        self.camera.pan_by_screen(delta);
+        self.lod_events()
+    }
+
+    /// Whether a two-finger gesture's centre lands on the inspector panel — the routing rule
+    /// that gives the panel its scroll (increment 5): a gesture OVER a surface belongs to that
+    /// surface, so the pan scrolls the rows and the pinch/rotate components are declined there
+    /// rather than moving the canvas underneath the user's fingers.
+    fn over_inspector(&self, center: Vec2) -> bool {
+        self.inspector.as_ref().is_some_and(|il| il.rect.contains(center))
     }
 
     fn lod_events(&mut self) -> Vec<CanvasEvent> {
@@ -584,6 +788,18 @@ impl CanvasState {
         layout: &CanvasLayout,
         view: Rect,
     ) -> Vec<CanvasEvent> {
+        // The open rename sheet is the DEEPEST modal (it is opened FROM the menu): a tap inside
+        // it is answered in words — the keyboard owns the buffer — and a tap outside cancels,
+        // stated, never silent.
+        if self.rename.is_some() {
+            if self.rename_contains(pos, view) {
+                return vec![CanvasEvent::Note(
+                    "the rename field takes the keyboard — type, then ENTER".to_string(),
+                )];
+            }
+            return self.rename_cancel();
+        }
+
         // An open browser captures the whole canvas, like the menu: a row spawns, the header
         // points at the text entry, anything else closes it.
         if self.browser.is_some() {
@@ -800,8 +1016,9 @@ impl CanvasState {
 
     fn open_menu(&mut self, graph: &Graph, pos: Vec2, layout: &CanvasLayout) -> Vec<CanvasEvent> {
         // A long-press over an open browser closes it and opens the menu where you pressed —
-        // the menu is the deeper modal (it can re-open the browser).
-        let mut ev = Vec::new();
+        // the menu is the deeper modal (it can re-open the browser). An open rename sheet
+        // cancels the same way: the long-press is a louder question than the one being typed.
+        let mut ev = self.rename_cancel();
         if self.browser.is_some() {
             self.browser = None;
             ev.push(CanvasEvent::Browser(false));
@@ -829,6 +1046,7 @@ impl CanvasState {
             MenuTarget::Node(id) => {
                 let flags = graph.node(id).map(|n| n.flags).unwrap_or_default();
                 vec![
+                    MenuRow::row(MenuAction::Rename, "RENAME", true),
                     MenuRow::row(MenuAction::Duplicate, "DUPLICATE", true),
                     MenuRow::row(MenuAction::SetMaster, "SET MASTER", true),
                     MenuRow::row(
@@ -888,6 +1106,7 @@ impl CanvasState {
         view: Rect,
     ) -> Vec<CanvasEvent> {
         match (target, action) {
+            (MenuTarget::Node(id), MenuAction::Rename) => self.rename_open(graph, id, anchor),
             (MenuTarget::Node(id), MenuAction::Duplicate) => self.duplicate(graph, id),
             (MenuTarget::Node(id), MenuAction::SetMaster) => {
                 self.master = Some(id);
@@ -1010,8 +1229,8 @@ impl CanvasState {
         pos: Vec2,
         layout: &CanvasLayout,
     ) -> Vec<CanvasEvent> {
-        // An open menu or browser is dismissed by a drag that starts outside it.
-        let mut ev = Vec::new();
+        // An open menu, browser or rename sheet is dismissed by a drag that starts outside it.
+        let mut ev = self.rename_cancel();
         if self.browser.is_some() {
             self.browser = None;
             ev.push(CanvasEvent::Browser(false));
@@ -1669,11 +1888,19 @@ mod tests {
         let body = layout.nodes.iter().find(|n| n.id == aid).unwrap().screen.center();
         s.on_intent(&mut g, GestureIntent::Context { pos: body }, &layout, v, &ctx());
         assert!(s.menu.is_some(), "menu opened");
-        // tap the DUPLICATE row (row 0)
+        // tap the DUPLICATE row — found by ACTION, not by position (increment 5 put RENAME
+        // above it; a test that hard-codes a row index is a test that breaks on a menu edit)
         let origin = s.menu_origin(v).unwrap();
-        let row0 = s.menu.as_ref().unwrap().row_rect(origin, 0);
-        // recompute layout is not needed; menu hit uses origin+row_rect
-        s.on_intent(&mut g, GestureIntent::Activate { pos: row0.center() }, &layout, v, &ctx());
+        let dup = s
+            .menu
+            .as_ref()
+            .unwrap()
+            .rows
+            .iter()
+            .position(|r| r.action == MenuAction::Duplicate)
+            .unwrap();
+        let row = s.menu.as_ref().unwrap().row_rect(origin, dup);
+        s.on_intent(&mut g, GestureIntent::Activate { pos: row.center() }, &layout, v, &ctx());
         assert_eq!(g.node_count(), before + 1, "a copy was added");
         assert!(s.menu.is_none(), "menu closed after the action");
     }
@@ -2379,5 +2606,256 @@ mod tests {
             "{ev:?}"
         );
         assert!(!s.history.can_undo(), "a refusal is not an operation");
+    }
+
+    // ------------------------------------------------- rename entry + inspector scroll (inc 5)
+
+    /// Open the rename sheet the way the menu does: Context on the node, tap the RENAME row.
+    fn open_rename_via_menu(g: &mut Graph, s: &mut CanvasState, id: NodeId) {
+        let v = view();
+        let layout = compute(g, &s.camera, v);
+        let body = layout.nodes.iter().find(|n| n.id == id).unwrap().screen.center();
+        s.on_intent(g, GestureIntent::Context { pos: body }, &layout, v, &ctx());
+        let origin = s.menu_origin(v).unwrap();
+        let row = s
+            .menu
+            .as_ref()
+            .unwrap()
+            .rows
+            .iter()
+            .position(|r| r.action == MenuAction::Rename)
+            .expect("the node menu offers RENAME");
+        let tap = s.menu.as_ref().unwrap().row_rect(origin, row).center();
+        s.on_intent(g, GestureIntent::Activate { pos: tap }, &layout, v, &ctx());
+    }
+
+    #[test]
+    fn the_node_menu_offers_rename_and_the_sheet_opens_pre_filled() {
+        let (mut g, aid, _) = two_nodes();
+        let mut s = CanvasState::new();
+        open_rename_via_menu(&mut g, &mut s, aid);
+        assert!(s.menu.is_none(), "the menu closed — the sheet is the deeper modal");
+        let r = s.rename().expect("the rename sheet is open");
+        assert_eq!(r.node, aid);
+        assert_eq!(r.entry.text(), "Sine", "pre-filled with the current title");
+        assert_eq!(r.header_text(), "RENAME sparq/syn/sine");
+    }
+
+    #[test]
+    fn rename_commit_sets_the_title_and_one_undo_restores_it() {
+        let (mut g, aid, _) = two_nodes();
+        let mut s = CanvasState::new();
+        open_rename_via_menu(&mut g, &mut s, aid);
+        s.rename_insert(" Kick");
+        let ev = s.rename_commit(&mut g);
+        assert_eq!(g.node(aid).unwrap().title(), "Sine Kick");
+        assert!(
+            ev.iter().any(|e| e.message().contains("renamed to `Sine Kick`")),
+            "the commit is stated in words: {ev:?}"
+        );
+        assert!(s.rename().is_none(), "the sheet closed");
+        let layout = compute(&g, &s.camera, view());
+        s.on_intent(&mut g, GestureIntent::Undo, &layout, view(), &ctx());
+        assert_eq!(g.node(aid).unwrap().title(), "Sine", "one undo restores the old name");
+    }
+
+    #[test]
+    fn an_empty_commit_clears_the_rename_and_an_unchanged_one_is_a_stated_no_op() {
+        let (mut g, aid, _) = two_nodes();
+        let mut s = CanvasState::new();
+        // Set a custom name first.
+        open_rename_via_menu(&mut g, &mut s, aid);
+        s.rename_set_text("Sub");
+        s.rename_commit(&mut g);
+        assert_eq!(g.node(aid).unwrap().title(), "Sub");
+        // An empty buffer commits None: the module default is back, and it is undoable.
+        s.rename_open(&g, aid, Vec2::new(100.0, 100.0));
+        s.rename_set_text("   ");
+        let ev = s.rename_commit(&mut g);
+        assert_eq!(g.node(aid).unwrap().title(), "Sine", "whitespace commits as clear");
+        assert!(
+            ev.iter().any(|e| e.message().contains("module default")),
+            "the clear is stated in words: {ev:?}"
+        );
+        // Committing the SAME name is a note, not a history entry (an undo step that undoes
+        // nothing is a lie).
+        let history_before = s.history.can_undo();
+        s.rename_open(&g, aid, Vec2::new(100.0, 100.0));
+        let ev = s.rename_commit(&mut g);
+        assert!(ev.iter().any(|e| e.message().contains("unchanged")), "{ev:?}");
+        assert_eq!(s.history.can_undo(), history_before, "no history entry for a no-op");
+    }
+
+    #[test]
+    fn the_sheet_captures_inside_taps_and_an_outside_tap_cancels_in_words() {
+        let (mut g, aid, _) = two_nodes();
+        let mut s = CanvasState::new();
+        open_rename_via_menu(&mut g, &mut s, aid);
+        s.rename_insert("X");
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        // A tap INSIDE the sheet: answered in words (the keyboard owns the buffer), stays open.
+        let (max_w, _) = crate::canvas::browser::caps(v);
+        let origin = s.rename().unwrap().sheet_origin(v, max_w);
+        let inside = Vec2::new(origin.x + 10.0, origin.y + 10.0);
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: inside }, &layout, v, &ctx());
+        assert!(s.rename().is_some(), "an inside tap does not dismiss the sheet");
+        assert!(ev.iter().any(|e| e.message().contains("keyboard")), "{ev:?}");
+        // A tap OUTSIDE cancels — stated, name untouched.
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::Activate { pos: Vec2::new(v.max.x - 5.0, v.max.y - 5.0) },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(s.rename().is_none());
+        assert_eq!(g.node(aid).unwrap().title(), "Sine", "the buffer was dropped, not committed");
+        assert!(ev.iter().any(|e| e.message().contains("cancelled")), "{ev:?}");
+        // A louder gesture cancels too: a drag that starts anywhere.
+        open_rename_via_menu(&mut g, &mut s, aid);
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragStart { pos: Vec2::new(700.0, 600.0) },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(s.rename().is_none(), "a drag dismisses the sheet like the menu and browser");
+    }
+
+    fn many_param_node(g: &mut Graph) -> NodeId {
+        let params: Vec<ParamDesc> = (0..20)
+            .map(|i| ParamDesc {
+                id: format!("p{i}"),
+                name: format!("p{i}"),
+                kind: ParamKind::Float,
+                unit: None,
+                min: 0.0,
+                max: 1.0,
+                default: 0.5,
+            })
+            .collect();
+        let spec = NodeSpec::new("sparq/util/mixer", "Mixer", vec![]).with_params(params);
+        let op = g.op_add_node(spec, Vec2::new(0.0, 300.0));
+        nid(&op)
+    }
+
+    /// A panel short enough that 20 rows hang below it (the mixer shape the park note named).
+    fn short_panel() -> Rect {
+        Rect::from_min_size(Vec2::new(900.0, 100.0), Vec2::new(280.0, 400.0))
+    }
+
+    #[test]
+    fn a_pan_over_the_inspector_scrolls_the_panel_and_over_the_canvas_pans_the_camera() {
+        let mut g = Graph::new();
+        let id = many_param_node(&mut g);
+        let mut s = CanvasState::new();
+        let panel = short_panel();
+        let node = g.node(id).unwrap().clone();
+        let il = inspector::compute_at(&node, panel, s.inspector_scroll(id));
+        assert!(il.max_scroll > 0.0, "the test panel must overflow");
+        s.set_inspector(Some(il));
+
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let cam_before = s.camera.origin;
+        let in_panel = Vec2::new(panel.min.x + 40.0, panel.min.y + 150.0);
+        // Content follows the fingers: a 100 px upward pan reveals rows 100 px further down.
+        s.on_intent(
+            &mut g,
+            GestureIntent::Pan { delta: Vec2::new(0.0, -100.0), center: in_panel },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(s.camera.origin, cam_before, "the camera did NOT move — the panel owns the pan");
+        assert!((s.inspector_scroll(id) - 100.0).abs() < 1e-3, "the panel scrolled");
+        // The same gesture over the canvas pans the camera and leaves the offset alone.
+        let scroll_before = s.inspector_scroll(id);
+        s.on_intent(
+            &mut g,
+            GestureIntent::Pan { delta: Vec2::new(30.0, 0.0), center: Vec2::new(200.0, 200.0) },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(s.camera.origin.x < cam_before.x, "the camera panned");
+        assert_eq!(s.inspector_scroll(id), scroll_before, "the panel did not move");
+    }
+
+    #[test]
+    fn the_scroll_clamps_and_speaks_only_at_the_ends() {
+        let mut g = Graph::new();
+        let id = many_param_node(&mut g);
+        let mut s = CanvasState::new();
+        let panel = short_panel();
+        let node = g.node(id).unwrap().clone();
+        let il = inspector::compute_at(&node, panel, 0.0);
+        let max = il.max_scroll;
+        s.set_inspector(Some(il));
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let in_panel = Vec2::new(panel.min.x + 40.0, panel.min.y + 150.0);
+        let pan = |s: &mut CanvasState, g: &mut Graph, dy: f32| {
+            s.on_intent(
+                g,
+                GestureIntent::Pan { delta: Vec2::new(0.0, dy), center: in_panel },
+                &layout,
+                v,
+                &ctx(),
+            )
+        };
+        // Mid-scroll: silent (the moving rows are the feedback — the camera-pan precedent).
+        assert!(pan(&mut s, &mut g, -50.0).is_empty());
+        // Past the end: clamped, and the boundary IS stated (further panning does nothing).
+        let ev = pan(&mut s, &mut g, -(max + 200.0));
+        assert_eq!(s.inspector_scroll(id), max, "clamped at the end");
+        assert!(ev.iter().any(|e| e.message().contains("last row")), "{ev:?}");
+        assert!(pan(&mut s, &mut g, -50.0).is_empty(), "already at the end: no repeat narration");
+        // Back past the top: clamped at zero and stated.
+        let ev = pan(&mut s, &mut g, max + 200.0);
+        assert_eq!(s.inspector_scroll(id), 0.0);
+        assert!(ev.iter().any(|e| e.message().contains("first row")), "{ev:?}");
+    }
+
+    #[test]
+    fn a_panel_that_fits_has_nothing_to_scroll_and_a_new_selection_starts_at_the_top() {
+        let mut g = Graph::new();
+        let op = g.op_add_node(gain(), Vec2::ZERO); // two params: fits any real panel
+        let small_id = nid(&op);
+        let mut s = CanvasState::new();
+        let node = g.node(small_id).unwrap().clone();
+        let il = inspector::compute(&node, view());
+        assert_eq!(il.max_scroll, 0.0);
+        s.set_inspector(Some(il));
+        // A pan over a fitting panel: captured (no camera surprise behind the panel), silent —
+        // the panel visibly shows every row and no thumb, which is its own explanation.
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let cam = s.camera.origin;
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::Pan { delta: Vec2::new(0.0, -40.0), center: Vec2::new(100.0, 100.0) },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(ev.is_empty());
+        assert_eq!(s.camera.origin, cam, "the panel captured the gesture even with nothing to do");
+
+        // Scroll a LONG panel, then inspect a DIFFERENT node: the stored offset must not follow
+        // the selection — the shell asks `inspector_scroll(new_node)` and gets zero.
+        let mut g2 = Graph::new();
+        let big = many_param_node(&mut g2);
+        let big_node = g2.node(big).unwrap().clone();
+        let il = inspector::compute_at(&big_node, short_panel(), 0.0);
+        s.set_inspector(Some(il));
+        s.scroll_inspector(-120.0);
+        assert!((s.inspector_scroll(big) - 120.0).abs() < 1e-3, "the scroll sticks for its node");
+        assert_eq!(s.inspector_scroll(big + 77), 0.0, "a different node starts at the top");
+        // Closing the panel drops the offset entirely.
+        s.set_inspector(None);
+        assert_eq!(s.inspector_scroll(big), 0.0);
     }
 }
