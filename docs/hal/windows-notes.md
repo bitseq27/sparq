@@ -58,7 +58,11 @@ friendly-name registry fallback (#75), drift-without-GetPosition (#76).
   the message.
 * **Exclusive alignment.** `AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED` triggers the documented two-step:
   `GetBufferSize` on the failed client → recompute the period → **fresh** `Activate` → re-
-  `Initialize`. The first client cannot be reused (documented WASAPI behaviour).
+  `Initialize`. The first client cannot be reused (documented WASAPI behaviour). Since #89 the
+  recompute **rounds the ask UP** to the reported granularity instead of adopting it: the
+  granularity is the driver's smallest unit, not a period its engine can sustain (§4d). And a
+  driver that ACCEPTS an ask yet allocates seriously less (< ¾) through `GetBufferSize` gets the
+  same treatment once — the allocation is its granularity, told silently.
 * **Failure semantics.** `AUDCLNT_E_DEVICE_INVALIDATED` anywhere → `StreamState::Removed`, pump
   exits, `stop()` still joins cleanly, `start()` refuses with guidance. Wait timeouts (4×period,
   ≥250 ms) count as late wakes and keep the loop alive; `WAIT_FAILED` fails the stream. Every
@@ -167,6 +171,58 @@ Template: one row per (machine, interface, backend, config) actually run.
 * **Also re-confirmed on the real endpoints:** friendly-name `E_ACCESSDENIED` (0x80070005, vt 0)
   fires with no remote session (#75's signature), endpoints fall back to `<endpoint N>` labels,
   registry names read fine — the fallback path is doing its job until increment 2's STA retry.
+
+## 4d. test004 attempt 2 — the exclusive stream OPENED and then stalled (2026-09-28, increment 1.3 build)
+
+* **The period ladder worked — and the period it landed on is the defect.** Attempt 2 opened
+  exclusive for the first time ever: `i24-in-32 (converting) · device period 288 fr (3.00 ms) ·
+  sparq block 64 fr` at 96 kHz on the UMC 204HD (`{d8db3e5b…}`). #77's format side and #79's
+  asking side both did their job. But the open line's period — **3 ms, not the 10 ms the checklist
+  expected** — is where the run died: 10 s tone, **159 late wakes, 7732 blocks (≈ 49.1k fr/s
+  delivered against a 96 kHz negotiation — half throughput), jitter min 600 ns / avg 5.84 ms /
+  max 33.24 ms, drift −491 656 ppm, operator heard no clean tone, rc 1**.
+* **The arithmetic, in the style of #76.** The jitter triple splits the run exactly: 1718 wakes in
+  ~10.07 s, avg 5.84 ms, max 33.24 ms ⇒ ~1559 wakes at ~3.0 ms (the device DID run at 96 kHz
+  between stalls — 1559 × 3 ms ≈ 4.68 s) plus ~159 wakes at ~33.2 ms (≈ 5.30 s — the other half of
+  the wall time). 159 stalls ÷ 10 s ≈ **one ~33 ms stall every ~62.5 ms**; blocks 7732 × 64 =
+  494 848 fr ≈ 96 000 × (1559 × 3 ms) — every number agrees: the stream ran at full rate roughly
+  half the time and starved the other half. The xrun line confirms it (159 late wakes, **0**
+  budget overruns, **0** FIFO-starvation writes: the pump kept every promise it could see; the
+  device simply stopped asking for data on its own 3 ms cadence). The short exclusive conformance
+  run in [08] shows the same signature (jitter max 33.01 ms, 2 late wakes in 123 blocks).
+* **The control experiment ran in the same session:** the shared 10 ms engine on the same endpoint
+  — same machine, same RDP session, same day — soaked **2 h, 719 895 wakes, 0 xruns, max jitter
+  12.04 ms**. So this is not a machine-wide DPC storm and not the pump: it is the 3 ms exclusive
+  period the driver *accepted* and cannot *sustain*.
+* **Defect #89 — a third lying-`min` face.** #79's driver refused an under-minimum ask at
+  `Initialize` (honest refusal, recoverable). The documented lying-min pattern refuses its OWN
+  minimum (recoverable the same way). The UMC 204HD does worse: it **accepts** a period — whether
+  read from `GetDevicePeriod`'s minimum or from the alignment two-step's `GetBufferSize`
+  granularity (288 fr = 3 ms; the attempt-1 log copy is truncated, so which door produced the
+  3 ms ask cannot be pinned from the evidence, and the fix therefore closes all of them) — and
+  then misbehaves at RUNTIME, where no open-path check can see it. **An accepted `Initialize` is
+  not a promise the period will run.** The number a driver's engine actually runs at is its
+  DEFAULT period; that is now rung 1 whenever the reported minimum sits above the sparq block
+  (the class this device belongs to), with the min-clamped ask demoted to fallback. Sub-block
+  engines keep the honest low-latency ask first — a lying driver THERE refuses at `Initialize`,
+  which the ladder survives (#79's own shape, unchanged).
+* **Increment 1.4 closes the three doors:** (1) the ladder reorder above (`hal/period.rs`,
+  pinned by `the_defect_89_device_asks_its_default_before_its_min`); (2) the alignment two-step
+  now rounds the ask UP to the reported granularity (10 ms ask, 288 fr granularity → 1152 fr =
+  12.000 ms) instead of adopting the granularity — inc 1.3's literal reading of the recipe is
+  exactly how a 10 ms ask could have become the 3 ms open; (3) a post-open truth check: an
+  allocation seriously smaller (< ¾) than the accepted ask is treated as an undeclared
+  granularity, re-asked once rounded up, and if that fails the mismatch is printed on the open
+  line (`device period 288 fr (3.00 ms, ask 960 fr)`) rather than dressed as a clean negotiation.
+  Expected attempt-3 open line: `device period 960 fr (10.00 ms)` — or `1152 fr (12.00 ms)` if
+  the driver enforces its 288 fr alignment. Both are the driver's own engine class; the 2 h
+  shared soak says the machine sustains it.
+* **What stayed green in attempt 2** (recorded so the next run reads against it): caps checkpoint
+  ✓ (`exclusive 96000` listed), shared unplug → `Removed` + dev-err 1 + clean stop ✓, re-plug
+  recovery ✓ (tone heard), 2 h shared soak ✓ (10 798 477 blocks, 0 xruns, 0 allocs, p99 ≤ 4.1 µs),
+  post-soak conformance all three backends ✓ (9 + 8 + 7 checks, reopen-leak 0). The friendly-name
+  `E_ACCESSDENIED` (#75) and the `SUSPECT` drift labels (#45/#76: the shared clock's +1 199 624 ppm
+  is exactly the 2112-fr-buffer-per-10-ms-tick signature #76 decoded) behaved as documented.
 
 ## 5. Increment 2 backlog (declared, not hidden)
 

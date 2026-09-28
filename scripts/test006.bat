@@ -223,7 +223,22 @@ call :say [07] param edit reached the render : !CHG!
 call :say operator answers: A=!A! B=!B! C=!C! D=!D! E=!E! F=!F! G=!G! H=!H! I=!I!
 call :say steps failing on rc: !FAILED!
 call :say " "
-call :say SEND BACK: %LOG%  and  logs\ui.log
+REM ---- the compact copies: the full logs stay here, the digests travel -----
+set "HAVE_PY=0"
+where python >nul 2>&1 && set "HAVE_PY=1"
+where py >nul 2>&1 && set "HAVE_PY=1"
+if "!HAVE_PY!"=="1" (
+    where python >nul 2>&1 && set "PY=python" || set "PY=py"
+    del "%CD%\test%TVER%-digest.log" >nul 2>&1
+    del "%CD%\logs\ui-digest.log" >nul 2>&1
+    "!PY!" "%~dp0..\tools\log_digest.py" "%LOG%" logs\ui.log
+    call :say SEND BACK: the compact copies when they were made - test%TVER%-digest.log
+    call :say and logs\ui-digest.log - else the full files. Verdict lines are
+    call :say byte-identical in the copies; only repeated status lines collapse.
+    call :say full paths: %LOG%  and  logs\ui.log
+) else (
+    call :say SEND BACK: %LOG%  and  logs\ui.log
+)
 call :say ================================================================
 echo.
 echo  done - you can close this window.

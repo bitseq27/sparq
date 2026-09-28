@@ -17,6 +17,14 @@ set "SPARQ_RC=%errorlevel%"
 type "%SPARQ_LOG%"
 echo.
 echo  log saved to %SPARQ_LOG%
+REM The compact copy: gates.log carries every cargo line; the digest keeps every
+REM verdict and drops the repetition. It cannot change the gates verdict - SPARQ_RC
+REM was captured before the log was typed. cd inside :sparq_main is local to it, so
+REM this uses absolute paths only.
+set "GD_PY="
+where python >nul 2>&1 && set "GD_PY=python"
+if not defined GD_PY where py >nul 2>&1 && set "GD_PY=py"
+if defined GD_PY "%GD_PY%" "%~dp0..\tools\log_digest.py" "%SPARQ_LOG%"
 if defined SPARQ_DOUBLE_CLICKED pause
 exit /b %SPARQ_RC%
 

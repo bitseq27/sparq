@@ -1,0 +1,9 @@
+sparq exec · WO-008 executor render · patch `demo`
+  registry    17 built-in module(s) compiled in
+  discovery   17 manifest(s) scanned under `modules` · 17 shadowed by built-ins · 0 without a factory
+  patch       sine(440 Hz, 0.5) → gain(0.5) → master · rms analysis tap · 3 node(s), 2 edge(s)
+  budget      1796 bytes of audio buffers, all pre-allocated
+  meters      rms tap value Some(0.16621882) (0.25 amp sine, 0.59-cycle window → ≈ 0.16..0.19) · master peak Some(0.24996915) rms Some(0.16621882)
+  rendered    3750 blocks · 240000 frames · hash d46736fd9a1c48a1
+  wrote       exec.wav (1920000 bytes of sample data, f32 · 240000 frames × 2 ch)
+exec: PASS

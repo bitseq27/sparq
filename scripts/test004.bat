@@ -2,18 +2,22 @@
 REM ===========================================================================
 REM  sparq test004 - WO-006 EXCLUSIVE acceptance: the run that closes the WO.
 REM
-REM  THE CONTRACT: one file from Qwen - this script, plus the increment-1.3
+REM  THE CONTRACT: one file from Qwen - this script, plus the increment-1.4
 REM  sync zip applied first - see below. Run it, answer its prompts, send back
-REM  ONE file: test004.log from the repo root.
+REM  ONE file: test004-digest.log from the repo root - the compact copy this
+REM  script makes at the end. The full test004.log stays on disk.
 REM
-REM  PREREQUISITE: sync-wo006-inc13.zip must be extracted at the repo root
-REM  BEFORE this run - on top of sync-wo013-inc3.zip if that has not landed
-REM  yet. It carries the fixed wasapi.rs: the four-rung exclusive FORMAT
-REM  ladder - f32, i24-in-32, i32, i16 - that answers defect #77, AND the
-REM  device-PERIOD ladder that answers defect #79: your 2026-09-24 run was
-REM  refused at every rung because the open asked for a 666 us period that a
-REM  10 ms engine cannot run. The open now asks GetDevicePeriod first. The
-REM  build step verifies the new stamp.
+REM  PREREQUISITE: sync-wo006-inc14.zip must be extracted at the repo root
+REM  BEFORE this run - on top of the chain through sync-wo008-inc6.zip, which
+REM  your 2026-09-28 build line already showed APPLIED. It carries the
+REM  defect-#89 fix: your 09-28 run OPENED exclusive - i24-in-32, the rung we
+REM  wanted - but at the driver's 3 ms reported minimum, and the driver could
+REM  not SUSTAIN it: a ~33 ms stall every ~62.5 ms, 159 late wakes in 10 s,
+REM  half throughput, drift -49 percent, no clean tone. The open now asks the
+REM  driver's DEFAULT period first - the number its engine actually runs; the
+REM  shared 10 ms engine soak-ran 2 h clean on this same machine - and the
+REM  alignment two-step rounds the ask UP to the driver's granularity instead
+REM  of adopting it. The build step verifies the new stamp.
 REM
 REM  WHAT PASSES THE WO: [03] caps must now list EXCLUSIVE RATES for the
 REM  Behringer endpoints - [04] the exclusive tone must be audible, and its
@@ -48,6 +52,7 @@ set "LOG=%CD%\test%TVER%.log"
 set "TMPF=%CD%\_test%TVER%.tmp"
 set "FAILED=0"
 set "EXCL_OK=0"
+set "EXCL_OPENED=0"
 del "%TMPF%" >nul 2>&1
 
 >>"%LOG%" echo.
@@ -55,8 +60,9 @@ del "%TMPF%" >nul 2>&1
 
 call :say ================================================================
 call :say  sparq test%TVER% - WO-006 EXCLUSIVE acceptance run
-call :say  increment 1.2: the exclusive ladder now speaks 24-in-32 - defect #77
-call :say  at the end you send back ONE file: test%TVER%.log from the repo root
+call :say  increment 1.4: the exclusive open asks the engine period - defect #89
+call :say  at the end you send back ONE file: test%TVER%-digest.log - the compact
+call :say  copy this script makes; the full test%TVER%.log stays on disk
 call :say ================================================================
 
 REM ---- [00] environment -------------------------------------------------
@@ -85,9 +91,9 @@ call :say operator confirmed prep complete
 
 REM ---- [02] build + stamp ---------------------------------------------------
 call :say " "
-call :say [02] build - the sync must have landed: the stamp's BYTE COUNT changes
-call :say      from 75f/1218171B because wasapi.rs grew the ladder. If the guard
-call :say      says stale and rebuilds, that is the zip-sync freshness trap - normal.
+call :say [02] build - the sync must have landed: the stamp changes because
+call :say      period.rs and wasapi.rs moved. If the guard says stale and rebuilds,
+call :say      that is the zip-sync freshness trap - normal.
 set "CMD_CLICK_STARTED="
 set "SPARQ_DOUBLE_CLICKED="
 set "CMD=call scripts\build.bat"
@@ -116,8 +122,11 @@ call :say " "
 call :say [04] WASAPI EXCLUSIVE playback - a 10 s 220 Hz tone at -12 dB.
 call :say      The open line names the rung: f32, i24-in-32, i32 or i16.
 call :say      For the UMC 204HD the expectation is i24-in-32 with conversion,
-call :say      and a device period of 10.00 ms with the 64-frame sparq block
-call :say      riding the FIFO beneath it - that pair is the defect 79 fix.
+call :say      and a device period of 960 fr - 10.00 ms - or 1152 fr - 12.00 ms -
+call :say      if the driver enforces its 288 fr alignment - with the 64-frame
+call :say      sparq block riding the FIFO beneath it: the defect 79/89 fix.
+call :say      A 288 fr - 3.00 ms - period is the defect-89 signature: it opens,
+call :say      then stalls. Send the log back if you see one.
 call :say Press any key when ready.
 pause >nul
 set "CMD=target\release\sparq.exe play --backend wasapi-exclusive --seconds 10 --gain -12"
@@ -125,10 +134,16 @@ call :run "play wasapi-exclusive 10s"
 set "RC04=!RC!"
 if "!RC04!"=="0" (
     set "EXCL_OK=1"
+    set "EXCL_OPENED=1"
 ) else (
+    findstr /c:"wasapi-exclusive]: opened" "%TMPF%" >nul 2>&1 && set "EXCL_OPENED=1"
     call :say HINT: the probe table in the error names each rung's HRESULT.
     call :say Busy means another app holds the device; Format means no rung fits.
     call :say A device-period table means no period fit - defect 79, increment 1.3.
+    call :say If it OPENED but ran rough, the opened period line is the diagnosis:
+    call :say late wakes against the period, drift near -50 percent and xruns on
+    call :say every status line were defect 89 - a period the driver accepted at
+    call :say Initialize and could not sustain. Increment 1.4 asks the default.
     call :say Send the log back either way - the table IS the diagnosis.
 )
 call :askyn "did you hear a clean 10-second tone"
@@ -166,8 +181,8 @@ if "!EXCL_OK!"=="1" (
     call :say      xruns required. This is the criterion that closes WO-006 and fires
     call :say      ADR-008: the cpal bootstrap gets deleted afterwards.
 ) else (
-    call :say [07] exclusive did not open, so this is the SHARED rehearsal again, not
-    call :say      the acceptance run. The log says which - honesty over vanity.
+    call :say [07] exclusive did not run clean, so this is the SHARED rehearsal
+    call :say      again, not the acceptance run. The log says which - honesty over vanity.
 )
 call :say      It MAKES SOUND the whole run; the machine must not sleep.
 if "!EXCL_OK!"=="1" (set "SOAKBE=wasapi-exclusive") else (set "SOAKBE=wasapi-shared")
@@ -207,10 +222,30 @@ if defined RC08 call :verdict "[08] post-soak conformance" "!RC08!"
 call :say tone heard - [04] !HEARD04!  [06] !HEARD06!
 call :say steps failing on rc: !FAILED!
 call :say " "
-if "!EXCL_OK!"=="1" if "!RC07!"=="0" call :say WO-006 ACCEPTANCE: all criteria met on hardware - send the log!
-if not "!EXCL_OK!"=="1" call :say exclusive still refused - the [04] probe table in this log is the diagnosis.
+if "!EXCL_OK!"=="1" if "!RC07!"=="0" call :say WO-006 ACCEPTANCE: all criteria met on hardware - send the digest!
+if not "!EXCL_OK!"=="1" if not "!EXCL_OPENED!"=="1" call :say exclusive still refused - the [04] probe table in this log is the diagnosis.
+if not "!EXCL_OK!"=="1" if "!EXCL_OPENED!"=="1" call :say exclusive OPENED but did not run clean - the [04] period line, late wakes and drift are the diagnosis.
 call :say " "
-call :say SEND THIS ONE FILE BACK: %LOG%
+REM ---- the compact copy: the full log stays here, the digest travels --------
+set "HAVE_PY=0"
+where python >nul 2>&1 && set "HAVE_PY=1"
+where py >nul 2>&1 && set "HAVE_PY=1"
+if "!HAVE_PY!"=="1" (
+    where python >nul 2>&1 && set "PY=python" || set "PY=py"
+    del "%CD%\test%TVER%-digest.log" >nul 2>&1
+    "!PY!" "%~dp0..\tools\log_digest.py" "%LOG%"
+    if exist "%CD%\test%TVER%-digest.log" (
+        call :say SEND THIS ONE FILE BACK: %CD%\test%TVER%-digest.log
+        call :say the digest is this log minus the repeated status and build lines -
+        call :say every other line byte-identical. The full log stays on disk.
+    ) else (
+        call :say digest generation failed - send the full log instead:
+        call :say SEND THIS ONE FILE BACK: %LOG%
+    )
+) else (
+    call :say no python on PATH - no compact copy; send the full log:
+    call :say SEND THIS ONE FILE BACK: %LOG%
+)
 call :say ================================================================
 echo.
 echo  done - you can close this window.

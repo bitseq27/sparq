@@ -68,7 +68,7 @@ WO-002 ─┬─> WO-003                        WO-008 ─> WO-013 ────�
 | WO-003 | **done** | `VISION.md` + ADR-000…009 (009 still `draft` — ratify with the WO-006/008 measurements). |
 | WO-004 | **done (3 of 3 mockups)** | Design mode, Perform mode, display sheet — all generated from tokens, all passing `token_audit`. **Open:** the human protocols (blind identity, distance, dark-room, glove, monochrome) and the display-sheet tablet/wall breakpoints. |
 | WO-005 | **done except live playback (Phase A)** | Offline render, DSP chain, control ring, diagnostics, golden reference, selftest, soak. Deviation: **no window** — the egui shell is WO-012, so Phase 0 uses a terminal control surface. Everything the window would have driven (control ring, counters, render path) is real and tested. `play` compiles and lints clean in CI on all three OSes but **has never produced sound**: no audio device exists in this environment. |
-| WO-006 | **in progress — increment 1.3 built (2026-09-25); the FIRST PHYSICAL session ran (2026-09-24, `test001`–`test004`); acceptance = the `test004` re-run** | HAL trait + diagnostics + null backend + conformance + WASAPI exclusive/shared, 242 tests, four clippy matrix cells clean. **Physical SATURN session (operator present, no RDP, High-performance scheme):** the endpoints are RESOLVED by name — the default is **OUT 1-2 (BEHRINGER UMC 204HD 192k)**; shared mode is proven on the real interface: **first sound ever through the HAL** (tone audible), 10 s plays + a 5-min soak @96k/64 all **0 xruns / 0 allocations** (450 307 blocks, p50 1.0 µs / p99 2.0 µs / max 108 µs, 3 outliers), 4 ch f32 @96k negotiated on OUT 1-4 via the two-shapes ladder (#38/#46 fix working on hardware), **the unplug acceptance criterion PASSED** (mid-run removal → `Removed` state, dev-err 1, 0 xruns, clean stop, recovery play + tone after re-plug), reopen-leak 0 on hardware. **Multichannel criterion resolved honestly** (interface maxes at 4 out; caps say so; null proves ≥8). Remaining for acceptance: **the 2 h zero-xrun soak at 96 kHz/64 EXCLUSIVE — blocked by defect #77**: the exclusive ladder probes f32 only and the Behringer driver refuses f32 exclusive (`AUDCLNT_E_UNSUPPORTED_FORMAT`, not policy — both checkboxes ticked); increment 1.2 adds integer rungs (i32/24-in-32/i16 + pump conversion), then test004 runs the acceptance. Also found: **#75** (friendly-name `E_ACCESSDENIED` on REAL endpoints with no remote session — #40's "RDP quirk" attribution falsified; registry reads names fine → fallback path proven) and **#76** (the `SUSPECT` drift decoded: `(buffer_frames ÷ event_period) ÷ rate − 1` = +1.2 M ppm on BOTH the RDP and Behringer sessions to four digits — `IAudioClock` advances in buffer steps per event tick; the #45 guard did its job, throughput stayed truthful). `docs/hal/windows-notes.md` §4/§4b carry the rows and the arithmetic. |
+| WO-006 | **in progress — increment 1.4 built (2026-09-28) after test004 attempt 2 OPENED exclusive and stalled at a 3 ms period the driver accepted but cannot sustain (defect #89); acceptance = the `test004` re-run on the default-first ladder** | HAL trait + diagnostics + null backend + conformance + WASAPI exclusive/shared, 242 tests, four clippy matrix cells clean. **Physical SATURN session (operator present, no RDP, High-performance scheme):** the endpoints are RESOLVED by name — the default is **OUT 1-2 (BEHRINGER UMC 204HD 192k)**; shared mode is proven on the real interface: **first sound ever through the HAL** (tone audible), 10 s plays + a 5-min soak @96k/64 all **0 xruns / 0 allocations** (450 307 blocks, p50 1.0 µs / p99 2.0 µs / max 108 µs, 3 outliers), 4 ch f32 @96k negotiated on OUT 1-4 via the two-shapes ladder (#38/#46 fix working on hardware), **the unplug acceptance criterion PASSED** (mid-run removal → `Removed` state, dev-err 1, 0 xruns, clean stop, recovery play + tone after re-plug), reopen-leak 0 on hardware. **Multichannel criterion resolved honestly** (interface maxes at 4 out; caps say so; null proves ≥8). Remaining for acceptance: **the 2 h zero-xrun soak at 96 kHz/64 EXCLUSIVE — blocked by defect #77**: the exclusive ladder probes f32 only and the Behringer driver refuses f32 exclusive (`AUDCLNT_E_UNSUPPORTED_FORMAT`, not policy — both checkboxes ticked); increment 1.2 adds integer rungs (i32/24-in-32/i16 + pump conversion), then test004 runs the acceptance. Also found: **#75** (friendly-name `E_ACCESSDENIED` on REAL endpoints with no remote session — #40's "RDP quirk" attribution falsified; registry reads names fine → fallback path proven) and **#76** (the `SUSPECT` drift decoded: `(buffer_frames ÷ event_period) ÷ rate − 1` = +1.2 M ppm on BOTH the RDP and Behringer sessions to four digits — `IAudioClock` advances in buffer steps per event tick; the #45 guard did its job, throughput stayed truthful). `docs/hal/windows-notes.md` §4/§4b carry the rows and the arithmetic. |
 | WO-012 | **in progress — increment 1 built and headless-green** | Toolkit-independent UI core in `sparq-ui` (pointer model, gesture recogniser with the full §14.3 table, shell layout computation, touch-target audit — 37 tests, zero dependencies) + the egui shell in `sparq-app` behind `ui`/`ui-window` features (token-generated style adapter incl. the derived high-contrast theme, window host with per-monitor DPI via winit, headless driver). `sparq ui --audit` is a gate: 5 viewports × 4 DPI scales × 2 modes + DPI-invariance + 9 synthetic-gesture smokes — **PASS (0 failures)** in sandbox; frame logic med 94 µs headless. Defects #50–#53 found and fixed (table below). **Awaiting device:** the DPI matrix on real monitors, touch with a real finger, palm rejection (needs WM_POINTER contact area — winit reports none), 60 fps on the stage device. |
 | WO-007 | **task 1 done — the contract is data, and ten decisions are taken** | `docs/api/compat-matrix.toml` (6 port types, 21 same-type cases, 5 verdicts, 4 adapters, 1 cell still open) and `docs/api/manifest-fields.toml` (82 field rows, 22 required, an error code per violation) — the tables-first artefact task 1 asks for, both parsing, neither consumed by code yet. `WO007-TASK1-REVIEW.md` carries the ten ratified decisions and the two acceptance blockers found. §16's five open questions are all answered, Q1 **by measurement** (`tools/dispatch-bench`: enum dispatch is within noise of monomorphised; per-sample trait objects cost 27–36 µs for 100 null modules against a 20 µs budget, so `process(block)` may be a trait object and nothing per-sample may be). Amended: `manifest-schema.md`, `module-api-v1.md` (§2 cascade rule, §3, §14, §16), ADR-005 addendum, **ADR-009 executor decision 7 + Consequences**, Appendix B and §17 Phase 1 (12 → 15 modules). Defects #54–#65 below. **Tasks 2–3 built** (increment below): `sparq-module-api` — the closed port vocabulary as types, the connection rules as functions, the derived error catalogue (19 legacy kinds + 5), the manifest with every required field an `Option` so absence is reportable, `validate()` returning either a `ValidatedManifest` the executor may use or *every* failure at once, `Copy` param snapshots through the kernel's lock-free ring, and the dyn-compatible `Module` trait whose `AudioCtx` exposes no allocator, clock, filesystem or lock. Three conforming modules as contract tests (`util/gain`, `syn/sine`, `ana/rms`). **368 tests** (was 280 before WO-007), clippy clean in seven of eight cells, **0 allocations across 15 000 `process` calls through `Box<dyn Module>`**. Increment 2 added the **TOML reader** — `toml.rs`, a dependency-free subset parser, and `decode.rs`, text → `ValidatedManifest` reporting syntax and type failures before semantic ones — so a real `sparqmod.toml` can now be read; sections v0 does not decode are still *key-checked*, because accepting `[ui]` while ignoring a typo inside it would be an invisible failure. New stamp **`src 65f/1034459B`**. Defects #60–#63 below. Increment 3 added the **registry and discovery** and task 5's two gates — the API-surface snapshot and the throwaway-module test that walks every engine source file to prove criterion 1 mechanically — so **all six acceptance criteria are now addressed** (3 only as far as Rust allows, and the log says so). **388 tests**, stamp `src 67f/1063788B`, defects #64–#65. Increment 4 closed the last two: **task 4** (`docs/module-author-guide-v0.md`, written from the three reference modules) and the **app-side scan** (`sparq modules [--root DIR] [--strict]` in `crates/sparq-app/src/modules.rs` — the only place in the workspace that reads a directory; the contract crate still holds no I/O). **WO-007 is complete.** The one piece deliberately left open is reading `compat-matrix.toml` at discovery instead of mirroring it in `port.rs` — carried to WO-008, because until then the mirror is the only copy of the matrix that can drift. **P1 device run (2026-09-23, SATURN physical): the first real MSVC build of the increment is green where it counts** — clippy audio+hal clean, release build 58 s, golden bit-identical (`ba577186c988db21`), selftest 8/8, `ui --audit` PASS, 1059× realtime, exe stamp `src 68f/1070593B` — and found six defects, #66–#71 below, fixed in `sync-p1-fixes.zip` (tests + scripts only; stamp unchanged) |
 | WO-013 | **in progress — increments 2/2b device-VERIFIED (test005 PASS 2026-09-25); increments 3 (browser + inspector + wire re-patch), 4 (live wire levels + out/main master handover) and 5 (rename entry + inspector scroll + per-cv levels + the LOD pass) built and sandbox-green, device run pending (test006, now with steps F–I)** | The graph canvas: `sparq-ui::canvas` (model with invertible ops + undo/redo, camera + LOD, computed layout + hit-testing, connect verdicts delegated to `sparq-module-api`'s own `connect_*`, the intent→op interaction table) + the egui painter in `sparq-app/src/ui/canvas_ui.rs` (nodes/wires/ports in the token signal-class language, glow/dim affordances, marquee, long-press menu). Shell routes canvas intents and binds the WO-012 `DoubleTap`/`Context`/`Undo` stubs. Demo patch = the reference modules that actually exist (#58 honoured). **474 tests**, `sparq ui --audit` PASS (16 smokes incl. 7 canvas; Design cells audit 24 touch targets), goldens unchanged, `ui-window` compiles. **Increment 2 shipped the bridge:** `sparq-app/src/bridge.rs` (ungated — the default CI test path exercises canvas graph → registry → executor → WAV), master resolution (SET MASTER + MASTER badge + the documented default rule), the RENDER WAV menu row, the registry-driven demo graph, `scripts/test005.bat` for SATURN. Artefacts `sparq-ui::canvas`, `docs/ui/gestures.md`. Defect #73 (recogniser release position) found + fixed. **Increment 2b (no product code):** test005's first run on
@@ -1123,6 +1123,92 @@ block beneath it), unplug-in-exclusive, and the **2 h zero-xrun soak at 96 kHz/6
 When it passes: WO-006 acceptance closes and ADR-008's exit condition fires (cpal bootstrap
 deleted, HAL becomes `play`'s default). Artefacts: `sparq-kernel::hal::period`,
 `docs/hal/windows-notes.md` §4c, `WO006-INC13-RUN-SHEET.md`.
+
+**WO-006 increment 1.4 — the default-first period ladder and the compact log digest, defect #89 (2026-09-28, sandbox-built):**
+`test004` attempt 2 (2026-09-28 09:01, SATURN, inc-1.3 build under the applied
+`sync wo008-inc6` chain — the build line's `sync_check: OK - 149 files` confirms both waiting
+bundles landed) **opened WASAPI exclusive for the first time**: `i24-in-32 (converting)` at
+96 kHz on the UMC 204HD — #77's format ladder and #79's period asking both did their job. And
+then the stream stalled: the open landed at **288 fr (3.00 ms)**, the driver's reported minimum /
+alignment granularity rather than the 10 ms the run sheet expected, and the 10 s tone came back
+`NOT CLEAN` — **159 late wakes, half throughput (7732 blocks ≈ 49.1k fr/s against a 96 kHz
+negotiation), jitter min 600 ns / avg 5.84 ms / max 33.24 ms, drift −491 656 ppm, tone not
+heard**. The arithmetic (§4d of the windows-notes, in #76's style): 1718 wakes split into ~1559
+at ~3.0 ms plus ~159 at ~33.2 ms — the device ran at full 96 kHz roughly half the wall time and
+starved the other half, one ~33 ms stall every ~62.5 ms. Zero budget overruns and zero
+FIFO-starvation writes: the pump kept every promise it could see. The control experiment ran in
+the same session: the **shared 10 ms engine on the same endpoint soaked 2 h, 719 895 wakes,
+0 xruns, max jitter 12.04 ms** — not a machine-wide storm, not the pump: the 3 ms exclusive period
+the driver *accepted* and cannot *sustain*. **Defect #89: a third lying-`min` face** — #79's
+driver refuses under-minimum asks at `Initialize` (honest, recoverable); the documented lying-min
+refuses its own minimum (recoverable); this driver ACCEPTS the period and misbehaves at runtime,
+where no open-path probe can see it. The attempt-1 log copy is truncated, so which door produced
+the 3 ms ask (a `GetDevicePeriod` minimum now reading 3 ms, or the alignment two-step adopting a
+288-fr granularity against a 10 ms ask) cannot be pinned from the evidence — **the fix closes all
+three doors**, each as pure data in `hal/period.rs` where Linux unit-tests it:
+
+1. **Default-first for coarse engines.** `exclusive_period_ladder` reorders: when the reported
+   minimum sits ABOVE the sparq block period — a driver saying it needs an engine coarser than
+   the block — its minimum is not a promise, and its **default period (the number its engine
+   actually runs) becomes rung 1**, the min-clamped ask demoted to fallback. Sub-block engines
+   keep inc 1.2/1.3's honest low-latency ask first (a liar there refuses at `Initialize`, which
+   the ladder survives — #79's own shape, and four of its seven unit pins, unchanged). On the
+   UMC's shape (default 10 ms, min 3 ms) the ladder is now `[10 ms, 3 ms]` — pinned by
+   `the_defect_89_device_asks_its_default_before_its_min`, the test that inc 1.3's
+   `a_minimum_above_the_block_clamps_the_ask_up` asserted the WRONG way round against the same
+   device shape.
+2. **The two-step rounds UP.** On `BUFFER_SIZE_NOT_ALIGNED`, `GetBufferSize` reports the
+   driver's alignment granularity; inc 1.3 re-asked the granularity itself (the documented
+   recipe's literal reading — and a way a 10 ms ask could silently become 3 ms). Now
+   `align_up_frames` rounds the ORIGINAL ask up to whole granularity units: 960 fr ask, 288 fr
+   granularity → **1152 fr = 12.000 ms**, aligned AND default-class. Sub-granularity asks still
+   land on one unit — inc 1.2's two-step behaviour, unchanged, pinned.
+3. **The silent-shrink guard.** A driver that ACCEPTS an ask and then allocates seriously less
+   (< ¾ of it, `allocation_seriously_shrunk`) is reporting its granularity through the
+   allocation: round up and re-ask ONCE on a fresh client; if the retry refuses, keep the
+   shrunken open and print the mismatch — the open line grows `(3.00 ms, ask 960 fr)` so a
+   shrunken negotiation can never be read as a clean one. `Negotiated` carries `ask_frames`
+   (exclusive only; the shared engine picking its own buffer is documented behaviour, not a
+   mismatch).
+
+Expected attempt-3 open line: **`device period 960 fr (10.00 ms)`** — or **`1152 fr (12.00 ms)`**
+if the driver enforces its 288 fr alignment at `Initialize`. Both are the driver's own engine
+class; the 2 h shared soak says the machine sustains it. The pump needed no change (Period ≠
+block; the FIFO absorbs any period the ladder lands on). **Defect #90 (the acceptance script's
+own honesty):** attempt 2's summary printed `exclusive still refused — the [04] probe table … is
+the diagnosis` when exclusive had OPENED and run rough, and the banner still announced
+"increment 1.2" — the script that grades the acceptance misdiagnosed it in the log the operator
+sends back. `test004.bat` now distinguishes refused from opened-but-not-clean (`EXCL_OPENED` via
+`findstr` on the captured output), its hints name #89's runtime signature, and its expectation
+text names both legal periods. **And the operator's context-window ask, shipped in the same
+bundle:** `tools/log_digest.py` (+ `scripts\digest.bat`, + end-of-run hooks in `test004.bat`,
+`test006.bat`, `gates.bat`) writes `NAME-digest.log` beside every device log — every line
+byte-identical except three collapsed classes: `[t+ Ns]` periodic runs (first 2 + last 2 kept,
+the middle becomes one count line carrying the blocks/xrun ranges), cargo build chatter, and runs
+of identical lines. Attempt 2's 67 569 B log digests to 30 994 B (−54 %, 235 soak reports
+collapsed); `--self-test` (16 checks) proves every class fires and every verdict line survives.
+The full log stays on disk; **the digest is what travels.**
+
+**Defects WO-006 increment 1.4 logs:**
+
+| # | Defect | Caught by |
+|---|---|---|
+| 89 | **The exclusive stream opened at the driver's 3 ms minimum/granularity and stalled ~33 ms every ~62.5 ms** — 159 late wakes / 10 s, half throughput (49.1k fr/s vs 96 kHz), drift −49 %, no clean tone — while the same endpoint's shared 10 ms engine soak-ran 2 h clean in the same session. A third lying-`min` face: the driver ACCEPTS the period at `Initialize` and cannot sustain it at runtime, where no open-path check can see it. Fixed in inc 1.4 by closing all three doors the 3 ms ask could have come through: the default-first ladder for coarse engines, the round-UP alignment two-step, and the silent-shrink guard with the honest open line | `test004` attempt 2 on SATURN (2026-09-28, `test004.log` [04]/[07]/[08] sections), root-caused by arithmetic in the sandbox — recorded in `docs/hal/windows-notes.md` §4d |
+| 90 | **`test004.bat`'s summary misdiagnosed attempt 2 in the log it asked the operator to send back:** it printed "exclusive still refused — the [04] probe table is the diagnosis" when exclusive had OPENED and run rough (`EXCL_OK` keyed off rc alone), and its banner still announced "increment 1.2" two increments later. Fixed in inc 1.4: `EXCL_OPENED` captured via `findstr` on the [04] output, refused vs opened-but-not-clean summary lines, hints naming #89's runtime signature, expectation text naming both legal periods (960 fr / 1152 fr) | the attempt-2 log's own SUMMARY block, read against its [04] section |
+
+**Measured in sandbox:** **757 tests** (was 752; +6 `hal/period.rs` unit gates, 1 replaced in
+place — ALL RUNNING ON LINUX, including the exact attempt-2 device shape), 0 failed, 1 ignored;
+fmt clean; clippy clean in the default workspace cell and **both MSVC `hal-wasapi` cross-lint
+cells** (kernel + app, `-D warnings` — the only compiler the WASAPI change meets, so the
+`open_exclusive` rewiring is compile-verified, not run-verified, as in every WASAPI increment);
+5 python gates clean + `log_digest --self-test` 16/16 + `log_check --self-test` 25/25 (BASELINE
+moved with the seal, #83's discipline); goldens untouched **by construction** — `hal/period.rs`
+feeds only the `cfg(windows)` exclusive open, and no render path moved. **Hardware acceptance is
+unchanged in shape and closer in fact: the `test004` re-run** — the open line must read 960 fr
+(10.00 ms) or 1152 fr (12.00 ms), the tone must be clean, unplug-in-exclusive must end `Removed`,
+and the **2 h zero-xrun soak at 96 kHz/64 exclusive** closes WO-006 and fires ADR-008's exit.
+Artefacts: `sparq-kernel::hal::period`, `docs/hal/windows-notes.md` §4d,
+`WO006-INC14-RUN-SHEET.md`, `tools/log_digest.py`, `scripts/digest.bat`.
 
 **WO-008 increment 3 — tasks 4–7: the swap, the latency, the watchdog, the harness (2026-09-25, sandbox-built):**
 the four tasks the increment-2 status line left open, shipped as one increment because they form

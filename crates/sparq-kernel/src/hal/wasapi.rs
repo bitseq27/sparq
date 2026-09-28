@@ -1091,6 +1091,12 @@ struct Negotiated {
     /// Device period in frames (from `GetBufferSize` — what the device actually does, not what
     /// we asked for).
     period_frames: u32,
+    /// The period of the ask that opened, in frames — exclusive only (`None` in shared, where
+    /// the engine picks its own buffer and an "ask" annotation would be noise). Printed next to
+    /// `period_frames` when the two disagree: a driver that allocates less than it accepted is
+    /// telling the truth through `GetBufferSize` and must not be hidden by the open line
+    /// (defect #89's third face).
+    ask_frames: Option<u32>,
     /// sparq block size in frames (what the callback sees). May differ from `period_frames`;
     /// the FIFO absorbs the mismatch.
     block_frames: u32,
@@ -1539,7 +1545,7 @@ impl HalBackend for WasapiBackend {
         let client = device.activate_client()?;
         let log = opts.log_negotiation;
         let (bundle, neg, event) = if self.exclusive_mode() {
-            open_exclusive(&device, client, cfg)?
+            open_exclusive(&device, client, cfg, log)?
         } else {
             open_shared(client, cfg, log)?
         };
@@ -1559,8 +1565,16 @@ impl HalBackend for WasapiBackend {
         // opens stay silent (OpenOptions::log_negotiation = false) so the two-phase open does
         // not print every line twice and the conformance cycles do not bury their report.
         if log {
+            // The open line is the proof of what the device got (the NEGOTIATED promise). When a
+            // driver allocated something seriously smaller than the ask that opened — #89's
+            // silent-shrink face — the ask rides along so the line cannot be misread as a clean
+            // negotiation.
+            let ask_note = match neg.ask_frames {
+                Some(a) if a != neg.period_frames => format!(", ask {a} fr"),
+                _ => String::new(),
+            };
             eprintln!(
-                "sparq hal[{}]: opened `{device_name}` — {} Hz · {} ch · {} · device period {} fr ({:.2} ms) · sparq block {} fr",
+                "sparq hal[{}]: opened `{device_name}` — {} Hz · {} ch · {} · device period {} fr ({:.2} ms{ask_note}) · sparq block {} fr",
                 self.kind,
                 neg.rate,
                 neg.channels,
@@ -1674,11 +1688,13 @@ fn wfxe_int(rate: u32, ch: u16, mask: u32, container: u16, valid: u16) -> WAVEFO
 
 /// The exclusive open: the four-rung format ladder (f32 → i24-in-32 → i32 → i16, all
 /// extensible) at the requested rate/channels, event-driven, with the documented
-/// `BUFFER_SIZE_NOT_ALIGNED` two-step. Returns bundle + negotiated truth + event.
+/// `BUFFER_SIZE_NOT_ALIGNED` two-step (rounding the ask UP to the driver's granularity — #89).
+/// Returns bundle + negotiated truth + event.
 fn open_exclusive(
     device: &Com<MmDevice>,
     first_client: Com<AudioClient>,
     cfg: &StreamConfig,
+    log: bool,
 ) -> Result<(PumpBundle, Negotiated, HANDLE), HalError> {
     let rate = cfg.sample_rate.max(1);
     let ch = cfg.outputs as u16;
@@ -1740,18 +1756,28 @@ fn open_exclusive(
         )));
     };
 
-    // Period negotiation (defect #79): the block period is a REQUEST, not an entitlement. Inc
-    // 1.2 asked Initialize for the sparq block — 64 frames = 666 µs at 96 kHz — and the
-    // Behringer's 10 ms engine answered AUDCLNT_E_INVALID_DEVICE_PERIOD, a refusal the format
-    // ladder could not see (IsFormatSupported takes no period). The caps line had been printing
-    // the driver's 10 ms all along; the open path just never asked it. The ladder is pure data
-    // from `crate::hal::period` (unit-tested on Linux, where this project is developed): block
-    // period clamped to the driver minimum first, the driver default second, deduplicated. Each
-    // candidate gets a FRESH IAudioClient — a failed Initialize consumes it — and the documented
-    // BUFFER_SIZE_NOT_ALIGNED two-step rides along per candidate. The pump's FIFO already
-    // decouples device period from sparq block ("Period ≠ block", docs/hal/windows-notes.md), so
-    // accepting the driver's period changes nothing structurally; the latency report and the
-    // open log line read the TRUE period from GetBufferSize in finish_open, as before.
+    // Period negotiation (defects #79 + #89): the block period is a REQUEST, not an entitlement —
+    // and neither is the driver's own reported minimum. Inc 1.2 asked Initialize for the sparq
+    // block — 64 frames = 666 µs at 96 kHz — and the Behringer's 10 ms engine answered
+    // AUDCLNT_E_INVALID_DEVICE_PERIOD (#79): an honest refusal the format ladder cannot see
+    // (IsFormatSupported takes no period). Inc 1.3 then asked the min-clamped block period first,
+    // and test004 attempt 2 (2026-09-28) proved the worse failure mode: the UMC 204HD ACCEPTED
+    // its reported 3 ms minimum and could not SUSTAIN it — events every ~5.9 ms instead of every
+    // 3 ms, 159 stalls of ~33 ms in 10 s, half throughput, drift −49 %, no clean tone — while the
+    // same machine's shared 10 ms engine soak-ran 2 h clean (#89). An accepted Initialize is not a
+    // promise the period will run; the DEFAULT period is the number the driver's engine actually
+    // runs at. The ladder is pure data from `crate::hal::period` (unit-tested on Linux, where this
+    // project is developed): for a coarser-than-block engine the default goes first and the
+    // min-clamped ask is the fallback; for a sub-block engine the honest low-latency ask keeps
+    // priority, because a lying driver there refuses at Initialize *honestly* and the default
+    // catches it. Each candidate gets a FRESH IAudioClient — a failed Initialize consumes it —
+    // and the documented BUFFER_SIZE_NOT_ALIGNED two-step rides along per candidate, with #89's
+    // rounding: the granularity it reports rounds the ask UP, never replaces it. The pump's FIFO
+    // already decouples device period from sparq block ("Period ≠ block",
+    // docs/hal/windows-notes.md), so accepting the driver's period changes nothing structurally;
+    // the latency report and the open log line read the TRUE period from GetBufferSize in
+    // finish_open, as before — and the open line now also carries the ask whenever the driver
+    // allocated something seriously smaller than what it accepted.
     let (hw_default, hw_min) = first_client.device_period();
     let to_100ns = |d: Option<Duration>| d.map(|d| (d.as_nanos() / 100) as i64);
     let ladder = crate::hal::period::exclusive_period_ladder(
@@ -1763,27 +1789,40 @@ fn open_exclusive(
     let mut period_log: Vec<String> = Vec::new();
     let mut client = first_client;
     let mut first_try = true;
-    let mut opened: Option<Com<AudioClient>> = None;
+    let mut opened: Option<(Com<AudioClient>, i64)> = None;
     for &cand in &ladder {
         if !first_try {
             client = device.activate_client()?;
         }
         first_try = false;
+        // The ask that would open right now: starts as the candidate, follows the alignment
+        // two-step and the shrink retry, so the Negotiated truth and the log always name the
+        // number the successful Initialize actually got.
+        let mut ask = cand;
         let mut hr = client.initialize(
             AUDCLNT_SHAREMODE_EXCLUSIVE,
             AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-            cand,
-            cand,
+            ask,
+            ask,
             &wfxe.Format,
         );
         let mut tried = format!("{}: {}", crate::hal::period::period_text(cand), hr_text(hr));
         if hr == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED {
-            // Alignment two-step (documented recovery): the failed client reports the driver's
-            // alignment via GetBufferSize; a FRESH client is activated because an initialised
-            // (or failed-initialised) IAudioClient cannot be re-initialised.
-            let frames = client.buffer_size()?;
-            let aligned = (i64::from(frames) * 10_000_000 + i64::from(rate) / 2) / i64::from(rate);
+            // Alignment two-step (documented recovery) with #89's rounding: the failed client
+            // reports the driver's alignment granularity via GetBufferSize, and the re-ask is the
+            // ORIGINAL period rounded UP to that granularity — never the granularity itself. Inc
+            // 1.3 followed the recipe literally and turned the UMC's 10 ms ask into a 3 ms open:
+            // aligned, accepted — and unsustainable at runtime. An ask below one unit still lands
+            // on one unit, the behaviour the recipe exists for. A FRESH client is activated
+            // because an initialised (or failed-initialised) IAudioClient cannot be re-initialised.
+            let gran = client.buffer_size()?;
+            let up_frames = crate::hal::period::align_up_frames(
+                crate::hal::period::period_100ns_to_frames(cand, rate),
+                gran,
+            );
+            let aligned = crate::hal::period::frames_to_100ns(up_frames, rate);
             client = device.activate_client()?;
+            ask = aligned;
             hr = client.initialize(
                 AUDCLNT_SHAREMODE_EXCLUSIVE,
                 AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -1792,13 +1831,54 @@ fn open_exclusive(
                 &wfxe.Format,
             );
             tried = format!(
-                "{tried} → aligned {}: {}",
+                "{tried} → aligned-up {}: {}",
                 crate::hal::period::period_text(aligned),
                 hr_text(hr)
             );
         }
         if hr >= 0 {
-            opened = Some(client);
+            // #89's third face: some stacks ACCEPT the ask and then report a seriously smaller
+            // allocation through GetBufferSize — the same granularity story, told silently. The
+            // allocation is then the driver's granularity: round the ask up to it and re-ask
+            // ONCE on a fresh client. If the retry opens, it wins; if it refuses (or activation
+            // fails), the original open is kept — a stream that opened with the mismatch printed
+            // on the open line beats a refusal we can diagnose but not hear.
+            let asked_frames = crate::hal::period::period_100ns_to_frames(ask, rate);
+            let allocated = client.buffer_size().unwrap_or(0);
+            if crate::hal::period::allocation_seriously_shrunk(asked_frames, allocated) {
+                let up_frames = crate::hal::period::align_up_frames(asked_frames, allocated.max(1));
+                let up = crate::hal::period::frames_to_100ns(up_frames, rate);
+                // If activation fails, keep the open that exists; the mismatch rides the open
+                // line rather than turning a working (if shrunken) stream into a refusal.
+                if let Ok(retry) = device.activate_client() {
+                    let hr2 = retry.initialize(
+                        AUDCLNT_SHAREMODE_EXCLUSIVE,
+                        AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                        up,
+                        up,
+                        &wfxe.Format,
+                    );
+                    if hr2 >= 0 {
+                        if log {
+                            eprintln!(
+                                "sparq hal[wasapi-exclusive]: driver allocated {allocated} fr against a {} ask — treated the allocation as its granularity and re-asked {}: opened. Please send this line back.",
+                                crate::hal::period::period_text(ask),
+                                crate::hal::period::period_text(up),
+                            );
+                        }
+                        client = retry;
+                        ask = up;
+                    } else if log {
+                        eprintln!(
+                            "sparq hal[wasapi-exclusive]: driver allocated {allocated} fr against a {} ask; the rounded-up re-ask {} was refused ({}) — keeping the shrunken open, and the open line will say so. Please send this line back.",
+                            crate::hal::period::period_text(ask),
+                            crate::hal::period::period_text(up),
+                            hr_text(hr2),
+                        );
+                    }
+                }
+            }
+            opened = Some((client, ask));
             break;
         }
         period_log.push(tried);
@@ -1808,7 +1888,7 @@ fn open_exclusive(
             break;
         }
     }
-    let Some(client) = opened else {
+    let Some((client, ask)) = opened else {
         return Err(HalError::Device(format!(
             "Initialize (exclusive) was refused at {rate} Hz / {ch} ch ({fmt_name}) for every \
              device period tried [{}] — endpoint reports default {}, minimum {}; if this is a \
@@ -1831,6 +1911,7 @@ fn open_exclusive(
             rate,
             channels: ch,
             period_frames: 0, // filled by finish_open from GetBufferSize
+            ask_frames: Some(crate::hal::period::period_100ns_to_frames(ask, rate)),
             block_frames: cfg.block_frames as u32,
             fmt: dev_fmt,
             fmt_name,
@@ -2095,6 +2176,9 @@ fn open_shared(
             rate,
             channels,
             period_frames: 0,
+            // Shared mode: the engine picks its own buffer; an ask annotation would be noise
+            // (the requested period there is a hint the engine is documented to ignore).
+            ask_frames: None,
             block_frames: cfg.block_frames as u32,
             fmt: if f32 { DevFmt::F32 } else { DevFmt::I16 },
             fmt_name: if f32 { "f32" } else { "i16 (mix, converting)" },
