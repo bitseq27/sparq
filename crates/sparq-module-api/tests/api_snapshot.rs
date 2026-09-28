@@ -76,7 +76,11 @@ const _: fn(CvReduce) -> &'static str = CvReduce::as_str;
 const _: fn(CvReduce, &[f32]) -> f32 = CvReduce::apply;
 const _: fn(&str) -> Option<CvInterp> = CvInterp::parse;
 const _: fn(CvInterp) -> &'static str = CvInterp::as_str;
-const _: fn(CvInterp, f32, f32, &mut [f32]) = CvInterp::expand;
+// MOVED ON PURPOSE (WO-008 increment 6): `spline` is performed now, and its parabola reads a
+// three-knot history and clamps to the wire's declared range — the definition lives in
+// `CvInterp::expand`'s doc, the drift gate for the table's copy is tests/compat_matrix.rs.
+const _: fn(CvInterp, f32, f32, f32, CvRange, &mut [f32]) = CvInterp::expand;
+const _: fn(CvRange, f64) -> f64 = CvRange::clamp_f64;
 const _: fn(&str) -> Option<Direction> = Direction::parse;
 const _: fn(&str) -> Option<Multiplicity> = Multiplicity::parse;
 const _: fn(Adapter) -> &'static str = Adapter::module_id;

@@ -313,9 +313,31 @@ watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the det
 * ~~Multi-port `AudioCtx` (contract v1)~~ **SHIPPED as WO-008 increment 4 (2026-09-26):**
   audio/cv/event payloads travel (data/gpu/atom still refuse in words, now per type); the executor's
   refusals, the merge order and the rate conversions are all measured in `tests/contract_v1.rs`.
-* **`cv_interp = "spline"`** is declared in the vocabulary and REFUSED at build until the host
-  implements it (hold and linear ship). Implementing it is a small, well-specified increment;
-  faking it with a hold is exactly the silent transformation the refusal exists to prevent.
+* ~~**`cv_interp = "spline"`** is declared in the vocabulary and REFUSED at build until the host
+  implements it~~ **SHIPPED as WO-008 increment 6 (2026-09-27):** the host performs all three
+  spellings of G4. `spline` is the parabola through the last three block values —
+  `v(t) = prev2·t(t−1)/2 + prev·(1−t²) + cur·t(t+1)/2`, `t = i/frames` — equivalently a cubic
+  Hermite with the causal central-difference start tangent and the second-order backward end
+  tangent. Exact for quadratic-in-block-index sweeps, the exact line for collinear knots,
+  `linear`'s arrival contract (frame 0 IS the previous knot, `cur` is reached at the next block
+  boundary — the shape of the ride changes, the timing never does), f64 with one rounding per
+  frame, clamped to the wire's declared range (`CvRange::clamp_f64`): the overshoot is host-made
+  momentum, so the host bounds it, while `hold`/`linear` still never clamp — an out-of-range knot
+  there is a SOURCE bug and stays visible. `CvPlan` grew `prev2` + `range`; both history slots
+  start at 0.0 (the declared zero-history ramp `linear` always had), so the first two blocks are
+  a documented deterministic transient. The build refusal retired; the matrix cell, §17, the
+  schema row and the author guide now carry the same sentence, pinned by the widened G4 drift
+  gate. `tests/cv_spline.rs` (8 gates), two `port.rs` unit pins, contract_v1's refusal gate
+  replaced by a behaviour gate. **752 tests**, every pre-existing golden unchanged, stress hash
+  `b42068ec7b206789` unmoved (debug AND release).
+  * **Still parked, declared:** the *non-causal* splines — true Catmull-Rom (needs `v[N+1]`) and
+    the natural cubic spline (a global solve over future knots) both buy C² smoothness with a
+    block of LATENCY, which would make `spline` time its wire differently from `linear`; taking
+    that trade is a contract decision, not an implementation detail, so it stays out. A monotone
+    (PCHIP/Fritsch–Carlson) variant was also rejected: its limiter bends parabolas near extrema,
+    losing the exactness property, and the safety it buys is already provided by the clamp where
+    it matters. If a listening test ever says the momentum overshoot is wrong for a given wire,
+    the remedy is a new vocabulary word with its own gate, never a quiet change to this one.
 * **`required`-unconnected inputs are not refused at build** (v0 behaviour kept deliberately: the
   determinism world's unwired spare depends on it, and moving refusals mid-stress would move the
   harness counters). Host-side enforcement gets its own increment, with the stress baseline moved

@@ -313,8 +313,16 @@ the Rust surface is `tests/api_snapshot.rs`):
   insertion order; sinks bounded at `EVENTS_PER_BLOCK` = 64 with counted, never-grown overflow).
   Multi-output modules use the `take_*` accessors (documented in the author guide §8.1).
 * **`cv` edges execute** with every matrix rule enforced at build: range mismatch refused (G2,
-  naming `util/range` and its phase), fan-in refused (naming `util/mixer`), fan-out free,
-  `spline` refused until implemented — refusals in words, never silent no-ops.
+  naming `util/range` and its phase), fan-in refused (naming `util/mixer` and — since WO-014
+  increment 6 — its built cv merge as the working remedy), fan-out free — refusals in words,
+  never silent no-ops. **The G4 vocabulary is fully performed** (WO-008 increment 6):
+  `cv_interp = "spline"` is the parabola through the last three block values — exact for signals
+  quadratic in block index, the exact line for collinear knots (bit-identical to `linear` there),
+  `linear`'s arrival contract (frame 0 is the previous knot exactly; the curve reaches the
+  current knot at the next block boundary), evaluated in f64 with one rounding per frame and
+  clamped to the wire's declared range. The build refusal that guarded the unimplemented word
+  retired. Gates: `tests/cv_spline.rs` (sparq-audio), `port.rs`'s unit pins, `compat_matrix.rs`'s
+  table pin.
 * **`event` edges execute**; the producer's `event_kinds` must be a subset the consumer accepts
   (the default cell's rule, `E-EVENTKIND-UNACCEPTED`'s sentence). Host-side event injection exists
   as the executor's control-thread door; scheduling BY TICK is WO-009's clock broker and is

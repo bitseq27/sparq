@@ -622,15 +622,19 @@ fn an_audio_rate_cv_wire_copies_sample_for_sample() {
 }
 
 #[test]
-fn a_receiver_declaring_spline_is_refused_at_build_in_words() {
-    // The vocabulary promises `spline`; the host has not implemented it. Holding instead would
-    // render differently than the manifest declares — the invisible transformation ADR-005
-    // exists to prevent — so the build refuses and says what to declare instead.
+fn a_receiver_declaring_spline_gets_the_declared_curve() {
+    // WO-008 increment 6: the host PERFORMS `spline` — the build refusal this spot pinned
+    // retired with the promise kept (faking it with a hold was never an option: that is the
+    // invisible transformation ADR-005 exists to prevent). The curve is the parabola through
+    // the last three block values, clamped to the wire's declared range; the full proof burden
+    // (hand-computed frames, the linear degeneracy, both clamps, startup, determinism, zero
+    // allocations) lives in tests/cv_spline.rs. What is pinned HERE is the contract-level fact:
+    // the declared spelling builds, and the frames are the declared curve, not a silent hold.
     let mut g = Graph::new();
     let src = g.add_node(0);
     let probe = g.add_node(0);
     g.connect(PortRef::new(src, 0), PortRef::new(probe, 0), EdgeKind::Plain).unwrap();
-    let err = Executor::build(
+    let mut ex = Executor::build(
         g,
         vec![
             build(src, Box::new(CvConst), cv_const_manifest("unipolar"), &[0.25]),
@@ -643,10 +647,16 @@ fn a_receiver_declaring_spline_is_refused_at_build_in_words() {
         ],
         cfg(1),
     )
-    .unwrap_err();
-    assert!(matches!(err, ExecError::EdgeRefused { .. }), "got {err:?}");
-    let msg = err.to_string();
-    assert!(msg.contains("spline") && msg.contains("hold"), "the sentence names the fix: {msg}");
+    .unwrap();
+    // Block 0 expands the declared zero history: the parabola through (0, 0, 0.25) is
+    // v(t) = 0.25·t(t+1)/2 — a ride from 0, where a hold would sit flat at 0.25 from frame 0.
+    // t = 32/64: v = 0.25·(0.5·1.5)/2 = 0.09375, exact dyadic, so `==` is the honest compare.
+    let b0 = render(&mut ex, probe, 1);
+    assert_eq!(b0[0], 0.0, "starts at the zero history, not at the knot");
+    assert_eq!(b0[32], 0.09375, "the curve, hand-computed — a hold would read 0.25 here");
+    // Block 1's knots are (0, 0.25, 0.25): v(0) = prev exactly — the arrival contract.
+    let b1 = render(&mut ex, probe, 1);
+    assert_eq!(b1[0], 0.25, "block 1 starts at block 0's knot, exactly");
 }
 
 #[test]

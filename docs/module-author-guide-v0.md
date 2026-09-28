@@ -220,9 +220,11 @@ You do not implement connection logic; the host does, from one table
   `first` and `last` produce *different audio* — an undeclared choice would make a journal replay
   diverge from the original render.
 * A converter is only offered if it exists. `data → cv` is refused until `dat/mapper` ships in
-  Phase 5, rather than presenting a button that does nothing. `spline` interpolation is the same
-  rule seen from the rate table: the vocabulary promises it, the host has not implemented it, so
-  a graph whose receiver declares it is **refused at build in words** rather than silently held.
+  Phase 5, rather than presenting a button that does nothing. `spline` interpolation was the same
+  rule seen from the rate table — the vocabulary promised it while the host had not implemented
+  it, so a graph whose receiver declared it was **refused at build in words** rather than silently
+  held; since WO-008 increment 6 the host PERFORMS it (the parabola through the last three block
+  values, clamped to the declared range), and the refusal retired the day the promise was kept.
 
 ### 8.1 How your ports arrive in `process` (contract v1)
 
@@ -305,9 +307,13 @@ wrong reason and is then loosened until it passes is how a gate quietly stops te
   through `AudioCtx` at all: it is the control-thread `message()` door. `gpu` ports are first-party
   T1 only until Phase 5 decides the tier question; `ana/tap` and `dsp/scope` are the Phase-0
   modules that use them.
-* **`cv` fan-in still needs the explicit merge** (`util/mixer`, Phase 1, not yet built), and a cv
-  range mismatch still refuses naming `util/range` (Phase 1). `cv_interp = "spline"` is refused at
-  build until the host implements it — declare `hold` or `linear`.
+* **`cv` fan-in needs the explicit merge** — `util/mixer` IS the merge (since WO-014 increment
+  6, v0.2.0: four block-rate cv inputs with per-input gains, one summed `cv-out`; wire each
+  source to its own `cv-N` and feed the destination from `cv-out`). No implicit summing, ever. A
+  cv range mismatch still refuses naming `util/range` (Phase 1, not yet built).
+  **`cv_interp = "spline"` is PERFORMED** (WO-008 increment 6): the parabola through the last
+  three block values, `linear`'s arrival timing, clamped to your declared range — declare it
+  where a creased modulation ramp would be audible on your input path.
 * **Delay edges are audio-only.** A `block_delay`/`unit_delay` edge on a cv or event wire is
   refused; delayed control is WO-009's timing vocabulary.
 * **The musical clock is static** (`ctx.block.tick` stays 0): transport-synced modules (`mod/lfo`,

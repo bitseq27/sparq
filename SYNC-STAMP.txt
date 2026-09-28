@@ -10,9 +10,9 @@
 # bury the one line that matters. `fp` mirrors build.rs and build.bat - all three must change
 # together (defect #68).
 
-sync wo014-inc6
+sync wo008-inc6
 sent 2026-09-27
-fp 92f/1977302B
+fp 92f/1986012B
 
 af1a1cbe6e43a4f15677024ea4de61fe49047e1fdf1749e448b90259c2c1ba2b 96979 Cargo.lock
 c05fc99b725908db87877a18f43e2e0b00e8a41a22f9913c0569769b2d32d2c7 4187 Cargo.toml
@@ -52,7 +52,7 @@ f77a5dd387493de9818e325241bf794162d45a7c046a8d7a672dad01021f282e 13861 crates/sp
 523e915e32202eef12a17be5a16c08e67720a537f5ff02ee7e573ab892067fed 12505 crates/sparq-audio/src/dsp/noise.rs
 da8718ab44225591740a07ee250cc729d3e582037b18368bbe7920ef45639ba0 27583 crates/sparq-audio/src/dsp/osc.rs
 d453774af574cd6acf4d712375ae83c0f4cecd3db6a6f7442378e58036ba035a 35290 crates/sparq-audio/src/engine.rs
-2b28f157380f53798e473b574bd539d75b5cb808cb52c00f5fe5c6ba3d9d515e 101384 crates/sparq-audio/src/executor.rs
+c3028c2adfbbe506da911c1057f38d249cb695965d017f93064323e86d743852 102956 crates/sparq-audio/src/executor.rs
 e0147ea26a84a57fbbe8a7836b2e3813fb2ddcdd8261e13d53eb720e8defa758 12162 crates/sparq-audio/src/graph.rs
 22c2eeff0e5c96c63ad69760d478a6ad398aa03e9647708daa4e4c80c42fb1f1 3463 crates/sparq-audio/src/hash.rs
 0ded26ee018c6bf4c7bb4605b52747f83f3af109d734f46db8c0b05a9ec32e4a 1167 crates/sparq-audio/src/lib.rs
@@ -91,7 +91,7 @@ d380487c7e2c0d72e895613ef5270b45d777e94ceaf703b4a78704084053d7fd 360 crates/spar
 8b99d2c25923eeb54f702f4e12f8c04c8eae3224400e1d1e7e45322d1fb3cdd8 67467 crates/sparq-module-api/src/manifest.rs
 64d83f228182e14fbf55b87709ca487315bad5248fb42d038e25318bc94b3b45 37200 crates/sparq-module-api/src/module.rs
 7e4b1c988d12bdb7faa74d00e4ed32b5f5ee2a80fa50aa55631ac1cd4b0d5f7e 10227 crates/sparq-module-api/src/params.rs
-782a50029d3a517051aebc790a6964ed930912191bc628aa2d144039d0844be0 27978 crates/sparq-module-api/src/port.rs
+c13a1673caaa34206d800d884079724f741e0cbf7e44e7e9f9e454009175924c 35116 crates/sparq-module-api/src/port.rs
 a5b6d38dce8e8f676efaaf3fa43ef4f6546430934d53e1c903a560a618e6d49f 15342 crates/sparq-module-api/src/registry.rs
 8f64f8ff81c8f124ad133c5dc38e07006345f5694f418f7a6a7db532dd2385b0 44909 crates/sparq-module-api/src/toml.rs
 4537108241471f7baa87cc661cafbd9d40e1ac11bc8c7367e123729f69467079 689 crates/sparq-music/Cargo.toml
@@ -156,7 +156,7 @@ f5793a64da7cea947026d28d2a54c6ed896cae4a2859ede7bc482d47f18069aa 7426 scripts/te
 77bb4b0473daa032032c6330f0a4ccc49311a8a8ebf29fb4ec64d8c016747965 2089 scripts/ui.bat
 716c1f6c41af12740edf30decd4eba1a894703612d7bd5bf46048091948175ac 3898 scripts/verify.bat
 5988d9d952ff9ec7b5052ac1f5de5f4cbdbfac4aa6248b961709ddd5b39897c0 10123 tools/check_text_io.py
-e7e8c58e4de99269640afb5e6b1ee0eef01a0cb2487bce99a8a550e1bc85df63 20807 tools/log_check.py
+b6e4ca71e87f5c34c7eb8ffcc1cbfff99d3a066897c08a9e8c78774a1922cd48 20807 tools/log_check.py
 0f5a7fcb6e1325bd14b3978114c89d0d2e258a991c0cdf3afc8c136085f8c0b8 24723 tools/make_display_sheet.py
 c4895491771f27975ccba80064bf19f2b88c4d0c542b6204f3087b41848c88d3 8155 tools/module_docs.py
 cdf9fdadb76d14fa3915b65fae58572dbe6de3ac05c77afe27a72c716ec8583c 26831 tools/sync_check.py

@@ -44,7 +44,7 @@ Rules: every field below is either required or has a documented default. Unknown
 | `rate` | enum | if cv | `audio block` |
 | `range` | enum | if cv | `bipolar unipolar` |
 | `cv_reduce` | enum | no | `last first mean min max peak` (default `last`) — how an audio-rate `cv` source collapses to one value for this block-rate input. **Declared here, never chosen in code:** `first` and `last` produce different audio, so an undeclared choice would make a journal replay diverge from the original (ADR-007). Added by WO-007 decision G3, 2026-09-22 |
-| `cv_interp` | enum | no | `hold linear spline` (default `hold`) — how the host expands a block-rate `cv` source for this audio-rate input. The host performs it; the module only declares which. Added by WO-007 decision G4/Q3, 2026-09-22 |
+| `cv_interp` | enum | no | `hold linear spline` (default `hold`) — how the host expands a block-rate `cv` source for this audio-rate input. The host performs it; the module only declares which. Added by WO-007 decision G4/Q3, 2026-09-22. All three are performed since WO-008 increment 6: `spline` is the parabola through the last three block values, clamped to the declared range (the one compiled definition: `CvInterp` in `sparq-module-api/src/port.rs`) |
 | `event_kinds` | [enum] | if event | `ump osc trigger gate note clock` |
 | `data_schema` | `{id, version}` | if data | registered schema (§5) |
 | `read_policy` | [enum] | if data in | `latest interpolated window accumulate on_change` |

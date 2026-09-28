@@ -74,11 +74,122 @@ sparq devices — HAL backends in this build: null, wasapi-exclusive, wasapi-sha
 [null] null (virtual device)
   out [0] sparq Null Device (deterministic, 64 ch)  <- default
         rates 8000..384000 · exclusive 44100,48000,88200,96000,176400,192000,384000 · out 1..64 ch · in 0..64 ch · default 48000 Hz/2 ch
+===== test004 RUN 28/09/2026  9:01:26.28 on SATURN user bitseq =====
+ ================================================================
+ sparq test004 - WO-006 EXCLUSIVE acceptance run
+ increment 1.2: the exclusive ladder now speaks 24-in-32 - defect #77
+ at the end you send back ONE file: test004.log from the repo root
+ ================================================================
+ " "
+ [00] environment
+
+---- [RUN] os version ----
+
+Microsoft Windows [Version 10.0.19045.6216]
+---- [RC 0] os version ----
+ tree clean, no stray artefacts
+ " "
+ [01] PREP - same discipline as the last rounds:
+ 1. UMC 204HD plugged, powered, and the DEFAULT playback device - OUT 1-2.
+ 2. Its Properties, Advanced tab: BOTH exclusive-control boxes ticked.
+ 3. Every other audio app closed - an app holding the device turns
+ exclusive into a Busy refusal.
+ 4. Power plan HIGH PERFORMANCE, sleep NEVER, no downloads/updates queued.
+ 5. Monitors DOWN - every play step and the soak make sound.
+ Press any key when ready.
+ operator confirmed prep complete
+ " "
+ [02] build - the sync must have landed: the stamp's BYTE COUNT changes
+ from 75f/1218171B because wasapi.rs grew the ladder. If the guard
+ says stale and rebuilds, that is the zip-sync freshness trap - normal.
+
+---- [RUN] build via scripts\build.bat - includes the stamp guard ----
+sync_check: OK - 149 files match sync wo008-inc6, src 92f/1986012B
+ note: tree content changed since the last good build - the five first-party
+ fingerprints are cleared, so cargo cannot serve a crate from the last sync.
+ building sparq.exe (release, hal-wasapi + bootstrap-audio + ui-window) ...
+ first build takes a few minutes (wgpu is big); later builds are incremental.
+
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded smallvec v1.16.2
+  Downloaded zerocopy-derive v0.8.59
+  Downloaded zerocopy v0.8.59
+   Compiling smallvec v1.16.2
+   Compiling zerocopy v0.8.59
+   Compiling parking_lot_core v0.9.12
+   Compiling kurbo v0.13.1
+   Compiling sparq-kernel v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-kernel)
+   Compiling sparq-app v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-app)
+   Compiling zerocopy-derive v0.8.59
+   Compiling harfrust v0.12.0
+   Compiling icu_normalizer v2.3.0
+   Compiling parking_lot v0.12.5
+   Compiling sparq-module-api v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-module-api)
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling peniko v0.6.1
+   Compiling sparq-audio v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-audio)
+   Compiling sparq-music v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-music)
+   Compiling sparq-ui v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-ui)
+   Compiling url v2.5.8
+   Compiling vello_common v0.1.0
+   Compiling webbrowser v1.2.4
+   Compiling vello_cpu v0.1.0
+   Compiling half v2.7.1
+   Compiling ahash v0.8.12
+   Compiling epaint v0.36.2
+   Compiling naga v30.0.1
+   Compiling egui v0.36.2
+   Compiling egui-winit v0.36.2
+   Compiling wgpu-naga-bridge v30.0.1
+   Compiling wgpu-hal v30.0.1
+   Compiling wgpu-core-deps-windows-linux-android v30.0.1
+   Compiling wgpu-core v30.0.1
+   Compiling wgpu v30.0.1
+   Compiling egui-wgpu v0.36.2
+    Finished `release` profile [optimized + debuginfo] target(s) in 1m 03s
+ stamp guard: sources 92f/1986012B  -  binary 92f/1986012B
+
+sparq 0.0.0-phase0 · newest source 20723 d since epoch · src 92f/1986012B
+  module api v0 (unfrozen) · kernel 0.0.0-phase0
+
+  If that source stamp is older than your last sync, this binary is stale.
+  Fix: run scripts\build.bat, or delete target\release\sparq.exe.
+
+ built: Q:\morphosis\code\sparq\target\release\sparq.exe
+ size : 9888768 bytes
+
+ next:  scripts\devices.bat   then   scripts\run.bat
+
+ log saved to Q:\morphosis\code\sparq\scripts\..\logs\build.log
+---- [RC 0] build via scripts\build.bat - includes the stamp guard ----
+
+---- [RUN] version stamp ----
+sparq 0.0.0-phase0 · newest source 20723 d since epoch · src 92f/1986012B
+  module api v0 (unfrozen) · kernel 0.0.0-phase0
+
+  If that source stamp is older than your last sync, this binary is stale.
+  Fix: run scripts\build.bat, or delete target\release\sparq.exe.
+---- [RC 0] version stamp ----
+ " "
+ [03] capabilities - CHECKPOINT: the Behringer endpoints should now list
+ exclusive rates instead of "exclusive none". If they still say none,
+ the four-rung ladder found no format the driver accepts - the [04]
+ probe table will say exactly which HRESULT each rung got.
+
+---- [RUN] devices --caps ----
+sparq devices — HAL backends in this build: null, wasapi-exclusive, wasapi-shared
+  (asio: not compiled in — WO-006 increment 2; requesting it will say so, not fake it)
+
+[null] null (virtual device)
+  out [0] sparq Null Device (deterministic, 64 ch)  <- default
+        rates 8000..384000 · exclusive 44100,48000,88200,96000,176400,192000,384000 · out 1..64 ch · in 0..64 ch · default 48000 Hz/2 ch
         event-driven true · full-duplex true · f32 native true · hw period 1.000 ms
 
 [wasapi-exclusive] WASAPI exclusive (event-driven)
 sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
-  out [0] <endpoint 3>  <- default
+  out [0] <endpoint 5>  <- default
         id: {0.0.0.00000000}.{d8db3e5b-5bef-49f3-97cf-1dde49343f42}
         rates 96000 · exclusive 96000 · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
         event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
@@ -90,17 +201,29 @@ sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0)
         id: {0.0.0.00000000}.{593c4844-1f18-4eda-8318-5b50490b2b57}
         rates 96000 · exclusive 96000 · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
         event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
-  out [3] <endpoint 0>
-        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+  out [3] <endpoint 3>
+        id: {0.0.0.00000000}.{8ee2e34b-7ecf-4cbf-a714-3ca5e9e6f959}
         rates 48000 · exclusive 48000 · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
         event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
   out [4] <endpoint 4>
+        id: {0.0.0.00000000}.{d6c329d5-8a6d-478e-a36f-713832c58d7c}
+        rates 48000 · exclusive 48000 · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [5] <endpoint 0>
+        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+        rates 48000 · exclusive 48000 · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [6] <endpoint 6>
+        id: {0.0.0.00000000}.{fe8ad54d-9cd4-4dd3-aefb-d15c309d7b4a}
+        rates 48000 · exclusive 48000 · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [7] <endpoint 7>
         id: {0.0.0.00000000}.{fed48ab8-f7ab-4474-80a0-b368fd74b809}
         rates 48000 · exclusive 48000 · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
         event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
 
 [wasapi-shared] WASAPI shared (event-driven)
-  out [0] <endpoint 3>  <- default
+  out [0] <endpoint 5>  <- default
         id: {0.0.0.00000000}.{d8db3e5b-5bef-49f3-97cf-1dde49343f42}
         rates 96000 · exclusive none · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
         event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
@@ -112,11 +235,23 @@ sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0)
         id: {0.0.0.00000000}.{593c4844-1f18-4eda-8318-5b50490b2b57}
         rates 96000 · exclusive none · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
         event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
-  out [3] <endpoint 0>
-        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+  out [3] <endpoint 3>
+        id: {0.0.0.00000000}.{8ee2e34b-7ecf-4cbf-a714-3ca5e9e6f959}
         rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
         event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
   out [4] <endpoint 4>
+        id: {0.0.0.00000000}.{d6c329d5-8a6d-478e-a36f-713832c58d7c}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [5] <endpoint 0>
+        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [6] <endpoint 6>
+        id: {0.0.0.00000000}.{fe8ad54d-9cd4-4dd3-aefb-d15c309d7b4a}
+        rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
+        event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
+  out [7] <endpoint 7>
         id: {0.0.0.00000000}.{fed48ab8-f7ab-4474-80a0-b368fd74b809}
         rates 48000 · exclusive none · out 2..2 ch · in 0..0 ch · default 48000 Hz/2 ch
         event-driven true · full-duplex false · f32 native true · hw period 10.000 ms
@@ -125,25 +260,533 @@ sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0)
  " "
  [04] WASAPI EXCLUSIVE playback - a 10 s 220 Hz tone at -12 dB.
  The open line names the rung: f32, i24-in-32, i32 or i16.
- For the UMC 204HD the expectation is i24-in-32 with conversion.
+ For the UMC 204HD the expectation is i24-in-32 with conversion,
+ and a device period of 10.00 ms with the 64-frame sparq block
+ riding the FIFO beneath it - that pair is the defect 79 fix.
  Press any key when ready.
 
 ---- [RUN] play wasapi-exclusive 10s ----
 sparq play · HAL path (WO-006) · backend wasapi-exclusive
-  sparq       0.0.0-phase0 · newest source 20720 d since epoch · src 75f/1226586B
+  sparq       0.0.0-phase0 · newest source 20723 d since epoch · src 92f/1986012B
 
 sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
   output devices:
-    [0] <endpoint 3> <- default
+    [0] <endpoint 5> <- default
     [1] <endpoint 1>
     [2] <endpoint 2>
-    [3] <endpoint 0>
+    [3] <endpoint 3>
     [4] <endpoint 4>
-  using       [0] <endpoint 3>
+    [5] <endpoint 0>
+    [6] <endpoint 6>
+    [7] <endpoint 7>
+  using       [0] <endpoint 5>
   adjusted    rate 48000 Hz -> 96000 Hz (this device does not list 48000 Hz; `sparq devices --caps` shows what it does)
-sparq: open failed: device error: Initialize (exclusive): HRESULT 0x88890020
----- [RC 2] play wasapi-exclusive 10s ----
+sparq hal[wasapi-exclusive]: opened `<endpoint 5>` — 96000 Hz · 2 ch · i24-in-32 (converting) · device period 288 fr (3.00 ms) · sparq block 64 fr
+  NEGOTIATED  96000 Hz · 2 ch · block 64 (asked 48000 Hz · 2 ch) — the device gets what it asked for, and this line is the proof
+  latency     out 3.67 ms · in 0.00 ms · roundtrip 3.67 ms (est; hw period 3.00 ms, block 0.67 ms)
+  signal      syn/sine 220.00 Hz @ 0.500 -> util/gain -12.0 dB -> out
+
+  ] / [  gain +1/-1 dB     f / F  freq x2 / /2     m  mute     q  quit
+  (with --seconds, key input is disabled and a status line prints every 2 s)
+
+  rt setup    mmcss priority NO-ideal-proc workset
+
+  [t+  2.0s] blocks 1590 · xrun 32 · overrun 0 · late 32 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 33.02 ms · drift -499514 ppm SUSPECT
+  [t+  4.0s] blocks 3133 · xrun 64 · overrun 0 · late 64 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 33.24 ms · drift -495151 ppm SUSPECT
+  [t+  6.0s] blocks 4672 · xrun 96 · overrun 0 · late 96 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 33.24 ms · drift -493729 ppm SUSPECT
+  [t+  8.1s] blocks 6216 · xrun 128 · overrun 0 · late 128 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 33.24 ms · drift -492891 ppm SUSPECT
+
+  final state Stopped
+  blocks       7732
+  xruns        159 (late wakes 159, budget overruns 0, device errors 0)
+  callback     p50 2.0 µs · p99 4.1 µs · max 30.0 µs   (histogram buckets are powers of two: values are upper bounds)
+  jitter       min 600 ns · avg 5.84 ms · max 33.24 ms over 1718 wakes
+  drift        -491656.33 ppm device clock vs wall — SUSPECT: beyond ±10000 ppm this is not a clock error but an implausible clock (virtual/RDP endpoint); trust the throughput and jitter numbers instead
+  allocations  0 on the audio path
+  rt setup     mmcss priority NO-ideal-proc workset
+
+  latency     out 3.67 ms · in 0.00 ms · roundtrip 3.67 ms (est; hw period 3.00 ms, block 0.67 ms)
+
+play: NOT CLEAN — xruns 159, allocs 0, dev-err 0, state Stopped. Copy this whole output into a message back.
+---- [RC 1] play wasapi-exclusive 10s ----
  HINT: the probe table in the error names each rung's HRESULT.
  Busy means another app holds the device; Format means no rung fits.
+ A device-period table means no period fit - defect 79, increment 1.3.
  Send the log back either way - the table IS the diagnosis.
  did you hear a clean 10-second tone [y/n]
+ answer: N
+ " "
+ [05] UNPLUG TEST on wasapi-shared - the criterion passed in shared mode in
+ test002; exclusive exercises the same Removed path on a stream the
+ driver owns outright. A 30-second tone starts on the next step.
+ ABOUT 10 SECONDS AFTER IT STARTS, unplug the USB interface.
+ Press any key when ready - then count 10 seconds from the tone and pull.
+
+---- [RUN] unplug test - 30s on wasapi-shared, unplugged at about 10s ----
+sparq play · HAL path (WO-006) · backend wasapi-shared
+  sparq       0.0.0-phase0 · newest source 20723 d since epoch · src 92f/1986012B
+
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  output devices:
+    [0] <endpoint 5> <- default
+    [1] <endpoint 1>
+    [2] <endpoint 2>
+    [3] <endpoint 3>
+    [4] <endpoint 4>
+    [5] <endpoint 0>
+    [6] <endpoint 6>
+    [7] <endpoint 7>
+  using       [0] <endpoint 5>
+  adjusted    rate 48000 Hz -> 96000 Hz (this device does not list 48000 Hz; `sparq devices --caps` shows what it does)
+sparq hal[wasapi-shared]: opened `<endpoint 5>` — 96000 Hz · 2 ch · f32 · device period 2112 fr (22.00 ms) · sparq block 64 fr
+  NEGOTIATED  96000 Hz · 2 ch · block 64 (asked 48000 Hz · 2 ch) — the device gets what it asked for, and this line is the proof
+  latency     out 22.67 ms · in 0.00 ms · roundtrip 22.67 ms (est; hw period 22.00 ms, block 0.67 ms)
+  signal      syn/sine 220.00 Hz @ 0.500 -> util/gain -12.0 dB -> out
+
+  ] / [  gain +1/-1 dB     f / F  freq x2 / /2     m  mute     q  quit
+  (with --seconds, key input is disabled and a status line prints every 2 s)
+
+  rt setup    mmcss priority NO-ideal-proc workset
+
+  [t+  2.0s] blocks 3097 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.40 ms · drift +1114964 ppm SUSPECT
+  [t+  4.0s] blocks 6112 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.40 ms · drift +1156550 ppm SUSPECT
+  [t+  6.0s] blocks 9142 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.40 ms · drift +1170871 ppm SUSPECT
+  [t+  8.1s] blocks 12157 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.40 ms · drift +1177795 ppm SUSPECT
+
+  stream entered Removed: the endpoint was invalidated (unplugged, or its driver reset) — re-enumerate (`sparq devices`) and open again
+
+  final state Removed
+  blocks       14002
+  xruns        0 (late wakes 0, budget overruns 0, device errors 1)
+  callback     p50 2.0 µs · p99 4.1 µs · max 9.0 µs   (histogram buckets are powers of two: values are upper bounds)
+  jitter       min 900 ns · avg 10.11 ms · max 18.48 ms over 950 wakes
+  drift        +1157061.02 ppm device clock vs wall — SUSPECT: beyond ±10000 ppm this is not a clock error but an implausible clock (virtual/RDP endpoint); trust the throughput and jitter numbers instead
+  allocations  0 on the audio path
+  rt setup     mmcss priority NO-ideal-proc workset
+
+  latency     out 22.67 ms · in 0.00 ms · roundtrip 22.67 ms (est; hw period 22.00 ms, block 0.67 ms)
+
+play: NOT CLEAN — xruns 0, allocs 0, dev-err 1, state Removed. Copy this whole output into a message back.
+---- [RC 1] unplug test - 30s on wasapi-shared, unplugged at about 10s ----
+ rc was 1 - the TEXT decides: Removed state, clean stop, no crash.
+ " "
+ NOW: plug the interface back in, wait 10 seconds, press any key.
+ interface re-plugged, recovery step starting
+ " "
+ [06] RECOVERY - 10 s on wasapi-shared must work again after re-plug
+
+---- [RUN] play 10s on wasapi-shared after re-plug ----
+sparq play · HAL path (WO-006) · backend wasapi-shared
+  sparq       0.0.0-phase0 · newest source 20723 d since epoch · src 92f/1986012B
+
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  output devices:
+    [0] <endpoint 5> <- default
+    [1] <endpoint 1>
+    [2] <endpoint 2>
+    [3] <endpoint 3>
+    [4] <endpoint 4>
+    [5] <endpoint 0>
+    [6] <endpoint 6>
+    [7] <endpoint 7>
+  using       [0] <endpoint 5>
+  adjusted    rate 48000 Hz -> 96000 Hz (this device does not list 48000 Hz; `sparq devices --caps` shows what it does)
+sparq hal[wasapi-shared]: opened `<endpoint 5>` — 96000 Hz · 2 ch · f32 · device period 2112 fr (22.00 ms) · sparq block 64 fr
+  NEGOTIATED  96000 Hz · 2 ch · block 64 (asked 48000 Hz · 2 ch) — the device gets what it asked for, and this line is the proof
+  latency     out 22.67 ms · in 0.00 ms · roundtrip 22.67 ms (est; hw period 22.00 ms, block 0.67 ms)
+  signal      syn/sine 220.00 Hz @ 0.500 -> util/gain -12.0 dB -> out
+
+  ] / [  gain +1/-1 dB     f / F  freq x2 / /2     m  mute     q  quit
+  (with --seconds, key input is disabled and a status line prints every 2 s)
+
+  rt setup    mmcss priority NO-ideal-proc workset
+
+  [t+  2.0s] blocks 3097 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 13.20 ms · drift +754304 ppm SUSPECT
+  [t+  4.0s] blocks 6127 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 13.20 ms · drift +952029 ppm SUSPECT
+  [t+  6.0s] blocks 9142 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 13.20 ms · drift +1027892 ppm SUSPECT
+  [t+  8.1s] blocks 12172 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 13.20 ms · drift +1068218 ppm SUSPECT
+
+  final state Stopped
+  blocks       15112
+  xruns        0 (late wakes 0, budget overruns 0, device errors 0)
+  callback     p50 2.0 µs · p99 4.1 µs · max 16.4 µs   (histogram buckets are powers of two: values are upper bounds)
+  jitter       min 800 ns · avg 9.99 ms · max 13.20 ms over 1004 wakes
+  drift        +1092719.24 ppm device clock vs wall — SUSPECT: beyond ±10000 ppm this is not a clock error but an implausible clock (virtual/RDP endpoint); trust the throughput and jitter numbers instead
+  allocations  0 on the audio path
+  rt setup     mmcss priority NO-ideal-proc workset
+
+  latency     out 22.67 ms · in 0.00 ms · roundtrip 22.67 ms (est; hw period 22.00 ms, block 0.67 ms)
+
+play: PASS (0 xruns, 0 allocations, clean stop)
+---- [RC 0] play 10s on wasapi-shared after re-plug ----
+ did you hear the recovery tone [y/n]
+ answer: Y
+ " "
+ [07] exclusive did not open, so this is the SHARED rehearsal again, not
+ the acceptance run. The log says which - honesty over vanity.
+ It MAKES SOUND the whole run; the machine must not sleep.
+ soaking 120 min at 96000 Hz / 64 on wasapi-shared - starting now.
+sparq soak · HAL backend `wasapi-shared` · device `<endpoint 5>`
+  negotiated  96000 Hz · 2 ch · block 64 (budget 0.667 ms)
+  target      120 min paced · report every 30 s · heavy dummy load: 0 round(s)/block
+
+  rt setup    mmcss priority NO-ideal-proc workset
+
+  [t+    30s] blocks 45157 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.78 ms · drift +1194003 ppm SUSPECT
+  [t+    60s] blocks 90232 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.78 ms · drift +1196821 ppm SUSPECT
+  [t+    90s] blocks 135292 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.78 ms · drift +1197761 ppm SUSPECT
+  [t+   120s] blocks 180367 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.78 ms · drift +1198232 ppm SUSPECT
+  [t+   150s] blocks 225442 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.78 ms · drift +1198511 ppm SUSPECT
+  [t+   180s] blocks 270502 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.78 ms · drift +1198703 ppm SUSPECT
+  [t+   210s] blocks 315577 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.78 ms · drift +1198837 ppm SUSPECT
+  [t+   240s] blocks 360652 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.78 ms · drift +1198938 ppm SUSPECT
+  [t+   270s] blocks 405712 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.78 ms · drift +1199017 ppm SUSPECT
+  [t+   301s] blocks 450802 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.78 ms · drift +1199080 ppm SUSPECT
+  [t+   331s] blocks 495862 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 11.78 ms · drift +1199131 ppm SUSPECT
+  [t+   361s] blocks 540952 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199174 ppm SUSPECT
+  [t+   391s] blocks 586027 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199210 ppm SUSPECT
+  [t+   421s] blocks 631102 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199241 ppm SUSPECT
+  [t+   451s] blocks 676177 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199268 ppm SUSPECT
+  [t+   481s] blocks 721252 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199292 ppm SUSPECT
+  [t+   511s] blocks 766312 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199312 ppm SUSPECT
+  [t+   541s] blocks 811372 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199331 ppm SUSPECT
+  [t+   571s] blocks 856432 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199347 ppm SUSPECT
+  [t+   601s] blocks 901507 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199366 ppm SUSPECT
+  [t+   631s] blocks 946582 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199378 ppm SUSPECT
+  [t+   661s] blocks 991642 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199391 ppm SUSPECT
+  [t+   691s] blocks 1036717 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199402 ppm SUSPECT
+  [t+   721s] blocks 1081777 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199412 ppm SUSPECT
+  [t+   751s] blocks 1126852 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199422 ppm SUSPECT
+  [t+   781s] blocks 1171912 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199430 ppm SUSPECT
+  [t+   811s] blocks 1216972 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199438 ppm SUSPECT
+  [t+   841s] blocks 1262047 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199445 ppm SUSPECT
+  [t+   871s] blocks 1307107 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199452 ppm SUSPECT
+  [t+   902s] blocks 1352167 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199458 ppm SUSPECT
+  [t+   932s] blocks 1397242 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199464 ppm SUSPECT
+  [t+   962s] blocks 1442302 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199471 ppm SUSPECT
+  [t+   992s] blocks 1487377 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199476 ppm SUSPECT
+  [t+  1022s] blocks 1532437 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199481 ppm SUSPECT
+  [t+  1052s] blocks 1577497 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199486 ppm SUSPECT
+  [t+  1082s] blocks 1622557 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199490 ppm SUSPECT
+  [t+  1112s] blocks 1667632 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199494 ppm SUSPECT
+  [t+  1142s] blocks 1712692 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199500 ppm SUSPECT
+  [t+  1172s] blocks 1757767 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199503 ppm SUSPECT
+  [t+  1202s] blocks 1802827 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199507 ppm SUSPECT
+  [t+  1232s] blocks 1847902 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199511 ppm SUSPECT
+  [t+  1262s] blocks 1892962 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199514 ppm SUSPECT
+  [t+  1292s] blocks 1938037 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199517 ppm SUSPECT
+  [t+  1322s] blocks 1983097 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199519 ppm SUSPECT
+  [t+  1352s] blocks 2028172 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199522 ppm SUSPECT
+  [t+  1382s] blocks 2073232 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199525 ppm SUSPECT
+  [t+  1412s] blocks 2118292 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199528 ppm SUSPECT
+  [t+  1442s] blocks 2163367 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199530 ppm SUSPECT
+  [t+  1472s] blocks 2208427 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199532 ppm SUSPECT
+  [t+  1503s] blocks 2253502 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199535 ppm SUSPECT
+  [t+  1533s] blocks 2298562 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199537 ppm SUSPECT
+  [t+  1563s] blocks 2343637 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199539 ppm SUSPECT
+  [t+  1593s] blocks 2388697 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199541 ppm SUSPECT
+  [t+  1623s] blocks 2433772 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 4.1 µs · jitter 12.04 ms · drift +1199543 ppm SUSPECT
+  [t+  1653s] blocks 2478832 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199545 ppm SUSPECT
+  [t+  1683s] blocks 2523907 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199547 ppm SUSPECT
+  [t+  1713s] blocks 2568967 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199549 ppm SUSPECT
+  [t+  1743s] blocks 2614027 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199551 ppm SUSPECT
+  [t+  1773s] blocks 2659102 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199553 ppm SUSPECT
+  [t+  1803s] blocks 2704162 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199554 ppm SUSPECT
+  [t+  1833s] blocks 2749222 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199556 ppm SUSPECT
+  [t+  1863s] blocks 2794312 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199557 ppm SUSPECT
+  [t+  1893s] blocks 2839372 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199559 ppm SUSPECT
+  [t+  1923s] blocks 2884432 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199560 ppm SUSPECT
+  [t+  1953s] blocks 2929522 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199561 ppm SUSPECT
+  [t+  1983s] blocks 2974612 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199563 ppm SUSPECT
+  [t+  2013s] blocks 3019717 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199564 ppm SUSPECT
+  [t+  2043s] blocks 3064807 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199565 ppm SUSPECT
+  [t+  2074s] blocks 3109897 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199566 ppm SUSPECT
+  [t+  2104s] blocks 3155002 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199567 ppm SUSPECT
+  [t+  2134s] blocks 3200092 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199569 ppm SUSPECT
+  [t+  2164s] blocks 3245182 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199570 ppm SUSPECT
+  [t+  2194s] blocks 3290272 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199571 ppm SUSPECT
+  [t+  2224s] blocks 3335362 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199572 ppm SUSPECT
+  [t+  2254s] blocks 3380467 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199573 ppm SUSPECT
+  [t+  2284s] blocks 3425557 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199575 ppm SUSPECT
+  [t+  2314s] blocks 3470647 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199575 ppm SUSPECT
+  [t+  2344s] blocks 3515737 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199576 ppm SUSPECT
+  [t+  2374s] blocks 3560842 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199577 ppm SUSPECT
+  [t+  2404s] blocks 3605932 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199578 ppm SUSPECT
+  [t+  2434s] blocks 3651022 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199579 ppm SUSPECT
+  [t+  2464s] blocks 3696127 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199580 ppm SUSPECT
+  [t+  2494s] blocks 3741217 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199580 ppm SUSPECT
+  [t+  2525s] blocks 3786307 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199581 ppm SUSPECT
+  [t+  2555s] blocks 3831412 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199582 ppm SUSPECT
+  [t+  2585s] blocks 3876517 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199583 ppm SUSPECT
+  [t+  2615s] blocks 3921607 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199584 ppm SUSPECT
+  [t+  2645s] blocks 3966697 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199584 ppm SUSPECT
+  [t+  2675s] blocks 4011787 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199585 ppm SUSPECT
+  [t+  2705s] blocks 4056892 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199586 ppm SUSPECT
+  [t+  2735s] blocks 4101982 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199586 ppm SUSPECT
+  [t+  2765s] blocks 4147072 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199587 ppm SUSPECT
+  [t+  2795s] blocks 4192177 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199587 ppm SUSPECT
+  [t+  2825s] blocks 4237267 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199588 ppm SUSPECT
+  [t+  2855s] blocks 4282357 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199589 ppm SUSPECT
+  [t+  2885s] blocks 4327447 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199589 ppm SUSPECT
+  [t+  2915s] blocks 4372537 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199591 ppm SUSPECT
+  [t+  2945s] blocks 4417626 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199591 ppm SUSPECT
+  [t+  2976s] blocks 4462702 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199592 ppm SUSPECT
+  [t+  3006s] blocks 4507807 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199592 ppm SUSPECT
+  [t+  3036s] blocks 4552897 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199593 ppm SUSPECT
+  [t+  3066s] blocks 4597987 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199593 ppm SUSPECT
+  [t+  3096s] blocks 4643092 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199594 ppm SUSPECT
+  [t+  3126s] blocks 4688182 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199594 ppm SUSPECT
+  [t+  3156s] blocks 4733272 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199595 ppm SUSPECT
+  [t+  3186s] blocks 4778362 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199595 ppm SUSPECT
+  [t+  3216s] blocks 4823452 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199596 ppm SUSPECT
+  [t+  3246s] blocks 4868542 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199596 ppm SUSPECT
+  [t+  3276s] blocks 4913647 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199597 ppm SUSPECT
+  [t+  3306s] blocks 4958737 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199597 ppm SUSPECT
+  [t+  3336s] blocks 5003842 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199598 ppm SUSPECT
+  [t+  3366s] blocks 5048932 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199598 ppm SUSPECT
+  [t+  3397s] blocks 5094007 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199598 ppm SUSPECT
+  [t+  3427s] blocks 5139112 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199599 ppm SUSPECT
+  [t+  3457s] blocks 5184202 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199599 ppm SUSPECT
+  [t+  3487s] blocks 5229307 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199600 ppm SUSPECT
+  [t+  3517s] blocks 5274397 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199600 ppm SUSPECT
+  [t+  3547s] blocks 5319487 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199600 ppm SUSPECT
+  [t+  3577s] blocks 5364592 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199601 ppm SUSPECT
+  [t+  3607s] blocks 5409682 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199602 ppm SUSPECT
+  [t+  3637s] blocks 5454772 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199602 ppm SUSPECT
+  [t+  3667s] blocks 5499877 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199602 ppm SUSPECT
+  [t+  3697s] blocks 5544967 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199603 ppm SUSPECT
+  [t+  3727s] blocks 5590072 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199603 ppm SUSPECT
+  [t+  3757s] blocks 5635162 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199603 ppm SUSPECT
+  [t+  3787s] blocks 5680252 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199604 ppm SUSPECT
+  [t+  3817s] blocks 5725342 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199604 ppm SUSPECT
+  [t+  3848s] blocks 5770447 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199604 ppm SUSPECT
+  [t+  3878s] blocks 5815537 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199605 ppm SUSPECT
+  [t+  3908s] blocks 5860642 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199605 ppm SUSPECT
+  [t+  3938s] blocks 5905732 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199605 ppm SUSPECT
+  [t+  3968s] blocks 5950822 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199606 ppm SUSPECT
+  [t+  3998s] blocks 5995927 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199606 ppm SUSPECT
+  [t+  4028s] blocks 6041017 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199606 ppm SUSPECT
+  [t+  4058s] blocks 6086107 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199607 ppm SUSPECT
+  [t+  4088s] blocks 6131197 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199607 ppm SUSPECT
+  [t+  4118s] blocks 6176287 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199607 ppm SUSPECT
+  [t+  4148s] blocks 6221392 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199607 ppm SUSPECT
+  [t+  4178s] blocks 6266482 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199608 ppm SUSPECT
+  [t+  4208s] blocks 6311572 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199608 ppm SUSPECT
+  [t+  4238s] blocks 6356662 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199608 ppm SUSPECT
+  [t+  4268s] blocks 6401767 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199608 ppm SUSPECT
+  [t+  4299s] blocks 6446857 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199609 ppm SUSPECT
+  [t+  4329s] blocks 6491962 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199610 ppm SUSPECT
+  [t+  4359s] blocks 6537052 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199610 ppm SUSPECT
+  [t+  4389s] blocks 6582142 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199610 ppm SUSPECT
+  [t+  4419s] blocks 6627232 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199610 ppm SUSPECT
+  [t+  4449s] blocks 6672337 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199610 ppm SUSPECT
+  [t+  4479s] blocks 6717427 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199611 ppm SUSPECT
+  [t+  4509s] blocks 6762532 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199611 ppm SUSPECT
+  [t+  4539s] blocks 6807622 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199611 ppm SUSPECT
+  [t+  4569s] blocks 6852712 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199611 ppm SUSPECT
+  [t+  4599s] blocks 6897802 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199612 ppm SUSPECT
+  [t+  4629s] blocks 6942907 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199612 ppm SUSPECT
+  [t+  4659s] blocks 6987997 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199612 ppm SUSPECT
+  [t+  4689s] blocks 7033087 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199612 ppm SUSPECT
+  [t+  4719s] blocks 7078177 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199613 ppm SUSPECT
+  [t+  4750s] blocks 7123282 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199613 ppm SUSPECT
+  [t+  4780s] blocks 7168372 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199613 ppm SUSPECT
+  [t+  4810s] blocks 7213477 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199613 ppm SUSPECT
+  [t+  4840s] blocks 7258567 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199613 ppm SUSPECT
+  [t+  4870s] blocks 7303657 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199614 ppm SUSPECT
+  [t+  4900s] blocks 7348762 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199614 ppm SUSPECT
+  [t+  4930s] blocks 7393852 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199614 ppm SUSPECT
+  [t+  4960s] blocks 7438942 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199614 ppm SUSPECT
+  [t+  4990s] blocks 7484047 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199614 ppm SUSPECT
+  [t+  5020s] blocks 7529137 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199615 ppm SUSPECT
+  [t+  5050s] blocks 7574242 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199615 ppm SUSPECT
+  [t+  5080s] blocks 7619332 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199615 ppm SUSPECT
+  [t+  5110s] blocks 7664422 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199615 ppm SUSPECT
+  [t+  5140s] blocks 7709527 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199616 ppm SUSPECT
+  [t+  5171s] blocks 7754617 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199616 ppm SUSPECT
+  [t+  5201s] blocks 7799707 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199616 ppm SUSPECT
+  [t+  5231s] blocks 7844797 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199616 ppm SUSPECT
+  [t+  5261s] blocks 7889902 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199616 ppm SUSPECT
+  [t+  5291s] blocks 7934992 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199616 ppm SUSPECT
+  [t+  5321s] blocks 7980082 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199617 ppm SUSPECT
+  [t+  5351s] blocks 8025187 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199617 ppm SUSPECT
+  [t+  5381s] blocks 8070277 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199617 ppm SUSPECT
+  [t+  5411s] blocks 8115380 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199617 ppm SUSPECT
+  [t+  5441s] blocks 8160472 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199617 ppm SUSPECT
+  [t+  5471s] blocks 8205562 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199617 ppm SUSPECT
+  [t+  5501s] blocks 8250652 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199618 ppm SUSPECT
+  [t+  5531s] blocks 8295757 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199618 ppm SUSPECT
+  [t+  5561s] blocks 8340847 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199618 ppm SUSPECT
+  [t+  5591s] blocks 8385937 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199618 ppm SUSPECT
+  [t+  5622s] blocks 8431027 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199618 ppm SUSPECT
+  [t+  5652s] blocks 8476132 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199618 ppm SUSPECT
+  [t+  5682s] blocks 8521222 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199618 ppm SUSPECT
+  [t+  5712s] blocks 8566312 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199619 ppm SUSPECT
+  [t+  5742s] blocks 8611417 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199619 ppm SUSPECT
+  [t+  5772s] blocks 8656507 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199619 ppm SUSPECT
+  [t+  5802s] blocks 8701597 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199619 ppm SUSPECT
+  [t+  5832s] blocks 8746687 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199620 ppm SUSPECT
+  [t+  5862s] blocks 8791792 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199620 ppm SUSPECT
+  [t+  5892s] blocks 8836882 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199620 ppm SUSPECT
+  [t+  5922s] blocks 8881972 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199620 ppm SUSPECT
+  [t+  5952s] blocks 8927077 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199620 ppm SUSPECT
+  [t+  5982s] blocks 8972167 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199620 ppm SUSPECT
+  [t+  6012s] blocks 9017272 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199620 ppm SUSPECT
+  [t+  6042s] blocks 9062362 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199620 ppm SUSPECT
+  [t+  6073s] blocks 9107452 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199621 ppm SUSPECT
+  [t+  6103s] blocks 9152542 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199621 ppm SUSPECT
+  [t+  6133s] blocks 9197647 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199621 ppm SUSPECT
+  [t+  6163s] blocks 9242737 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199621 ppm SUSPECT
+  [t+  6193s] blocks 9287842 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199621 ppm SUSPECT
+  [t+  6223s] blocks 9332932 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199621 ppm SUSPECT
+  [t+  6253s] blocks 9378022 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199621 ppm SUSPECT
+  [t+  6283s] blocks 9423112 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199621 ppm SUSPECT
+  [t+  6313s] blocks 9468202 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199622 ppm SUSPECT
+  [t+  6343s] blocks 9513307 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199622 ppm SUSPECT
+  [t+  6373s] blocks 9558397 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199622 ppm SUSPECT
+  [t+  6403s] blocks 9603487 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199622 ppm SUSPECT
+  [t+  6433s] blocks 9648577 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199622 ppm SUSPECT
+  [t+  6463s] blocks 9693682 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199622 ppm SUSPECT
+  [t+  6494s] blocks 9738772 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199623 ppm SUSPECT
+  [t+  6524s] blocks 9783847 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199623 ppm SUSPECT
+  [t+  6554s] blocks 9828937 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199623 ppm SUSPECT
+  [t+  6584s] blocks 9874027 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199623 ppm SUSPECT
+  [t+  6614s] blocks 9919117 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199623 ppm SUSPECT
+  [t+  6644s] blocks 9964222 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199623 ppm SUSPECT
+  [t+  6674s] blocks 10009312 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199623 ppm SUSPECT
+  [t+  6704s] blocks 10054402 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199623 ppm SUSPECT
+  [t+  6734s] blocks 10099507 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199623 ppm SUSPECT
+  [t+  6764s] blocks 10144597 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199623 ppm SUSPECT
+  [t+  6794s] blocks 10189687 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199624 ppm SUSPECT
+  [t+  6824s] blocks 10234777 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199624 ppm SUSPECT
+  [t+  6854s] blocks 10279867 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199624 ppm SUSPECT
+  [t+  6884s] blocks 10324957 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199624 ppm SUSPECT
+  [t+  6914s] blocks 10370062 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199624 ppm SUSPECT
+  [t+  6944s] blocks 10415152 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199624 ppm SUSPECT
+  [t+  6975s] blocks 10460257 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199624 ppm SUSPECT
+  [t+  7005s] blocks 10505347 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199624 ppm SUSPECT
+  [t+  7035s] blocks 10550452 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199624 ppm SUSPECT
+  [t+  7065s] blocks 10595542 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199624 ppm SUSPECT
+  [t+  7095s] blocks 10640632 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199625 ppm SUSPECT
+  [t+  7125s] blocks 10685737 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199625 ppm SUSPECT
+  [t+  7155s] blocks 10730827 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199625 ppm SUSPECT
+  [t+  7185s] blocks 10775932 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2.0 µs · jitter 12.04 ms · drift +1199625 ppm SUSPECT
+
+  blocks       10798477
+  xruns        0 (late wakes 0, budget overruns 0, device errors 0)
+  callback     p50 2.0 µs · p99 2.0 µs · max 278.3 µs   (histogram buckets are powers of two: values are upper bounds)
+  jitter       min 900 ns · avg 10.00 ms · max 12.04 ms over 719895 wakes
+  drift        +1199624.95 ppm device clock vs wall — SUSPECT: beyond ±10000 ppm this is not a clock error but an implausible clock (virtual/RDP endpoint); trust the throughput and jitter numbers instead
+  allocations  0 on the audio path
+  rt setup     mmcss priority NO-ideal-proc workset
+
+  block-time histogram (powers-of-two buckets, counts):
+     256 ns    512 ns | █ 88571
+     512 ns    1.0 µs | ██████████████████████████████ 4636376
+     1.0 µs    2.0 µs | ████████████████████████████████████████ 6042580
+     2.0 µs    4.1 µs | █ 28098
+     4.1 µs    8.2 µs | █ 2375
+     8.2 µs   16.4 µs | █ 396
+    16.4 µs   32.8 µs | █ 71
+    32.8 µs   65.5 µs | █ 5
+    65.5 µs  131.1 µs | █ 4
+   262.1 µs  524.3 µs | █ 1
+
+soak: PASS (120.0 min paced, 10798477 blocks, 0 xruns, 0 allocations)
+ " "
+ [08] post-soak conformance - with exclusive opening now, the checks that
+ SKIPped in test002 - lifecycle, latency report, reopen-leak - run for
+ real on hardware, AFTER the long session.
+
+---- [RUN] devices --conformance - post-soak ----
+sparq devices — HAL backends in this build: null, wasapi-exclusive, wasapi-shared
+  (asio: not compiled in — WO-006 increment 2; requesting it will say so, not fake it)
+
+[null] null (virtual device)
+  out [0] sparq Null Device (deterministic, 64 ch)  <- default
+
+[wasapi-exclusive] WASAPI exclusive (event-driven)
+sparq hal[wasapi]: friendly-name read failed (GetValue HRESULT 0x80070005, vt 0) — endpoints show as `<endpoint N>`. Please send this line back; names are cosmetic but the failure mode is not (defect #40, docs/hal/windows-notes.md)
+  out [0] <endpoint 3>  <- default
+        id: {0.0.0.00000000}.{d8db3e5b-5bef-49f3-97cf-1dde49343f42}
+  out [1] <endpoint 1>
+        id: {0.0.0.00000000}.{1e9f6bf9-a4b9-4df4-971b-4a8231f24af4}
+  out [2] <endpoint 2>
+        id: {0.0.0.00000000}.{593c4844-1f18-4eda-8318-5b50490b2b57}
+  out [3] <endpoint 0>
+        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+  out [4] <endpoint 4>
+        id: {0.0.0.00000000}.{fed48ab8-f7ab-4474-80a0-b368fd74b809}
+
+[wasapi-shared] WASAPI shared (event-driven)
+  out [0] <endpoint 3>  <- default
+        id: {0.0.0.00000000}.{d8db3e5b-5bef-49f3-97cf-1dde49343f42}
+  out [1] <endpoint 1>
+        id: {0.0.0.00000000}.{1e9f6bf9-a4b9-4df4-971b-4a8231f24af4}
+  out [2] <endpoint 2>
+        id: {0.0.0.00000000}.{593c4844-1f18-4eda-8318-5b50490b2b57}
+  out [3] <endpoint 0>
+        id: {0.0.0.00000000}.{180e7e24-4417-4d24-a52b-090371d76b51}
+  out [4] <endpoint 4>
+        id: {0.0.0.00000000}.{fed48ab8-f7ab-4474-80a0-b368fd74b809}
+
+conformance (offline suite; device backends use a short paced fallback run)
+  NOTE: the paced fallback briefly opens the default device with a -60 dB ramp.
+
+conformance · backend null
+  [PASS] enumerate — 1 device(s); default marked: 1; first is default: true
+  [PASS] capabilities are probed, not guessed — rates 8000..384000 · exclusive 44100,48000,88200,96000,176400,192000,384000 · out 1..64 ch · in 0..64 ch · default 48000 Hz/2 ch
+  [PASS] exclusive rates verified by probe — [44100, 48000, 88200, 96000, 176400, 192000, 384000]
+  [PASS] open allocates buffers up front — actual 48000 Hz / 64 fr / 2 ch vs requested 48000 / 64 / 2
+  [PASS] start → blocks flow → stop — 16 block(s), callback invocations 16; stop: Ok("ok")
+  [PASS] latency report matches the negotiated config — out 2.33 ms · in 0.00 ms · roundtrip 2.33 ms (est; hw period 1.00 ms, block 1.33 ms)
+  [PASS] error report readable after stop — state Stopped, device_errors 0, rt [NO-mmcss NO-priority NO-ideal-proc NO-workset]
+  [PASS] diagnostics counted the run; callback allocated nothing — blocks 16 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 2 ns · jitter — · drift not reported
+  [PASS] injected xrun is counted exactly once — xruns 1
+conformance null: PASS (9 check(s), 0 failed)
+  [PASS] reopen cycles do not leak — 8 open/start/run/stop/drop cycles, 0 outstanding allocations
+
+sparq hal[wasapi-exclusive]: opened `<endpoint 3>` — 96000 Hz · 2 ch · i24-in-32 (converting) · device period 288 fr (3.00 ms) · sparq block 64 fr
+conformance · backend wasapi-exclusive
+  [PASS] enumerate — 5 device(s); default marked: 1; first is default: true
+  [PASS] capabilities are probed, not guessed — rates 96000 · exclusive 96000 · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
+  [PASS] exclusive rates verified by probe — [96000]
+  [PASS] open allocates buffers up front — actual 96000 Hz / 64 fr / 2 ch vs requested 96000 / 64 / 2
+  [PASS] start → blocks flow → stop — 123 block(s), callback invocations 123; stop: Ok("ok")
+  [PASS] latency report matches the negotiated config — out 3.67 ms · in 0.00 ms · roundtrip 3.67 ms (est; hw period 3.00 ms, block 0.67 ms)
+  [PASS] error report readable after stop — state Stopped, device_errors 0, rt [mmcss priority NO-ideal-proc workset]
+  [PASS] diagnostics counted the run; callback allocated nothing — blocks 123 · xrun 2 · overrun 0 · late 2 · dev-err 0 · alloc 0 · p99 512 ns · jitter 33.01 ms · drift -271754 ppm SUSPECT
+conformance wasapi-exclusive: PASS (8 check(s), 0 failed)
+  [PASS] reopen cycles do not leak — 8 open/start/run/stop/drop cycles, 0 outstanding allocations
+
+sparq hal[wasapi-shared]: opened `<endpoint 3>` — 96000 Hz · 2 ch · f32 · device period 2112 fr (22.00 ms) · sparq block 64 fr
+conformance · backend wasapi-shared
+  [PASS] enumerate — 5 device(s); default marked: 1; first is default: true
+  [PASS] capabilities are probed, not guessed — rates 96000 · exclusive none · out 2..2 ch · in 0..0 ch · default 96000 Hz/2 ch
+  [PASS] open allocates buffers up front — actual 96000 Hz / 64 fr / 2 ch vs requested 96000 / 64 / 2
+  [PASS] start → blocks flow → stop — 262 block(s), callback invocations 262; stop: Ok("ok")
+  [PASS] latency report matches the negotiated config — out 22.67 ms · in 0.00 ms · roundtrip 22.67 ms (est; hw period 22.00 ms, block 0.67 ms)
+  [PASS] error report readable after stop — state Stopped, device_errors 0, rt [mmcss priority NO-ideal-proc workset]
+  [PASS] diagnostics counted the run; callback allocated nothing — blocks 262 · xrun 0 · overrun 0 · late 0 · dev-err 0 · alloc 0 · p99 512 ns · jitter 11.30 ms · drift +1369091 ppm SUSPECT
+conformance wasapi-shared: PASS (7 check(s), 0 failed)
+  [PASS] reopen cycles do not leak — 8 open/start/run/stop/drop cycles, 0 outstanding allocations
+
+---- [RC 0] devices --conformance - post-soak ----
+ " "
+ ================================================================
+ SUMMARY - test004 - 28/09/2026 11:04:52.46
+ ================================================================
+ [02] build + stamp guard : PASS rc=0
+ [03] devices --caps : PASS rc=0
+ [04] play EXCLUSIVE : FAIL rc=1
+ [05] unplug rc=1 on wasapi-shared - judged from the TEXT above
+ [06] recovery play : PASS rc=0
+ [07] soak 120 min on wasapi-shared : PASS rc=0
+ [08] post-soak conformance : PASS rc=0
+ tone heard - [04] N  [06] Y
+ steps failing on rc: 1
+ " "
+ exclusive still refused - the [04] probe table in this log is the diagnosis.
+ " "
+ SEND THIS ONE FILE BACK: Q:\morphosis\code\sparq\test004.log
+ ================================================================

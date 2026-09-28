@@ -43,9 +43,11 @@
 //! * **`cv`**: block-rate values and audio-rate buffers both travel. The RECEIVING port owns any
 //!   rate change (matrix G3/G4): an audio-rate source into a block-rate input is reduced by the
 //!   receiver's `cv_reduce`; a block-rate source into an audio-rate input is expanded by the
-//!   receiver's `cv_interp` (`hold`/`linear`; a receiver declaring `spline` is refused at build —
-//!   the vocabulary promises it, the host has not implemented it, and a silent hold would be the
-//!   invisible transformation ADR-005 exists to prevent). Range mismatches are refused through
+//!   receiver's `cv_interp` — `hold`, `linear`, and (since increment 6) `spline`: the parabola
+//!   through the last three block values, clamped to the wire's declared range (the definition
+//!   and its reasoning live in `CvInterp`'s doc, the one compiled copy; the build refusal that
+//!   guarded the unimplemented word retired when the host learned to perform it). Range
+//!   mismatches are refused through
 //!   `port.rs::connect_cv` at `Phase::Zero` — the matrix names `util/range`, which is Phase 1
 //!   and not in this build, so the refusal says that instead of offering a tap that does nothing.
 //!   `cv` fan-in is refused naming `util/mixer` — whose cv merge side (v0.2.0) makes the refusal
@@ -92,7 +94,8 @@ use sparq_module_api::module::{
 };
 use sparq_module_api::params::ParamSet;
 use sparq_module_api::port::{
-    connect_cv, ChannelSet, CvInterp, CvRate, CvReduce, Direction, Phase, PortType, Verdict,
+    connect_cv, ChannelSet, CvInterp, CvRange, CvRate, CvReduce, Direction, Phase, PortType,
+    Verdict,
 };
 
 /// Executor configuration: the device shape the patch renders into, plus the two policy knobs
@@ -243,8 +246,9 @@ pub enum ExecError {
         port_type: String,
     },
     /// An edge the compatibility matrix or the contract's port rules refuse (contract v1: cv
-    /// range mismatch, cv fan-in, `spline` interpolation, event-kind mismatch, delay edges on
-    /// non-audio wires, cross-type wires). The `why` names the rule and the remedy.
+    /// range mismatch, cv fan-in, event-kind mismatch, delay edges on non-audio wires,
+    /// cross-type wires; the `spline` refusal retired in increment 6 — the host performs it).
+    /// The `why` names the rule and the remedy.
     EdgeRefused {
         /// Which edge.
         edge: sparq_kernel::graph::EdgeId,
@@ -485,8 +489,17 @@ struct CvPlan {
     /// The RECEIVER's declared expansion (G4), used when a block-rate source feeds an audio-rate
     /// input.
     interp: CvInterp,
-    /// The previous block's source value — `linear` ramps from here (executor-owned state,
-    /// refreshed in the wire pass; the audio path allocates nothing).
+    /// The wire's declared cv range (the RECEIVER's declaration; G2 proved the source compatible
+    /// at build). `spline` clamps its parabola to it — the expansion's documented range
+    /// discipline; `hold`/`linear` provably never exceed their knots and never clamp.
+    range: CvRange,
+    /// The block-before-last's source value — `spline`'s parabola is the unique quadratic
+    /// through `(prev2, prev, cur)` (executor-owned history, shifted in the wire pass; the audio
+    /// path allocates nothing).
+    prev2: f32,
+    /// The previous block's source value — `linear` ramps from here, `spline` passes through it
+    /// at frame 0 (executor-owned state, refreshed in the wire pass; the audio path allocates
+    /// nothing).
     prev: f32,
 }
 
@@ -874,17 +887,13 @@ impl Executor {
                                 .to_string(),
                         });
                     }
-                    // The receiver's declared interpolation must be one the host performs.
-                    if dp.cv_interp == CvInterp::Spline {
-                        return Err(ExecError::EdgeRefused {
-                            edge: e.id,
-                            why: "the receiving port declares `cv_interp = \"spline\"`, which is \
-                                  in the contract's vocabulary but not implemented by this host \
-                                  — holding instead would render differently than declared, so \
-                                  the edge is refused; declare `hold` or `linear`"
-                                .to_string(),
-                        });
-                    }
+                    // The receiver's declared interpolation is one the host PERFORMS: hold,
+                    // linear and (since increment 6) spline — the parabola through the last
+                    // three block values, clamped to the wire's declared range (`CvInterp`'s
+                    // doc is the one compiled copy of the curve). The build refusal that
+                    // guarded the unimplemented word retired the day the promise was kept;
+                    // a silent hold was never an option — it is the invisible transformation
+                    // ADR-005 exists to prevent.
                 },
                 PortType::Event => {
                     if e.kind != EdgeKind::Plain {
@@ -1123,6 +1132,17 @@ impl Executor {
                         });
                     };
                     cv_in_connected[dst.slot][dst.type_idx] = true;
+                    // The wire's declared range for the expansion's clamp discipline; the
+                    // validation pass above already refused a cv port without one, so this
+                    // let-else is the same belt-and-braces shape as the rate extraction.
+                    let Some(range) = dst_ports[dst.manifest_port as usize].cv_range else {
+                        return Err(ExecError::EdgeRefused {
+                            edge: e.id,
+                            why: "a cv port without a declared range cannot be wired — validation \
+                                  should have refused this manifest"
+                                .to_string(),
+                        });
+                    };
                     cv_wiring[dst.slot].push(CvPlan {
                         src_slot: src.slot,
                         src_port: src.type_idx,
@@ -1131,6 +1151,8 @@ impl Executor {
                         dst_rate,
                         reduce: dst_ports[dst.manifest_port as usize].cv_reduce,
                         interp: dst_ports[dst.manifest_port as usize].cv_interp,
+                        range,
+                        prev2: 0.0,
                         prev: 0.0,
                     });
                 },
@@ -1432,10 +1454,12 @@ impl Executor {
                     },
                     (CvRate::Block, CvRate::Audio) => {
                         let cur = self.nodes[ss].cv_out_cells[sp];
-                        let (prev, interp) = (plan.prev, plan.interp);
-                        interp.expand(prev, cur, &mut bundle.cv_bufs[dp]);
-                        // The ramp's start point for the next block is this block's value —
-                        // executor state, refreshed on the audio path without allocating.
+                        let (prev2, prev, interp, range) =
+                            (plan.prev2, plan.prev, plan.interp, plan.range);
+                        interp.expand(prev2, prev, cur, range, &mut bundle.cv_bufs[dp]);
+                        // The next block's expansion history shifts one knot along — executor
+                        // state, refreshed on the audio path without allocating.
+                        plan.prev2 = prev;
                         plan.prev = cur;
                     },
                     (CvRate::Audio, CvRate::Audio) => {

@@ -6,49 +6,108 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-09-27, third session (handoff. The user confirmed **`sync-wo013-inc5.zip`
-APPLIED** — its increment (the rename text entry + unified modal key feed, inspector scrolling on
-the pan's new `center`, per-cv wire levels, the LOD pass) is on the device. Then **WO-014
-increment 6** — the sandbox track's next buildable item (item 6 stays gated on WO-006's device
-acceptance) — was built and sealed as **`sync-wo014-inc6.zip` (13 entries)**: **`util/mixer`
-0.2.0, the cv merge side** the compat-matrix's fan-in cell always named — 4 block-rate unipolar cv
-inputs (`cv_reduce = "mean"` declared), per-input gains appended LAST (params 20..23), one summed
-`cv-out` clamped to the declared range, identity default (an untouched cv side is a bit-exact wire
-from `cv-0`). The executor's cv fan-in refusal stays — no implicit summing, ever — and now carries
-the working remedy in words. `tests/mixer_cv.rs` (9 gates). A gate caught a real fragility on the
-way: the inc-5 scroll smoke had overfitted the mixer's old param count; it now asserts the
-reveal-contract, not one module's arithmetic. Sandbox-green: **742 tests**, every pre-existing
-golden unchanged, stress hash unmoved (debug AND release), all runnable clippy cells clean,
-selftest 9/9, ui-audit **25 smokes**, stamp **`src 92f/1977302B`**.
-**`sync-wo014-inc6.zip` is WAITING for the device** — it
-goes with the evidence ask. **The next step is still DEVICE EVIDENCE, not code**: `test004` (the
-🔴 exclusive-acceptance blocker), `test006` (steps F–I), and `gates.bat` on SATURN, with the logs
-wanted back.)
+**Last updated:** 2026-09-27, fourth session (handoff. The user asked to clone the repo fresh and
+start the checklist's next sandbox task — with the device track still waiting on SATURN evidence
+and item 6 gated on WO-006's acceptance, that is item 8's named next candidate:
+**`cv_interp = "spline"`**. **WO-008 increment 6** was built and sealed as
+**`sync-wo008-inc6.zip` (17 entries)**: the host now PERFORMS the whole G4 vocabulary — `spline`
+is the parabola through the last three block values (equivalently a cubic Hermite with causal
+second-order tangents; one compiled copy in `CvInterp`, the same sentence in the matrix cell /
+§17 / the schema row / the author guide, pinned by the widened drift gate), exact for
+quadratic-in-block-index sweeps, bit-identical to `linear` on collinear knots, `linear`'s arrival
+timing, f64 with one rounding per frame, clamped to the wire's declared range (host-made momentum
+overshoot is bounded there and nowhere else — an out-of-range knot under hold/linear stays a
+visible SOURCE bug). The build refusal retired; `CvPlan` grew the two-slot history + the range;
+still zero audio-path allocations. `tests/cv_spline.rs` (8 gates) + 2 `port.rs` unit pins +
+contract_v1's refusal gate replaced by a behaviour gate. Sandbox-green: **752 tests**, every
+pre-existing golden unchanged, stress hash unmoved (debug AND release), all runnable clippy cells
+clean, selftest 9/9, ui-audit PASS (25 smokes), stamp **`src 92f/1986012B`**.
+**`sync-wo008-inc6.zip` is WAITING for the device, stacked on the still-WAITING
+`sync-wo014-inc6.zip`.** **The next step is still DEVICE EVIDENCE, not code**: apply both waiting
+bundles, then `test004` (the 🔴 exclusive-acceptance blocker), `test006` (steps F–I), and
+`gates.bat` on SATURN, with the logs wanted back.)
 
 ---
 
 ## Current position
 
-- **Device state:** the user confirmed 2026-09-26 that the seven bundles through wo009-inc1 were
-  applied on SATURN (wo013-inc3 → wo006-inc13 → wo008-inc3 → wo014-inc2 → wo008-inc4 →
-  wo014-inc3 → wo009-inc1), and **confirmed 2026-09-27 that `sync-wo014-inc5+wo013-inc4.zip`
-  (29 entries) is APPLIED** — which, since the chain stacks in order, means the two waiting
-  predecessors (`sync-wo014-inc4.zip`, `sync-wo008-inc5.zip`) were applied ahead of it.
-  **`sync-wo013-inc5.zip` (20 entries) is APPLIED — user-confirmed 2026-09-27, third session.**
-  **WAITING: `sync-wo014-inc6.zip` (13 entries, this session — mixer 0.2.0's cv merge side).**
-  The device runs then cover eight increments of baseline — `test004` (exclusive acceptance — the
-  #79 fix, still the 🔴 blocker), `test006` (canvas window session — after RENDER WAV the
-  sine/gain wires light with live levels, **and the new steps F–I: the rename sheet under real
-  keys, the inspector two-finger scroll, the LOD walk vs the mockup, the cv wire lighting from its
-  own value**), `gates.bat` (**expected test count is now 733**, stamp = whatever `SYNC-STAMP.txt`
-  says (`src 92f/1974470B`), `sparq modules --strict` lists **17**, `selftest --golden` prints
-  **PASS (9 gates)**, `ui --audit` **PASS (25 smokes)** — smokes 21–25 are the increment-5 cells;
-  `log_check.py`'s BASELINE moves with every seal since defect #83), and the WO-008 **loaded
-  soak** (200 modules, 30 min) when the HAL and the machine are both free. WO-009's two device boxes: the **30-minute drift measurement** and a **listened
-  tempo sweep**. Evidence artefacts — **defect #85: run them with their pinned durations or the
-  hashes will not match the goldens** (the CLI default renders 5 s): `sparq exec --patch drum-demo
-  --seconds 2` (transport-driven, hash `f2303f13aa0cf299`), `--patch mod-demo --seconds 1`
+- **Device state:** every sealed bundle through `sync-wo013-inc5.zip` is APPLIED on SATURN
+  (user-confirmed 2026-09-27, third session; the chain stacked in order, so the earlier waiting
+  predecessors went ahead of it). **WAITING, in apply order: `sync-wo014-inc6.zip` (13 entries —
+  mixer 0.2.0's cv merge side), then `sync-wo008-inc6.zip` (17 entries, this session — the host
+  performs `cv_interp = "spline"`).** Once both land, the device runs cover ten increments of
+  baseline — `test004` (exclusive acceptance — the #79 fix, still the 🔴 blocker), `test006`
+  (canvas window session — after RENDER WAV the sine/gain wires light with live levels, **and the
+  steps F–I: the rename sheet under real keys, the inspector two-finger scroll, the LOD walk vs
+  the mockup, the cv wire lighting from its own value**), `gates.bat` (**expected test count is
+  now 752**, stamp = whatever `SYNC-STAMP.txt` says (`src 92f/1986012B`), `sparq modules --strict`
+  lists **17** (the mixer row reads v0.2.0, 13 ports, 24 params), `selftest --golden` prints
+  **PASS (9 gates)**, `ui --audit` **PASS (25 smokes)**; `log_check.py`'s BASELINE moves with
+  every seal since defect #83 — this session's bundle already carries the moved one), and the
+  WO-008 **loaded soak** (200 modules, 30 min) when the HAL and the machine are both free.
+  WO-009's two device boxes: the **30-minute drift measurement** and a **listened tempo sweep**.
+  Evidence artefacts — **defect #85: run them with their pinned durations or the hashes will not
+  match the goldens** (the CLI default renders 5 s): `sparq exec --patch drum-demo --seconds 2`
+  (transport-driven, hash `f2303f13aa0cf299`), `--patch mod-demo --seconds 1`
   (`1621e1f65b1b64e1`), `--patch demo --seconds 2.8` (`53de3b1f3f40e3c9`).
+- **WO-008 increment 6 is BUILT and sandbox-green — `cv_interp = "spline"`, the G4 vocabulary
+  performed in full:** the checklist's sandbox-track item 8, second entry — named there as the
+  next candidate; the plan of record is `WO008-INC6-PLAN.md` (eight decisions, recorded before
+  the code). **The curve:** the parabola through the last three block values —
+  `v(t) = prev2·t(t−1)/2 + prev·(1−t²) + cur·t(t+1)/2`, `t = i/frames` — equivalently a cubic
+  Hermite whose start tangent is the central difference `(cur−prev2)/2` and whose end tangent is
+  the second-order backward estimate `(3cur−4prev+prev2)/2` (four constraints, one cubic, the same
+  curve; the equivalence is stated in `CvInterp::Spline`'s doc, the ONE compiled copy). Non-causal
+  splines REJECTED on the record: true Catmull-Rom needs `v[N+1]` and the natural cubic needs a
+  global solve — both buy smoothness with a block of LATENCY, which would make `spline` time its
+  wire differently from `linear`; PCHIP rejected too (its limiter bends parabolas near extrema,
+  losing the exactness property; the clamp already provides the safety where it matters).
+  Properties, each gated: **exact for quadratic-in-block-index sweeps**; **bit-identical to
+  `linear` on collinear knots**; constant in, constant out (the coefficients sum to 1); and
+  **`linear`'s arrival contract** — frame 0 IS the previous knot exactly, `cur` is reached at the
+  next block boundary, so the declaration changes the shape of the ride, never its timing. f64
+  evaluation with ONE rounding per frame (the mixer's cv-sum rule, WO-014 inc 6). **State:**
+  `CvPlan` grew `prev2` beside `prev` and the wire's `range`; both history slots start at 0.0 —
+  the same declared zero-history ramp `linear` has always had — so the first two blocks are a
+  documented deterministic startup transient, gated. **Range discipline (decision 4):** the
+  parabola carries momentum and can locally exceed the knot span (all interpolating splines do —
+  the inertia IS the smoothness); the overshoot is HOST-made, so the spline branch clamps to the
+  receiver's declared range (`CvRange::clamp_f64`, new), in words in all four copies of the rule.
+  `hold`/`linear` deliberately do NOT clamp: they provably cannot exceed their knots, and an
+  out-of-range frame there can only be a SOURCE bug, which must stay visible. **One signature,
+  one copy (decision 5):** `expand` widened to `(prev2, prev, cur, range, dst)` — clamping in the
+  executor instead would put the rule apart from the math it bounds; the api-snapshot pin moved on
+  purpose with the reason at the pin. **The refusal retired; its philosophy is kept** — every
+  other cv refusal (range, fan-in, delay-kind) stands untouched, and contract_v1's refusal gate
+  was REPLACED in place by a behaviour gate. The G4 drift gate grew a pin that the matrix cell
+  carries the curve's definition in the same words as the compiled copy. **`tests/cv_spline.rs`
+  (8 gates):** the hand-computed parabola over a scripted dyadic sequence (every frame of every
+  block `==` against independently simplified polynomials — the sequence visits the clamped
+  overshoot, the momentum dip and the plain descent); the constant wire flat bit-exactly;
+  spline ≡ linear bit-for-bit on a ramp with a hand-computed anchor so "equal" cannot mean
+  "equally wrong"; a `v[N] = N²/64` sweep reproduced exactly at fractional frames from block 2
+  on; frame 0 == the previous knot over an LCG-seeded sequence (the house seed 0xA17E); the
+  startup transient hand-computed AND a rebuild byte-identical; both polarities' clamps at exactly
+  ±1.0 with the un-clamped interiors keeping their hand-computed values; zero allocations over
+  1 000 blocks. **Nothing else moved, by the shape of the diff (decision 8):** the hold/linear
+  branches are byte-identical, no shipped module declares `spline` (grep-verified), no demo patch
+  contains a block→audio cv edge, and the stress/determinism generators never synthesise an
+  interp. **752 tests** (was 742; +8 cv_spline, +2 port.rs units, contract_v1 replaced 1:1),
+  every pre-existing golden re-verified unchanged (`ba577186c988db21`, drum-demo
+  `914d9063ce9d8a0f`, the three pinned exec renders at their `--seconds` — `1621e1f65b1b64e1`,
+  `f2303f13aa0cf299`, `53de3b1f3f40e3c9`), stress `b42068ec7b206789` with identical counters
+  (10 001 blocks · 7 203 swaps · 2 797 refused) in debug AND release, selftest 9/9, `ui --audit`
+  PASS 25 smokes (the canvas never saw the refusal — interp lives in the executor, not in
+  `connect_cv`), `modules --strict` 17/17, `module_docs --check` 17, fmt clean, clippy clean in
+  default / bootstrap-audio / ui / native ui-window-gles / all six runnable MSVC cells (the two
+  documented `windows`-crate OOM classes stay out), 5 python gates + `sync_check --self-test` +
+  `log_check --self-test` 25/25. **Defect #88 (docs-only, fixed in passing):** the author guide's
+  §11 still called `util/mixer` "Phase 1, not yet built" — stale since WO-014 inc 6; the bullet
+  had to be rewritten for `spline` anyway. Sealed as **`sync wo008-inc6`** — WAITING, stacked on
+  `sync-wo014-inc6.zip`. Parked and declared: the non-causal splines (a latency CONTRACT decision,
+  not an implementation detail — a new word with its own gate if ever taken, never a quiet change
+  to this one), and any shipped module ADOPTING `spline` (a module change moves goldens — its own
+  increment, on purpose, with the audible A/B recorded).
 - **WO-014 increment 6 is BUILT and sandbox-green — `util/mixer` 0.2.0, the cv merge side:** the
   sandbox track's next buildable item (item 6 — the live HAL through `SharedEngine` — stays gated
   on WO-006's device acceptance; the plan of record is `WO014-INC6-PLAN.md`). The compat-matrix's
@@ -354,7 +413,7 @@ wanted back.)
 
 **WO-006 exclusive acceptance = the `test004` re-run** (every sealed bundle through
 `sync-wo013-inc5.zip` is APPLIED on the device, user-confirmed 2026-09-27;
-`sync-wo014-inc6.zip` is WAITING and does not touch the HAL). History: `test004` attempt 1 (2026-09-24) passed the caps checkpoint (#77's format fix
+`sync-wo014-inc6.zip` and `sync-wo008-inc6.zip` are WAITING — neither touches the HAL). History: `test004` attempt 1 (2026-09-24) passed the caps checkpoint (#77's format fix
 verified on hardware) and failed every rung at `Initialize (exclusive): HRESULT 0x88890020` =
 `AUDCLNT_E_INVALID_DEVICE_PERIOD` — the open asked the 64-fr block (666.7 µs @ 96 kHz) as the
 device period against a 10 ms engine (**defect #79**, logged and fixed in inc 1.3). On the re-run,
@@ -368,19 +427,19 @@ default** (that deletion is gated on this device run — do not do it early).
 
 ## Next session's task list, in order
 
-**Device track (SATURN — the whole sealed chain is APPLIED; the remaining work is EVIDENCE):**
-1. **All bundles are APPLIED** (through `sync-wo014-inc5+wo013-inc4.zip` user-confirmed
-   2026-09-27; **`sync-wo013-inc5.zip` applied and user-confirmed 2026-09-27, third session**).
-   **Nothing left to apply — run the device gates and send the logs back.** Run `scripts\test004.bat` (the exclusive acceptance — pass shape in
+**Device track (SATURN — two bundles WAITING to apply, then the remaining work is EVIDENCE):**
+1. **APPLY `sync-wo014-inc6.zip` (13 entries), THEN `sync-wo008-inc6.zip` (17 entries), in that
+   order** — everything through `sync-wo013-inc5.zip` is APPLIED (user-confirmed 2026-09-27,
+   third session). Then **run the device gates and send the logs back.** Run `scripts\test004.bat` (the exclusive acceptance — pass shape in
    `WO006-INC13-RUN-SHEET.md`; the 🔴 blocker) and `scripts\test006.bat` (the window session;
    step [07] is the mechanical claim: slider edit must change the canvas-render.wav hash — after
    RENDER WAV the sine/gain wires light with live levels — **and the new steps F–I: the rename
    sheet under real keys, the inspector two-finger scroll on a Mixer, the LOD walk vs
    `design-mode.svg` (write what differs into the H answer), the cv wire lighting from its own
-   value**). `scripts\gates.bat` now expects **742 passed / 0 failed / 1 ignored**, **17**
+   value**). `scripts\gates.bat` now expects **752 passed / 0 failed / 1 ignored**, **17**
    modules (the mixer row reads v0.2.0, 13 ports, 24 params), **selftest PASS (9 gates)** and
    **`ui --audit` PASS (25 smokes)** — with the stamp `log_check.py` in the bundle already knows
-   (`src 92f/1977302B`; defect #83's fix made moving it a seal step). Wanted evidence, **with the pinned durations** (defect #85):
+   (`src 92f/1986012B`; defect #83's fix made moving it a seal step). Wanted evidence, **with the pinned durations** (defect #85):
    `sparq exec --patch mod-demo --seconds 1` (`1621e1f65b1b64e1`), `sparq exec --patch drum-demo
    --seconds 2` (`f2303f13aa0cf299`), `sparq exec --patch demo --seconds 2.8` (`53de3b1f3f40e3c9`),
    and — when the HAL is free — the two WO-009 device boxes: a LISTENED tempo sweep and the 30-min
@@ -424,11 +483,10 @@ default** (that deletion is gated on this device run — do not do it early).
    measurement, STA retry for #75, clock-drift re-derivation per #76).
 7. Studio-session evidence still open: real-finger canvas touch-test, DPI matrix walk
    (WO-012/WO-013), WO-001 hardware sheets, dispatch-bench C/D numbers for ADR-009.
-8. Small, well-specified, declared in LATER.md: ~~mixer's cv merge side~~ **DONE (WO-014 inc 6,
-   this session)**; `cv_interp = "spline"` (refused at build until implemented — the next
-   candidate in this list); host-side
-   `required`-unconnected enforcement (moves stress refusal counters — its own increment on
-   purpose); the compat-matrix review packet (`reviewed = false`, defect #82's ordering question
+8. Small, well-specified, declared in LATER.md: ~~mixer's cv merge side~~ **DONE (WO-014 inc
+   6)**; ~~`cv_interp = "spline"`~~ **DONE (WO-008 inc 6, this session — the host performs the
+   whole G4 vocabulary)**; **host-side `required`-unconnected enforcement** (moves stress refusal
+   counters — its own increment on purpose; **the next candidate in this list**); the compat-matrix review packet (`reviewed = false`, defect #82's ordering question
    inside it); loop-relative beat phase for unaligned loop regions (WO-009's declared limit);
    from inc 5: per-port meters (would light cv wires + a scope's per-channel display), a
    multi-reader epoch (a second reader of the live patch), and narrowing analysis publication to
@@ -436,6 +494,16 @@ default** (that deletion is gated on this device run — do not do it early).
 
 ## Done (most recent first)
 
+- [x] **WO-008 inc 6** (2026-09-27, fourth session) — `cv_interp = "spline"` PERFORMED: the
+      parabola through the last three block values (causal cubic-Hermite equivalence recorded),
+      exact for quadratic sweeps, bit-identical to `linear` on collinear knots, `linear`'s
+      arrival timing, f64 + one rounding per frame, clamped to the wire's declared range
+      (`CvRange::clamp_f64`; hold/linear deliberately unclamped — source bugs stay visible);
+      the build refusal retired, the matrix cell / §17 / schema row / author guide re-worded and
+      drift-pinned; `CvPlan` grew the two-slot history + range; `tests/cv_spline.rs` 8 gates +
+      2 `port.rs` unit pins + contract_v1's refusal gate replaced 1:1; defect #88 (the guide's
+      stale mixer clause) fixed in passing. 752 tests, every golden unchanged, stress hash
+      unmoved. Sealed `sync wo008-inc6` — WAITING, stacked on wo014-inc6.
 - [x] **WO-014 inc 6** (2026-09-27, third session) — `util/mixer` 0.2.0, the cv merge side:
       4→1 block-rate unipolar merge with declared mean-reduce, per-input gains appended last,
       identity default, clamped publish; the executor's fan-in refusal re-worded to its built
@@ -605,6 +673,12 @@ default** (that deletion is gated on this device run — do not do it early).
   row index or a distance. Lesson for smoke authors: a gate that encodes one module's arithmetic
   instead of the behaviour's shape will fail on the next additive version bump — which is exactly
   when it should pass.
+- **#88 — FIXED (WO-008 inc 6, docs-only, found in passing): the author guide's §11 still called
+  `util/mixer` "Phase 1, not yet built"** — stale since WO-014 inc 6 shipped the cv merge side.
+  The same bullet carried the spline-refusal sentence this increment had to rewrite anyway, so
+  both halves now tell the truth; no code, no device exposure. The lesson, turned on docs: a
+  bundle that changes a contract sentence should grep the author guide for that sentence in the
+  SAME session — the guide is the copy module authors actually read.
 - #69 — `build.bat` cmd-parser death: probe ships, culprit statement not yet named (stays open)
 - compat-matrix mirror in `port.rs` vs `docs/api/compat-matrix.toml` — **re-worded (contract
   v1):** the drift gate pins the two together; full deletion waits on restructuring the table's

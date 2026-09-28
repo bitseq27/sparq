@@ -264,6 +264,18 @@ fn the_cv_cells_match_the_compiled_rules_and_the_declared_domains() {
     }
     assert!(cond.contains("default hold"), "{cond}");
     assert_eq!(CvInterp::default(), CvInterp::Hold);
+    // Since WO-008 increment 6 the cell carries spline's DEFINITION, not just its name: the
+    // host performs all three spellings, and the drift gate keeps the table's sentence and
+    // `CvInterp::Spline`'s doc (the one compiled copy of the curve) saying the same thing in
+    // the same words — the "answered twice, in two places" discipline the G4 gap note names.
+    assert!(
+        cond.contains("parabola through the last three block values"),
+        "the G4 cell lost the spline curve's definition: {cond}"
+    );
+    assert!(
+        cond.contains("clamped to the declared range"),
+        "the G4 cell lost the spline's range discipline: {cond}"
+    );
 }
 
 #[test]

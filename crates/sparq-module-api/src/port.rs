@@ -235,6 +235,20 @@ impl CvRange {
             Self::Unipolar => "unipolar",
         }
     }
+
+    /// Clamps to the wire's declared closed bounds (−1..=1 bipolar, 0..=1 unipolar). Used by
+    /// [`CvInterp::expand`]'s `spline` branch: the parabola can locally exceed its knot span
+    /// (all interpolating splines do — the momentum is the smoothness), and the host must never
+    /// hand a receiver frames outside the range it declared. `hold` and `linear` cannot exceed
+    /// their knots, so they never clamp — an out-of-range knot there is a SOURCE bug and stays
+    /// visible rather than being silently rounded away (WO-008 increment 6, decision 4).
+    #[must_use]
+    pub fn clamp_f64(self, v: f64) -> f64 {
+        match self {
+            Self::Bipolar => v.clamp(-1.0, 1.0),
+            Self::Unipolar => v.clamp(0.0, 1.0),
+        }
+    }
 }
 
 /// How an audio-rate `cv` source collapses into a block-rate input (compat-matrix decision G3:
@@ -327,8 +341,26 @@ pub enum CvInterp {
     /// frame `frames` (i.e. exactly at the next block boundary): `v[i] = prev + (cur − prev) ·
     /// i / frames`. Continuous across blocks, so a slow block-rate sweep produces no steps.
     Linear,
-    /// Declared in the vocabulary, NOT yet implemented by the host: an edge whose receiver
-    /// declares `spline` is refused at build in words rather than silently held.
+    /// Performed by the host since WO-008 increment 6: **the parabola through the last three
+    /// block values.** With the wire's knot history `prev2` (two blocks ago), `prev` (last block)
+    /// and `cur` (this block), frame `i` of `n` reads `t = i/n` on the unique quadratic through
+    /// `(−1, prev2), (0, prev), (1, cur)`:
+    ///
+    /// ```text
+    /// v(t) = prev2 · t(t−1)/2  +  prev · (1−t²)  +  cur · t(t+1)/2
+    /// ```
+    ///
+    /// equivalently a cubic Hermite whose start tangent is the central difference
+    /// `(cur−prev2)/2` and whose end tangent is the second-order backward estimate
+    /// `(3·cur − 4·prev + prev2)/2` — four constraints, one cubic, the same curve. Exact for any
+    /// signal quadratic in block index; the exact line for collinear knots (a block-rate ramp
+    /// renders bit-identically to `linear`); constant in, constant out. The arrival contract is
+    /// `linear`'s: `v(0) = prev` exactly and the curve reaches `cur` at the next block boundary
+    /// — declaring `spline` changes the shape of the ride, never its timing. The curve carries
+    /// momentum from its history, so it can locally exceed the knot span; the expansion is
+    /// clamped to the wire's declared range, which is the whole of its range discipline (see
+    /// [`CvInterp::expand`]). Until implemented this spelling was refused at build in words —
+    /// the promise the vocabulary made and the host now performs.
     Spline,
 }
 
@@ -354,14 +386,24 @@ impl CvInterp {
         }
     }
 
-    /// Expands `prev → cur` into `dst` (one frame per element). Allocation-free; `dst.len()` is
-    /// the block's frame count.
-    pub fn expand(self, prev: f32, cur: f32, dst: &mut [f32]) {
+    /// Expands the wire's recent block history `prev2 → prev → cur` into `dst` (one frame per
+    /// element). Allocation-free; `dst.len()` is the block's frame count. `prev2` is read by
+    /// `spline` only — `hold` and `linear` are one knot shorter by definition and their code
+    /// paths are untouched by the widening (WO-008 increment 6; the api-snapshot pin moved on
+    /// purpose).
+    ///
+    /// `range` is the wire's declared cv range (the receiver's declaration; G2 proved the source
+    /// compatible at build). It is `spline`'s documented range discipline: the parabola through
+    /// three knots can locally exceed the knot span — all interpolating splines do; the momentum
+    /// IS the smoothness — and the host must never hand a receiver frames outside the range the
+    /// receiver declared, so the expansion clamps to `range`. `hold` and `linear` provably never
+    /// exceed their knots (a repeat and a convex combination), so they never clamp: an
+    /// out-of-range frame there can only come from an out-of-range SOURCE, a module bug that
+    /// must stay visible rather than be silently rounded away.
+    pub fn expand(self, prev2: f32, prev: f32, cur: f32, range: CvRange, dst: &mut [f32]) {
         let n = dst.len();
         match self {
-            Self::Hold | Self::Spline => {
-                // Spline never reaches here (refused at build); if it ever did, holding would be
-                // the visible-lie option — the executor's refusal is the honest path.
+            Self::Hold => {
                 for s in dst.iter_mut() {
                     *s = cur;
                 }
@@ -373,6 +415,24 @@ impl CvInterp {
                 for (i, s) in dst.iter_mut().enumerate() {
                     let t = i as f32 / n as f32;
                     *s = prev + (cur - prev) * t;
+                }
+            },
+            Self::Spline => {
+                if n == 0 {
+                    return;
+                }
+                // The parabola through (−1, prev2), (0, prev), (1, cur), evaluated in f64 with
+                // one rounding per frame — host-side cv transformations accumulate in f64 (the
+                // mixer's cv-sum rule, WO-014 increment 6). Rust never contracts into FMA, so
+                // every operation is IEEE-exact per instruction and the render is bit-identical
+                // across platforms (ADR-007).
+                let (p2, p1, p0) = (f64::from(prev2), f64::from(prev), f64::from(cur));
+                for (i, s) in dst.iter_mut().enumerate() {
+                    let t = i as f64 / n as f64;
+                    let v = p2 * (t * (t - 1.0) / 2.0)
+                        + p1 * (1.0 - t * t)
+                        + p0 * (t * (t + 1.0) / 2.0);
+                    *s = range.clamp_f64(v) as f32;
                 }
             },
         }
@@ -704,6 +764,60 @@ mod tests {
             connect_cv(CvRange::Bipolar, CvRange::Unipolar, Phase::One),
             Verdict::Adapter(Adapter::Range)
         );
+    }
+
+    #[test]
+    fn spline_expand_is_the_hand_computed_parabola_and_clamps() {
+        // WO-008 increment 6, at the function level (the executor-level proofs live in
+        // sparq-audio's tests/cv_spline.rs). Knots (0.5, 1.0, 0.75): the closed form
+        // v(t) = 0.5·t(t−1)/2 + 1·(1−t²) + 0.75·t(t+1)/2 simplifies by hand to
+        // v(t) = 1 + t/8 − 3t²/8, which exceeds the unipolar bound for every t < 1/3 — so
+        // frames i ≤ 21 of 64 clamp to exactly 1.0 and the interior keeps the polynomial
+        // (every value dyadic with a small numerator, so the f64→f32 round is exact and `==`
+        // is the honest comparison).
+        let n = 64;
+        let mut dst = vec![f32::NAN; n];
+        CvInterp::Spline.expand(0.5, 1.0, 0.75, CvRange::Unipolar, &mut dst);
+        for (i, &v) in dst.iter().enumerate() {
+            let t = i as f64 / n as f64;
+            let want = (1.0 + t / 8.0 - 3.0 * t * t / 8.0).min(1.0) as f32;
+            assert_eq!(v, want, "frame {i} of the clamped parabola");
+        }
+        assert_eq!(dst[0], 1.0, "v(0) is the middle knot, exactly — C⁰ at the knots");
+        assert!(
+            dst[1..=21].iter().all(|&v| v == 1.0),
+            "the overshoot frames clamp to exactly the declared bound"
+        );
+        assert!(dst[22] < 1.0 && dst[22] > 0.99, "frame 22 is the polynomial again: {}", dst[22]);
+        // The mirrored curve on a bipolar wire clamps at the LOWER bound: knots
+        // (−0.5, −1.0, −0.75) give v(t) = −(1 + t/8 − 3t²/8), so the same frames clamp to
+        // exactly −1.0 — the discipline is the declared range, not a direction.
+        let mut wide = vec![f32::NAN; n];
+        CvInterp::Spline.expand(-0.5, -1.0, -0.75, CvRange::Bipolar, &mut wide);
+        for (i, &v) in wide.iter().enumerate() {
+            let t = i as f64 / n as f64;
+            let want = (-(1.0 + t / 8.0 - 3.0 * t * t / 8.0)).max(-1.0) as f32;
+            assert_eq!(v, want, "frame {i} of the bipolar mirror");
+        }
+        assert!(wide[1..=21].iter().all(|&v| v == -1.0), "the lower bound clamps exactly");
+    }
+
+    #[test]
+    fn spline_collapses_to_the_exact_line_and_the_exact_constant() {
+        // Collinear knots (0.25, 0.5, 0.75): the unique parabola through three points on a
+        // line IS the line, so `spline` must render the same frames `linear` renders for the
+        // same outer knots — bit for bit (both sides exact dyadic arithmetic).
+        let n = 16;
+        let (mut a, mut b) = (vec![0.0f32; n], vec![0.0f32; n]);
+        CvInterp::Spline.expand(0.25, 0.5, 0.75, CvRange::Unipolar, &mut a);
+        CvInterp::Linear.expand(0.0, 0.5, 0.75, CvRange::Unipolar, &mut b);
+        assert_eq!(a, b, "collinear knots: the parabola IS the line, bit for bit");
+        // Constant in, constant out — the Lagrange coefficients sum to 1 exactly.
+        let mut c = vec![0.0f32; n];
+        CvInterp::Spline.expand(0.375, 0.375, 0.375, CvRange::Unipolar, &mut c);
+        assert!(c.iter().all(|&v| v == 0.375), "a constant wire is flat at the value: {c:?}");
+        // Empty buffers are legal and stay empty (the linear arm's guard, shared).
+        CvInterp::Spline.expand(0.0, 0.0, 0.0, CvRange::Unipolar, &mut []);
     }
 
     #[test]

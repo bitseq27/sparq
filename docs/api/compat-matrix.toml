@@ -180,7 +180,7 @@ default = { verdict = "compatible", note = "cv is the universal modulator" }
   [[same_type.cases]]
   when = "src.rate == 'block' && dst.rate == 'audio'"
   verdict = "conditional"
-  condition = "the host interpolates; the receiving module declares ports[].cv_interp (hold|linear|spline); default hold"
+  condition = "the host interpolates; the receiving module declares ports[].cv_interp (hold|linear|spline); default hold; spline = the parabola through the last three block values, clamped to the declared range (performed by the host since WO-008 increment 6; before that it was refused at build in words)"
   decided = "2026-09-22 G4/Q3 APPROVED: module declares, host performs. Symmetric with G3 - the receiving module now owns both directions of a rate change"
 
 [[same_type]]
