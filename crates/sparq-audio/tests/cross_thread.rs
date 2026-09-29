@@ -44,7 +44,7 @@ use sparq_audio::determinism::World;
 use sparq_audio::engine::{LivePatch, MeterUpdate, SharedEngine};
 use sparq_audio::executor::{ExecConfig, Executor, NodeBuild};
 use sparq_kernel::alloc::CountingAllocator;
-use sparq_kernel::graph::{Graph, NodeId};
+use sparq_kernel::graph::{EdgeKind, Graph, NodeId, PortRef};
 use sparq_kernel::seed::SplitMix64;
 use sparq_module_api::manifest::{
     Classification, Identity, Manifest, ParamSpec, PortSpec, ResourceDecl, StateDecl,
@@ -469,6 +469,131 @@ fn meters_are_published_per_block_and_an_absent_reader_is_counted_not_queued() {
         stats.meter_refusals,
         40 - 8,
         "every publication the ring could not hold is counted"
+    );
+}
+
+/// A mixer world for the per-port meter gate: `sine → mixer.in-0`, `mixer.out-0 → rms.in`,
+/// master = the mixer. Built from the registry's manifest defaults (the mixer's identity matrix:
+/// c00 = 1, everything else 0 — out-0 carries the sine, out-1..3 are exact zeros). Returns the
+/// executor and the three node ids.
+fn mixer_world(cfg: ExecConfig) -> (Executor, NodeId, NodeId, NodeId) {
+    let reg = registry();
+    let mut g = Graph::new();
+    let sine = g.add_node(0);
+    let mixer = g.add_node(0);
+    let rms = g.add_node(0);
+    g.connect(PortRef::new(sine, 0), PortRef::new(mixer, 0), EdgeKind::Plain).unwrap();
+    g.connect(PortRef::new(mixer, 4), PortRef::new(rms, 0), EdgeKind::Plain).unwrap();
+    let build = |id: NodeId, kind: &str| {
+        let r = reg.get(kind).unwrap();
+        let values: Vec<f32> = r
+            .manifest()
+            .manifest()
+            .params
+            .iter()
+            .map(|p| p.default.unwrap_or(0.0) as f32)
+            .collect();
+        (
+            id,
+            NodeBuild {
+                module: r.create(),
+                manifest: r.manifest().clone(),
+                params: ParamSet::new(0, &values).unwrap(),
+            },
+        )
+    };
+    let ex = Executor::build(
+        g,
+        vec![
+            build(sine, "sparq/syn/sine"),
+            build(mixer, "sparq/util/mixer"),
+            build(rms, "sparq/ana/rms"),
+        ],
+        cfg,
+    )
+    .unwrap();
+    (ex, sine, mixer, rms)
+}
+
+#[test]
+fn per_port_meters_carry_port_ids_and_a_cv_only_node_keeps_its_folded_entry() {
+    // WO-012 increment 2, the ring's port ids: one meter entry per AUDIO OUTPUT port, so a wire
+    // out of a multi-output node can carry its OWN level; a node with no audio outputs publishes
+    // ONE folded entry (its status must not vanish); and for a single-output node the per-port
+    // reading is BIT-IDENTICAL to the folded reading it sits beside — "additive" is a claim, so
+    // it is pinned against an offline reference executor, hand-checked, not trusted.
+    const BLOCKS: u64 = 6;
+    let cfg = ExecConfig::new(48_000, 64, 2);
+
+    // The offline reference: the SAME world, the SAME block count — its folded meters and its
+    // per-port buffers are the truth the ring entries are compared against.
+    let (mut ref_ex, sine, mixer, rms) = mixer_world(cfg);
+    let mut ref_out = vec![0.0f32; 64 * 2];
+    for _ in 0..BLOCKS {
+        ref_ex.render_block(mixer, &mut ref_out).unwrap();
+    }
+    let ref_sine = ref_ex.meter(sine).unwrap();
+    let ref_out0 = ref_ex.node_audio_out(mixer, 4).unwrap().to_vec();
+    let ref_peak0 = ref_out0.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+
+    let (live, live_sine, live_mixer, live_rms) = mixer_world(cfg);
+    assert_eq!(live_sine, sine);
+    assert_eq!(live_mixer, mixer);
+    assert_eq!(live_rms, rms);
+    // Deep enough that nothing is refused: 6 blocks × 6 entries (1 sine + 4 mixer ports + 1 folded).
+    let (control, audio_engine) = SharedEngine::with_all_capacities(live, mixer, 16, 512, 64);
+    let audio_thread = std::thread::spawn(move || {
+        let mut ae = audio_engine;
+        let mut out = vec![0.0f32; 64 * 2];
+        for _ in 0..BLOCKS {
+            ae.render_block(&mut out).unwrap();
+        }
+        ae.shutdown();
+    });
+    audio_thread.join().unwrap();
+
+    let mut buf = [MeterUpdate::default(); 128];
+    let read = control.read_meters(&mut buf);
+    assert_eq!(read, (BLOCKS as usize) * 6, "six entries per block: 1 + 4 + 1");
+    assert_eq!(control.stats().meter_refusals, 0, "nothing was refused");
+
+    // The last block's entries are the ones the reference rendered too — compare those.
+    let last = |node: NodeId, port: u32| {
+        buf[..read]
+            .iter()
+            .rev()
+            .find(|u| u.node == node.0 && u.port == port && u.block == BLOCKS)
+            .copied()
+            .unwrap_or_else(|| panic!("no entry for node {node:?} port {port} at block {BLOCKS}"))
+    };
+
+    // The single-output node: BIT-IDENTICAL to the folded reading (same samples, same order,
+    // same f64 accumulator — the port entry IS the old entry for every Phase-0 node shape).
+    let s = last(sine, 0);
+    assert_eq!(s.peak.to_bits(), ref_sine.peak.to_bits(), "sine peak is bit-identical");
+    assert_eq!(s.rms.to_bits(), ref_sine.rms.to_bits(), "sine rms is bit-identical");
+    assert!(s.peak > 0.0, "the sine meters signal");
+
+    // The multi-output node: EVERY audio port has its own id; the driven port carries the
+    // signal, the three undriven ports are exact zeros — a fold could never say that.
+    let m0 = last(mixer, 4);
+    assert_eq!(m0.peak.to_bits(), ref_peak0.to_bits(), "mixer out-0 peak matches the buffer");
+    assert!(m0.peak > 0.0);
+    for port in 5..8u32 {
+        let m = last(mixer, port);
+        assert_eq!(m.peak, 0.0, "mixer out-{} is an exact zero", port - 4);
+        assert_eq!(m.rms, 0.0);
+        assert!(matches!(m.block_status(), BlockStatus::Ok), "status rides every port entry");
+    }
+
+    // The cv-only node: ONE folded entry, port sentinel, status intact — the ring still tells
+    // the truth about a node that speaks no audio.
+    let f = last(rms, MeterUpdate::FOLDED);
+    assert_eq!(f.peak, 0.0, "a cv-only node's audio levels are the honest zeros");
+    assert!(
+        matches!(f.block_status(), BlockStatus::Ok),
+        "its status survives: {:?}",
+        f.block_status()
     );
 }
 

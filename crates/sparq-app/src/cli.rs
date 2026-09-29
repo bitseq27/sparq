@@ -341,6 +341,7 @@ fn parse_ui(args: &[String]) -> Result<ui::UiOptions> {
             "--height" => o.height = parse(&val(&mut i)?, key)?,
             "--scale" => o.scale = parse(&val(&mut i)?, key)?,
             "--contrast" => o.contrast = true,
+            "--svg-out" => o.svg_out = Some(val(&mut i)?),
             other => return Err(format!("unknown ui option `{other}`")),
         }
         i += 1;

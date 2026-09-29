@@ -179,8 +179,13 @@ pub fn compute(viewport: Rect, state: &ShellState) -> ShellLayout {
     let mid_y0 = y0 + top_h;
     let mid_h = (vh - top_h - dock_h).max(0.0);
 
+    // The mockup's column discipline (design-mode.svg, increment 3): the RAIL and the
+    // INSPECTOR are full-height columns below the top bar; the DOCK lives in the canvas's
+    // column only — the instrument's sides run to the bottom, the patch's drawer does not
+    // slide under them.
+    let col_h = (vh - top_h).max(0.0);
     let rail = (rail_w > 0.0)
-        .then(|| Rect::new(Vec2::new(x0, mid_y0), Vec2::new(x0 + rail_w, mid_y0 + mid_h)));
+        .then(|| Rect::new(Vec2::new(x0, mid_y0), Vec2::new(x0 + rail_w, mid_y0 + col_h)));
     let canvas_x0 = x0 + rail_w;
     let canvas_x1 = x0 + vw - insp_w;
     let canvas = Rect::new(
@@ -188,10 +193,14 @@ pub fn compute(viewport: Rect, state: &ShellState) -> ShellLayout {
         Vec2::new(canvas_x1.max(canvas_x0), mid_y0 + mid_h),
     );
     let inspector = (insp_w > 0.0).then(|| {
-        Rect::new(Vec2::new(x0 + vw - insp_w, mid_y0), Vec2::new(x0 + vw, mid_y0 + mid_h))
+        Rect::new(Vec2::new(x0 + vw - insp_w, mid_y0), Vec2::new(x0 + vw, mid_y0 + col_h))
     });
-    let dock = (dock_h > 0.0)
-        .then(|| Rect::new(Vec2::new(x0, y0 + vh - dock_h), Vec2::new(x0 + vw, y0 + vh)));
+    let dock = (dock_h > 0.0).then(|| {
+        Rect::new(
+            Vec2::new(canvas_x0, y0 + vh - dock_h),
+            Vec2::new(canvas_x1.max(canvas_x0), y0 + vh),
+        )
+    });
 
     let design_refused = state.mode == ShellMode::Design
         && (vw < LAYOUT_BREAKPOINT_TABLET_MIN_W as f32
@@ -218,18 +227,22 @@ mod tests {
         // top bar: full width, token height
         assert_eq!(l.top_bar.width(), 1920.0);
         assert_eq!(l.top_bar.height(), LAYOUT_SHELL_TOP_BAR_HEIGHT as f32);
-        // rail: token width, from below the top bar to above the dock
+        // rail: token width, FULL HEIGHT below the top bar (the mockup's column discipline)
         let rail = l.rail.unwrap();
         assert_eq!(rail.width(), LAYOUT_SHELL_RAIL_WIDTH as f32);
         assert_eq!(rail.min.y, LAYOUT_SHELL_TOP_BAR_HEIGHT as f32);
-        // inspector: token width on the right
+        assert_eq!(rail.max.y, 1080.0);
+        // inspector: token width on the right, full height too
         let insp = l.inspector.unwrap();
         assert_eq!(insp.width(), LAYOUT_SHELL_INSPECTOR_WIDTH as f32);
         assert_eq!(insp.max.x, 1920.0);
-        // dock: token height at the bottom, full width
+        assert_eq!(insp.max.y, 1080.0);
+        // dock: token height at the bottom of the CANVAS column only
         let dock = l.dock.unwrap();
         assert_eq!(dock.height(), LAYOUT_SHELL_DOCK_HEIGHT as f32);
         assert_eq!(dock.max.y, 1080.0);
+        assert_eq!(dock.min.x, LAYOUT_SHELL_RAIL_WIDTH as f32);
+        assert_eq!(dock.max.x, 1920.0 - LAYOUT_SHELL_INSPECTOR_WIDTH as f32);
         // canvas: what remains, and panels never overlap it
         assert_eq!(l.canvas.min.x, rail.max.x);
         assert_eq!(l.canvas.max.x, insp.min.x);

@@ -17,6 +17,7 @@ use egui::{Align2, Color32, Painter, Stroke};
 use sparq_module_api::port::Phase;
 use sparq_module_api::registry::Registry;
 use sparq_ui::audit::{InteractiveElement, TouchClass};
+use sparq_ui::canvas::camera::Lod;
 use sparq_ui::canvas::connect::ConnectContext;
 use sparq_ui::canvas::interact::{CanvasEvent, CanvasState, Interaction};
 use sparq_ui::canvas::layout::CanvasLayout;
@@ -50,12 +51,19 @@ pub enum Action {
     ToggleInspector,
     /// Collapse/expand the dock.
     ToggleDock,
-    /// Transport: play (a real binding lands with WO-007/008; the shell logs it).
+    /// Transport: start the live audio session (WO-012 increment 2 — the engine binding the
+    /// stub was named for). Refusals are sentences with remedies, like every other voice.
     Play,
-    /// Transport: stop.
+    /// Transport: stop the live session; the evidence line carries the measured numbers.
     Stop,
-    /// All sound off. The only button that is red before you press it.
+    /// All sound off — stops the live session immediately. The only button that is red before
+    /// you press it.
     Panic,
+    /// Open the module browser at the canvas centre — the rail's ADD cross (WO-012 inc 3).
+    AddModule,
+    /// Spawn the dock's catalogue card at the canvas centre (WO-012 inc 3): the dock card grid's
+    /// tap, riding the same op path as the browser's row tap.
+    SpawnFromDock(usize),
 }
 
 /// Everything needed to draw + register one control, as a value: `button()` stays readable and
@@ -92,7 +100,7 @@ impl Button {
 
 /// One interactive element as laid out this frame: audit data + where it is + what it does.
 struct Registered {
-    id: &'static str,
+    id: String,
     rect: Rect,
     #[allow(dead_code)]
     // the class travels with the element for diagnostics; the audit reads its own copy
@@ -130,6 +138,13 @@ pub struct ShellUi {
     pub modules: Registry,
     /// Canvas camera, selection, in-flight interaction, context menu and undo history (WO-013).
     pub canvas: CanvasState,
+    /// The live audio session (WO-012 increment 2): `Some` while PLAY is running. The PLAY /
+    /// STOP / PANIC actions bind to it; `frame` gives it the op→sync door and the per-frame
+    /// meter drain; the audit drives it on the manual null backend. `None` = nothing playing.
+    pub live: Option<crate::ui::live::LiveSession>,
+    /// The "no master while live" refusal was already said this episode — every frame saying
+    /// it would flood the log; the transition is the event (the shell's one-voice rule).
+    live_master_lost: bool,
     /// Last frame's computed canvas layout — hit-testing an activation uses the frame the user
     /// actually saw, exactly like the shell's `registry`.
     canvas_layout: CanvasLayout,
@@ -159,6 +174,11 @@ pub struct FrameInput<'a> {
     pub pointers: &'a [PointerEvent],
     /// Monotonic milliseconds — the recogniser never reads a clock itself.
     pub now_ms: u64,
+    /// Intents the host adapter synthesises OUTSIDE the recogniser (WO-012 increment 4): a
+    /// mouse right-click is a `Context` without the 350 ms hold, a wheel is a `Pan` without a
+    /// second finger. The vocabulary is the recogniser's own — the adapter only knows which
+    /// hardware meant it; touch and mouse land in the same intent table.
+    pub extras: &'a [GestureIntent],
 }
 
 impl Default for ShellUi {
@@ -200,6 +220,8 @@ impl ShellUi {
             graph,
             modules,
             canvas,
+            live: None,
+            live_master_lost: false,
             canvas_layout: CanvasLayout::default(),
         }
     }
@@ -224,6 +246,9 @@ impl ShellUi {
             intents.extend(self.recognizer.push(*ev));
         }
         intents.extend(self.recognizer.advance(input.now_ms));
+        // The host's synthesised intents (right-click, wheel) join the recognised ones: one
+        // table, one routing, no parallel semantics.
+        intents.extend(input.extras.iter().copied());
         for s in self.recognizer.drain_suppressions() {
             self.push_log(format!(
                 "[input] t={}ms pointer {} suppressed: {}",
@@ -309,7 +334,13 @@ impl ShellUi {
                 let (Some(&id), None) = (sel.next(), sel.next()) else { return None };
                 let node = self.graph.node(id)?;
                 let hb = LAYOUT_SHELL_PANEL_HEADER_HEIGHT as f32;
-                let content = Rect::new(Vec2::new(panel.min.x, panel.min.y + hb), panel.max);
+                // The port-summary strip (increment 3, the mockup's dot column laid horizontal)
+                // sits between the fixed header and the first param row: the rows' geometry
+                // includes it, so what you see is what `row_at` lets you touch.
+                let content = Rect::new(
+                    Vec2::new(panel.min.x, panel.min.y + hb + LAYOUT_SPACE_4 as f32),
+                    panel.max,
+                );
                 // The stored scroll rides along — and `compute_at` clamps it, so the layout that
                 // comes back is the truth `set_inspector` stores (one copy of the clamp).
                 let scroll = self.canvas.inspector_scroll(id);
@@ -320,8 +351,110 @@ impl ShellUi {
         };
         self.canvas.set_inspector(inspector);
 
+        // 5b. the LIVE session (WO-012 increment 2), after this frame's edits and before the
+        //     draw: health first (a dead stream ends the session in words and the canvas is
+        //     untouched), then the one op→sync door, then the bounded drain that fills the wire
+        //     levels from the engine's OWN rings — the continuous half of live wire levels.
+        self.sync_live();
+
         self.draw(ui, &layout);
         self.last_layout = Some(layout);
+    }
+
+    /// The per-frame live block: health → sync → drain. Field-split borrows (live, graph,
+    /// modules, canvas, log) keep it one function; every line the operator sees is pushed
+    /// through the session's own honesty discipline.
+    fn sync_live(&mut self) {
+        // Health: `Removed` / `Failed` end the session with ONE honest line (D3) — the stream
+        // object stays valid, so the evidence line still reads its measured counters.
+        let failure = self.live.as_ref().and_then(|s| {
+            let st = s.health();
+            match st {
+                sparq_kernel::hal::StreamState::Removed
+                | sparq_kernel::hal::StreamState::Failed => {
+                    Some((st, s.last_error().unwrap_or_else(|| "no driver message".to_string())))
+                },
+                _ => None,
+            }
+        });
+        if let Some((st, err)) = failure {
+            if let Some(dead) = self.live.take() {
+                self.push_log(format!(
+                    "live: the stream is {st:?} — {err}; the session stopped and the canvas is \
+                     untouched"
+                ));
+                dead.stop("STOP", &mut self.log);
+            }
+        }
+        let Some(s) = self.live.as_mut() else { return };
+        // The op→sync door reads the CURRENT master: a handover is structural even with an
+        // empty ledger (D7). No master while live (the operator deleted the output node): the
+        // ledger is NOT taken — it waits for a patch the engine can hear again — and the
+        // refusal is said ONCE per episode, because every frame saying it would flood the log.
+        let Some(master) = self.canvas.resolve_master(&self.graph) else {
+            if !self.live_master_lost {
+                self.live_master_lost = true;
+                self.push_log(
+                    "live: the patch has no module with an audio output — the session keeps \
+                     playing the last good patch; the edits wait on the canvas"
+                        .to_string(),
+                );
+            }
+            return;
+        };
+        self.live_master_lost = false;
+        let changes = self.canvas.take_patch_changes();
+        s.sync(&self.graph, &self.modules, master, &changes, &mut self.log);
+        // The drain: last-wins per (node, port), bounded per frame (D11). The painter path is
+        // the increment-4/5 one — this swaps the SOURCE, not the drawing.
+        let levels = s.drain().clone();
+        self.canvas.levels = levels;
+    }
+
+    /// Start the live session (PLAY, and the audit's hermetic path with explicit options).
+    /// Every refusal is a sentence with the remedy — the shell explains itself.
+    pub fn start_live_with(&mut self, opts: crate::ui::live::LiveOptions) {
+        if self.live.is_some() {
+            self.push_log(
+                "PLAY: already running — STOP first (one stream at a time; a second would be a \
+                 second claim on the device)"
+                    .to_string(),
+            );
+            return;
+        }
+        let Some(master) = self.canvas.resolve_master(&self.graph) else {
+            self.push_log(
+                "PLAY REFUSED: the patch has no module with an audio output — add one (e.g. \
+                 util/gain) or long-press a node and SET MASTER"
+                    .to_string(),
+            );
+            return;
+        };
+        // The session is built from the CURRENT graph — ledger entries from before PLAY are
+        // history the executor already contains; taking them keeps the first sync honest.
+        self.canvas.take_patch_changes();
+        match crate::ui::live::LiveSession::start(
+            &self.graph,
+            master,
+            &self.modules,
+            opts,
+            &mut self.log,
+        ) {
+            Ok(session) => self.live = Some(session),
+            Err(e) => self.push_log(format!("PLAY REFUSED: {e}")),
+        }
+        self.live_master_lost = false;
+    }
+
+    /// Stop the live session (STOP and PANIC — a stopped stream IS all sound off; PANIC's word
+    /// keeps its promise without inventing a second mechanism). The evidence line carries the
+    /// measured numbers, read not invented.
+    fn stop_live(&mut self, verb: &str) {
+        self.live_master_lost = false;
+        match self.live.take() {
+            Some(session) => session.stop(verb, &mut self.log),
+            None => self.push_log(format!("{verb}: nothing is playing")),
+        }
     }
 
     /// Feed the open modal sheet from this frame's keyboard events (step 3b of `frame`). The
@@ -494,7 +627,7 @@ impl ShellUi {
                 // immediate mode that IS what was on screen when the finger came down).
                 match self.registry.iter().rev().find(|r| r.rect.contains(pos)) {
                     Some(hit) => {
-                        let (action, id) = (hit.action, hit.id);
+                        let (action, id) = (hit.action, hit.id.clone());
                         self.push_log(format!("t={now_ms}ms activate: {id}"));
                         self.run(action);
                     },
@@ -510,7 +643,7 @@ impl ShellUi {
                     .iter()
                     .rev()
                     .find(|r| r.rect.contains(pos))
-                    .map_or("empty space", |r| r.id);
+                    .map_or("empty space", |r| r.id.as_str());
                 self.push_log(format!(
                     "t={now_ms}ms long-press context: {id} (menu binds in WO-013)"
                 ));
@@ -607,12 +740,36 @@ impl ShellUi {
                     if self.state.dock_collapsed { "collapsed" } else { "expanded" }
                 ));
             },
-            Action::Play => {
-                self.push_log("transport: PLAY (engine binding: WO-007/008)".to_string())
-            },
-            Action::Stop => self.push_log("transport: STOP".to_string()),
+            Action::Play => self.start_live_with(crate::ui::live::LiveOptions::default()),
+            Action::Stop => self.stop_live("STOP"),
             Action::Panic => {
-                self.push_log("PANIC: all sound off (engine binding: WO-007/008)".to_string());
+                // PANIC's promise is "all sound off" — a stopped stream IS all sound off, and
+                // the evidence line that follows carries the measured numbers.
+                self.push_log("PANIC: all sound off".to_string());
+                self.stop_live("PANIC");
+            },
+            Action::AddModule => {
+                if let Some(rect) = self.last_layout.as_ref().map(|l| l.canvas) {
+                    let center = rect.center();
+                    for ev in self.canvas.browser_open_at(center, rect) {
+                        self.push_log(ev.message());
+                    }
+                }
+            },
+            Action::SpawnFromDock(i) => {
+                if let Some(rect) = self.last_layout.as_ref().map(|l| l.canvas) {
+                    let Some(id) = self.canvas.catalog().get(i).map(|it| it.spec.module_id.clone())
+                    else {
+                        self.push_log(format!(
+                            "dock card {i} is not in the catalogue — the dock cannot offer what                              is not installed (defect #58)"
+                        ));
+                        return;
+                    };
+                    let world = self.canvas.camera.to_world(rect.center(), rect);
+                    for ev in self.canvas.spawn_module(&mut self.graph, &id, world) {
+                        self.push_log(ev.message());
+                    }
+                }
             },
         }
     }
@@ -701,7 +858,12 @@ impl ShellUi {
         );
         let color = b.accent.unwrap_or(pal.text_secondary);
         p.text(eg.center(), Align2::CENTER_CENTER, b.label, font_s(), color);
-        self.registry.push(Registered { id: b.id, rect: b.rect, class: b.class, action: b.action });
+        self.registry.push(Registered {
+            id: b.id.to_string(),
+            rect: b.rect,
+            class: b.class,
+            action: b.action,
+        });
         self.audit_elements.push(InteractiveElement {
             id: b.id.to_string(),
             class: b.class,
@@ -738,9 +900,19 @@ impl ShellUi {
             [eg.left_bottom(), eg.right_bottom()],
             pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32),
         );
-        // The wordmark wears the audio accent: in this interface, the accent IS the signal.
+        // The mark: a four-ray star in the audio accent (design-mode.svg's logo), then the
+        // wordmark — in this interface, the accent IS the signal.
+        let logo_c = eg.left_center() + egui::vec2(LAYOUT_SPACE_PADDING_PANEL as f32, 0.0);
+        let le = LAYOUT_SPACE_4 as f32;
+        let lr = egui::Rect::from_center_size(logo_c, egui::vec2(le, le));
+        let lst = Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, pal.audio);
+        p.line_segment([egui::pos2(logo_c.x, lr.top()), egui::pos2(logo_c.x, lr.bottom())], lst);
+        p.line_segment([egui::pos2(lr.left(), logo_c.y), egui::pos2(lr.right(), logo_c.y)], lst);
+        let d = le / 2.0 * 0.7;
+        p.line_segment([logo_c - egui::vec2(d, d), logo_c + egui::vec2(d, d)], lst);
+        p.line_segment([logo_c - egui::vec2(d, -d), logo_c + egui::vec2(d, -d)], lst);
         p.text(
-            eg.left_center() + egui::vec2(LAYOUT_SPACE_PADDING_PANEL as f32, 0.0),
+            eg.left_center() + egui::vec2(LAYOUT_SPACE_PADDING_PANEL as f32 + le, 0.0),
             Align2::LEFT_CENTER,
             "sparq",
             font_l(),
@@ -762,12 +934,31 @@ impl ShellUi {
             return;
         }
 
+        // Section dividers at the mockup's stations (token arithmetic on the 8 px grid), and
+        // between them the top-bar DIAGNOSTICS the mockup review names: while a session runs,
+        // the negotiated truth with units; at rest, the build stamp. Measured or stamped, never
+        // decorative.
+        let div1 = eg.min.x + LAYOUT_SPACE_9 as f32 * 2.0 + LAYOUT_SPACE_8 as f32;
+        let div2 = eg.min.x + LAYOUT_SPACE_9 as f32 * 8.0;
+        for dx in [div1, div2] {
+            p.line_segment(
+                [
+                    egui::pos2(dx, eg.min.y + LAYOUT_SPACE_3 as f32),
+                    egui::pos2(dx, eg.max.y - LAYOUT_SPACE_3 as f32),
+                ],
+                pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
+            );
+        }
+        let diag = match self.live.as_ref() {
+            Some(session) => session.diag_line(),
+            None => crate::stamp::line(),
+        };
         p.text(
-            eg.left_center() + egui::vec2(LAYOUT_SPACE_9 as f32 + LAYOUT_SPACE_2 as f32, 0.0),
+            egui::pos2(div1 + LAYOUT_SPACE_3 as f32, eg.center().y),
             Align2::LEFT_CENTER,
-            "phase 0 shell prototype - WO-012",
+            diag,
             font_xs(),
-            pal.text_disabled,
+            pal.text_tertiary,
         );
 
         // Right-aligned control cluster. Height is the token rail_button (44 px) inside the
@@ -812,6 +1003,133 @@ impl ShellUi {
             self.button(p, pal, &b);
             x -= gap;
         }
+        // The session status dot rides left of the cluster, paired with its WORD (§4: colour
+        // is never the only encoding). At rest: no dot, no word — silence looks silent.
+        if self.live.is_some() {
+            let word_w = 4.0 * char_w;
+            let dot_x = x - gap - word_w - gap - char_w;
+            p.text(
+                egui::pos2(dot_x + char_w + gap, eg.center().y),
+                Align2::LEFT_CENTER,
+                "LIVE",
+                font_xs(),
+                pal.playing,
+            );
+            p.circle_filled(egui::pos2(dot_x, eg.center().y), char_w / 2.0 + 1.0, pal.playing);
+        }
+    }
+
+    /// A rail glyph (WO-012 inc 3, the mockup's iconography): geometric, 1 px stroke, drawn in a
+    /// 16 px box — the look-board's icon rule. Every glyph rides with its WORD under it (the
+    /// operator's decision between the mockup's icon-only rail and the board's label rule).
+    fn glyph(p: &Painter, c: egui::Pos2, g: Action, col: Color32) {
+        let e = LAYOUT_SPACE_4 as f32;
+        let r = egui::Rect::from_center_size(c, egui::vec2(e, e));
+        let st = Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, col);
+        match g {
+            Action::Play => {
+                let a = egui::pos2(r.left() + e / 4.0, r.top());
+                let b = egui::pos2(r.left() + e / 4.0, r.bottom());
+                let t = egui::pos2(r.right() - e / 8.0, c.y);
+                p.line(vec![a, b, t, a], st);
+            },
+            Action::Stop => {
+                p.rect_stroke(r.shrink(e / 4.0), 0, st, egui::StrokeKind::Middle);
+            },
+            Action::Panic => {
+                p.circle_stroke(c, e / 2.0 - e / 8.0, st);
+            },
+            Action::ToggleMode => {
+                p.rect_stroke(r.shrink(e / 8.0), 0, st, egui::StrokeKind::Middle);
+                p.line_segment(
+                    [egui::pos2(r.left() + e / 8.0, c.y), egui::pos2(r.right() - e / 8.0, c.y)],
+                    st,
+                );
+            },
+            Action::ToggleDock => {
+                p.rect_stroke(
+                    egui::Rect::from_min_max(
+                        egui::pos2(r.left(), r.top() + e / 4.0),
+                        egui::pos2(c.x - e / 8.0, r.bottom()),
+                    ),
+                    0,
+                    st,
+                    egui::StrokeKind::Middle,
+                );
+                p.rect_stroke(
+                    egui::Rect::from_min_max(
+                        egui::pos2(c.x + e / 8.0, r.top()),
+                        egui::pos2(r.right(), r.bottom() - e / 4.0),
+                    ),
+                    0,
+                    st,
+                    egui::StrokeKind::Middle,
+                );
+            },
+            Action::ToggleInspector => {
+                for i in 0..3 {
+                    let y = r.top() + e / 4.0 + i as f32 * (e / 2.0) / 2.0;
+                    p.line_segment(
+                        [egui::pos2(r.left() + e / 8.0, y), egui::pos2(r.right() - e / 8.0, y)],
+                        st,
+                    );
+                }
+            },
+            Action::AddModule => {
+                p.line_segment([egui::pos2(c.x, r.top()), egui::pos2(c.x, r.bottom())], st);
+                p.line_segment([egui::pos2(r.left(), c.y), egui::pos2(r.right(), c.y)], st);
+            },
+            _ => {},
+        }
+    }
+
+    /// A rail button as glyph + permanent micro-label (the operator's rail decision): the
+    /// mockup's 44 px box and 52 px pitch, the board's word. Registration is the same as
+    /// [`Self::button`] — one audit list for everything you can touch.
+    #[allow(clippy::too_many_arguments)]
+    fn glyph_button(
+        &mut self,
+        p: &Painter,
+        pal: &Palette,
+        id: &'static str,
+        rect: Rect,
+        action: Action,
+        accent: Option<Color32>,
+    ) {
+        let eg = egui_rect(rect);
+        p.rect_filled(eg, LAYOUT_CORNER_MICRO as u8, pal.ground_panel_alt);
+        p.rect_stroke(
+            eg,
+            LAYOUT_CORNER_MICRO as u8,
+            pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32),
+            egui::StrokeKind::Middle,
+        );
+        let color = accent.unwrap_or(pal.text_secondary);
+        let label = match action {
+            Action::Play => "PLAY",
+            Action::Stop => "STOP",
+            Action::Panic => "PANIC",
+            Action::ToggleMode => "MODE",
+            Action::ToggleDock => "MODS",
+            Action::ToggleInspector => "DIAG",
+            Action::AddModule => "ADD",
+            _ => "",
+        };
+        Self::glyph(p, eg.center() - egui::vec2(0.0, LAYOUT_SPACE_1 as f32), action, color);
+        p.text(
+            eg.center() + egui::vec2(0.0, LAYOUT_SPACE_3 as f32),
+            Align2::CENTER_CENTER,
+            label,
+            font_xs(),
+            color,
+        );
+        self.registry.push(Registered { id: id.to_string(), rect, class: TouchClass::S, action });
+        self.audit_elements.push(InteractiveElement {
+            id: id.to_string(),
+            class: TouchClass::S,
+            rect,
+            dense_allowed: false,
+        });
     }
 
     fn draw_rail(&mut self, p: &Painter, rail: Rect, pal: &Palette) {
@@ -822,33 +1140,74 @@ impl ShellUi {
             pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32),
         );
         // 44 px buttons in a 56 px rail: the token pair (rail_width, rail_button) exists exactly
-        // for this. Sections top-down: transport, mode, browsers, diagnostics (plan §14.2).
+        // for this. The mockup's grouped sections (design-mode.svg): transport, view, and at the
+        // foot the level tick + the ADD cross; hairline dividers between groups, as drawn there.
         let b = LAYOUT_SHELL_RAIL_BUTTON as f32;
         let gap = LAYOUT_SPACE_2 as f32;
         let x0 = rail.min.x + (rail.width() - b) / 2.0;
         let mut y = rail.min.y + gap;
-        let entries: [(&str, &str, Action); 6] = [
-            ("rail/transport/play", "PLAY", Action::Play),
-            ("rail/transport/stop", "STOP", Action::Stop),
-            ("rail/transport/panic", "PANIC", Action::Panic),
-            ("rail/mode/toggle", "MODE", Action::ToggleMode),
-            ("rail/browser", "MODS", Action::ToggleDock),
-            ("rail/diagnostics", "DIAG", Action::ToggleDock),
+        let groups: [[(&str, Action); 3]; 2] = [
+            [
+                ("rail/transport/play", Action::Play),
+                ("rail/transport/stop", Action::Stop),
+                ("rail/transport/panic", Action::Panic),
+            ],
+            [
+                ("rail/mode/toggle", Action::ToggleMode),
+                ("rail/browser", Action::ToggleDock),
+                ("rail/diagnostics", Action::ToggleInspector),
+            ],
         ];
-        for (id, label, action) in entries {
-            let rect = Rect::new(Vec2::new(x0, y), Vec2::new(x0 + b, y + b));
-            // Panic is red before you press it: the one control whose colour carries urgency
-            // rather than signal class — and it stays redundant with the word PANIC, because
-            // nothing may be encoded by colour alone (look-board rule).
-            let mut btn = Button::new(id, rect, label, TouchClass::S, action);
-            match action {
-                Action::Panic => btn = btn.accent(pal.error),
-                Action::Play => btn = btn.accent(pal.playing),
-                _ => {},
+        for (gi, group) in groups.iter().enumerate() {
+            if gi > 0 {
+                y += gap;
+                p.line_segment(
+                    [egui::pos2(rail.min.x + gap, y), egui::pos2(rail.max.x - gap, y)],
+                    pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
+                );
+                y += gap;
             }
-            self.button(p, pal, &btn);
-            y += b + gap;
+            for (id, action) in group {
+                let rect = Rect::new(Vec2::new(x0, y), Vec2::new(x0 + b, y + b));
+                // Panic is red before you press it: the one control whose colour carries urgency
+                // rather than signal class — and it stays redundant with the word PANIC, because
+                // nothing may be encoded by colour alone (look-board rule).
+                let accent = match action {
+                    Action::Panic => Some(pal.error),
+                    Action::Play => Some(pal.playing),
+                    _ => None,
+                };
+                self.glyph_button(p, pal, id, rect, *action, accent);
+                y += b + gap;
+            }
         }
+        // The foot: the live level tick (the mockup's green well, in the AUDIO class colour —
+        // §4: colour is the signal class, so a master-audio meter is amber, not green) and the
+        // ADD cross that opens the browser at the canvas centre.
+        let foot =
+            Rect::new(Vec2::new(x0, rail.max.y - gap - b), Vec2::new(x0 + b, rail.max.y - gap));
+        let tick_h = LAYOUT_SPACE_1 as f32;
+        let tick_w = LAYOUT_SPACE_4 as f32 * 2.0 + tick_h;
+        let tick = Rect::new(
+            Vec2::new(x0 + (b - tick_w) / 2.0, foot.min.y - gap - tick_h),
+            Vec2::new(x0 + (b + tick_w) / 2.0, foot.min.y - gap),
+        );
+        let te = egui_rect(tick);
+        p.rect_filled(te, LAYOUT_CORNER_NONE as u8, pal.ground_inset);
+        let level = self
+            .canvas
+            .resolve_master(&self.graph)
+            .map(|m| self.canvas.levels.get(m))
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        if level > 0.0 {
+            let fill = egui::Rect::from_min_max(
+                te.left_top(),
+                egui::pos2(te.left() + te.width() * level, te.bottom()),
+            );
+            p.rect_filled(fill, LAYOUT_CORNER_NONE as u8, pal.audio);
+        }
+        self.glyph_button(p, pal, "rail/add", foot, Action::AddModule, Some(pal.event));
     }
 
     fn draw_canvas(&mut self, p: &Painter, layout: &ShellLayout, pal: &Palette) {
@@ -860,6 +1219,13 @@ impl ShellUi {
             // painter registers node/port/menu touch targets into the same audit list the chrome
             // uses, so the canvas is measured by the same gate as everything else.
             let ctx = ConnectContext::no_adapters(Phase::Zero);
+            // The scope traces (WO-013 increment 6, D3′): the LIVE session is the single
+            // source; at rest the painter gets an empty set and every scope shows its rest
+            // line — a dead stream's signal is never left on screen.
+            let no_traces = sparq_ui::canvas::scope::ScopeTraces::new();
+            let traces = self.live.as_ref().map(|s| s.traces()).unwrap_or(&no_traces);
+            let no_meters = sparq_ui::canvas::levels::LiveMeters::new();
+            let meters = self.live.as_ref().map(|s| s.meters()).unwrap_or(&no_meters);
             canvas_ui::draw(
                 p,
                 pal,
@@ -868,8 +1234,24 @@ impl ShellUi {
                 &self.canvas_layout,
                 layout.canvas,
                 &ctx,
+                traces,
+                meters,
                 &mut self.audit_elements,
             );
+            // The wire-encoding legend (increment 3, the mockup's floating box): top-right of
+            // the canvas, Design mode, every LOD but Dot — at Dot the canvas is dots and
+            // hairlines by contract, chrome included. Drawn from the wires' own encoding table.
+            if self.canvas_layout.lod != Lod::Dot {
+                let lw = LAYOUT_SPACE_9 as f32 + LAYOUT_SPACE_7 as f32;
+                let lh = LAYOUT_SPACE_4 as f32 * 5.0 + LAYOUT_SPACE_2 as f32 * 2.0;
+                let lx = layout.canvas.max.x - lw - LAYOUT_SPACE_4 as f32;
+                let ly = layout.canvas.min.y + LAYOUT_SPACE_4 as f32;
+                canvas_ui::draw_wire_legend(
+                    p,
+                    pal,
+                    Rect::new(Vec2::new(lx, ly), Vec2::new(lx + lw, ly + lh)),
+                );
+            }
             // A one-line affordance hint above the intent log band (the two never collide).
             p.text(
                 eg.left_bottom()
@@ -1010,6 +1392,22 @@ impl ShellUi {
                 ],
                 pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
             );
+            // The port summary (increment 3): one dot per port in manifest order — INPUTS as
+            // rings, OUTPUTS filled (direction never rides colour alone), each in its signal
+            // class. The node's ports at a glance, from the spec: data, not decoration.
+            let mut dx = il.title.min.x;
+            let dy = il.title.max.y + (LAYOUT_SPACE_4 as f32) / 2.0;
+            let pr = (LAYOUT_SPACE_2 as f32) / 2.0;
+            for pt in &node.spec.ports {
+                let col = canvas_ui::class_colour(sparq_ui::canvas::layout::signal_class(pt), pal);
+                let c = egui::pos2(dx + pr, dy);
+                if pt.direction == sparq_module_api::port::Direction::Out {
+                    p.circle_filled(c, pr, col);
+                } else {
+                    p.circle_stroke(c, pr, Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, col));
+                }
+                dx += LAYOUT_SPACE_4 as f32;
+            }
             if il.rows.is_empty() {
                 p.text(
                     egui::pos2(il.title.min.x, il.title.max.y + LAYOUT_SPACE_4 as f32),
@@ -1033,25 +1431,22 @@ impl ShellUi {
                     if row.editable { pal.text_secondary } else { pal.text_disabled },
                 );
                 if row.editable {
+                    // The mockup's slider language (increment 3): a CONTROL-class track —
+                    // cyan, because a slider is a control, §4 — with the value's fill at signal
+                    // weight and a vertical BLOCK thumb (the mockup's), not a circle: a bar
+                    // reads as a position on a scale at a glance, a dot reads as a datapoint.
                     let mid_y = row.track.center().y;
                     let (a, b) =
                         (egui::pos2(row.track.min.x, mid_y), egui::pos2(row.track.max.x, mid_y));
-                    p.line_segment(
-                        [a, b],
-                        pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32),
-                    );
+                    p.line_segment([a, b], Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, pal.cv));
                     let kx = sparq_ui::canvas::inspector::knob_x(desc, row.track, value);
                     let knob = egui::pos2(kx, mid_y);
-                    p.line_segment(
-                        [a, knob],
-                        Stroke::new(LAYOUT_STROKE_SIGNAL as f32, pal.selected),
-                    );
-                    p.circle_filled(knob, LAYOUT_TOUCH_PORT_RADIUS as f32, pal.selected);
-                    p.circle_stroke(
+                    p.line_segment([a, knob], Stroke::new(LAYOUT_STROKE_SIGNAL as f32, pal.cv));
+                    let thumb = egui::Rect::from_center_size(
                         knob,
-                        LAYOUT_TOUCH_PORT_RADIUS as f32,
-                        pal.hairline(pal.hairline_strong, LAYOUT_STROKE_HAIRLINE as f32),
+                        egui::vec2(LAYOUT_SPACE_2 as f32, LAYOUT_SPACE_5 as f32),
                     );
+                    p.rect_filled(thumb, LAYOUT_CORNER_MICRO as u8, pal.cv);
                 }
                 p.text(
                     egui::pos2(row.value.max.x, row.value.center().y),
@@ -1115,37 +1510,145 @@ impl ShellUi {
                 .dense(),
         );
 
-        // Tab labels drawn DISABLED until WO-013 gives them content. Drawing them interactive
-        // and doing nothing would be a lie; disabled says "coming" honestly (and keeps them out
-        // of the audit, which only measures things you can actually touch).
-        let mut x = dock.min.x + LAYOUT_SPACE_PADDING_PANEL as f32 + LAYOUT_SPACE_9 as f32;
-        for tab in ["MODULES", "LIBRARY", "STREAMS", "SCENES", "JOURNAL"] {
+        // Tabs: MODULES is LIVE — the card grid below is its content. The other four stay
+        // DISABLED words until their subsystems exist; drawing them interactive with nothing
+        // behind them would be the lie the stub exists to avoid.
+        let char_w = LAYOUT_SPACE_2 as f32;
+        let mut x = dock.min.x + LAYOUT_SPACE_PADDING_PANEL as f32;
+        for (tab, live) in [
+            ("MODULES", true),
+            ("LIBRARY", false),
+            ("STREAMS", false),
+            ("SCENES", false),
+            ("JOURNAL", false),
+        ] {
             p.text(
-                egui::pos2(x, dock.min.y + hb + LAYOUT_SPACE_2 as f32),
+                egui::pos2(x, dock.min.y + hb / 2.0),
                 Align2::LEFT_CENTER,
                 tab,
                 font_xs(),
-                pal.text_disabled,
+                if live { pal.text_primary } else { pal.text_disabled },
             );
-            x += LAYOUT_SPACE_9 as f32;
+            if live {
+                p.line_segment(
+                    [
+                        egui::pos2(x, dock.min.y + hb - LAYOUT_STROKE_HAIRLINE as f32),
+                        egui::pos2(
+                            x + tab.len() as f32 * char_w,
+                            dock.min.y + hb - LAYOUT_STROKE_HAIRLINE as f32,
+                        ),
+                    ],
+                    Stroke::new(LAYOUT_STROKE_SIGNAL as f32, pal.audio),
+                );
+            }
+            x += tab.len() as f32 * char_w + LAYOUT_SPACE_5 as f32;
         }
-        let body_y = dock.min.y + hb + LAYOUT_SPACE_4 as f32 + LAYOUT_SPACE_4 as f32;
-        p.text(
-            egui::pos2(dock.min.x + LAYOUT_SPACE_PADDING_PANEL as f32, body_y),
-            Align2::LEFT_TOP,
-            "module browser lands with WO-013; until then this panel proves the shell layout,",
-            font_s(),
-            pal.text_tertiary,
-        );
-        p.text(
-            egui::pos2(
-                dock.min.x + LAYOUT_SPACE_PADDING_PANEL as f32,
-                body_y + LAYOUT_SPACE_4 as f32,
-            ),
-            Align2::LEFT_TOP,
-            "the dock collapse/expand gesture path, and the audit's dense-badge exception.",
-            font_s(),
-            pal.text_tertiary,
-        );
+
+        // The module palette (increment 4, the operator's ask): SMALL tiles (112x48, class M —
+        // the 44 px floor holds), grouped by the manifest's top category in registry order,
+        // each group under its xs word; the tile's left stripe is its dominant SIGNAL class
+        // (§4: colour says what the module CARRIES, the group says what it IS — never
+        // accent-by-category). A tap spawns at the canvas centre through the browser's own op
+        // path: undoable, ledger-marked, one undo step.
+        let cw = LAYOUT_SHELL_DOCK_CARD_W as f32;
+        let ch = LAYOUT_SHELL_DOCK_CARD_H as f32;
+        let gap = LAYOUT_SPACE_2 as f32;
+        let pad = LAYOUT_SPACE_PADDING_PANEL as f32;
+        let body_top = dock.min.y + hb + gap * 2.0;
+        let head_h = LAYOUT_SPACE_4 as f32;
+        // Group catalogue indices by top category, preserving registry order.
+        let cat = self.canvas.catalog();
+        let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
+        for (i, item) in cat.iter().enumerate() {
+            let top = item.spec.module_id.split('/').next().unwrap_or("?");
+            match groups.iter_mut().find(|(g, _)| *g == top) {
+                Some((_, v)) => v.push(i),
+                None => groups.push((top, vec![i])),
+            }
+        }
+        let rows_fit = (((dock.height() - hb - gap * 3.0) / (ch + gap)).floor() as usize).max(1);
+        let mut x = dock.min.x + pad;
+        let mut shown = 0usize;
+        for (name, members) in &groups {
+            let cols_needed = members.len().div_ceil(rows_fit);
+            let group_w = cols_needed as f32 * (cw + gap) - gap;
+            if x + group_w > dock.max.x - pad {
+                break; // what does not fit is counted in words below — never drawn half
+            }
+            p.text(
+                egui::pos2(x, body_top - gap),
+                Align2::LEFT_CENTER,
+                name.to_uppercase(),
+                font_xs(),
+                pal.text_tertiary,
+            );
+            for (k, &idx) in members.iter().enumerate() {
+                let (c, r) = (k / rows_fit, k % rows_fit);
+                let item = &cat[idx];
+                let rect = Rect::new(
+                    Vec2::new(x + c as f32 * (cw + gap), body_top + head_h + r as f32 * (ch + gap)),
+                    Vec2::new(
+                        x + c as f32 * (cw + gap) + cw,
+                        body_top + head_h + r as f32 * (ch + gap) + ch,
+                    ),
+                );
+                let eg = egui_rect(rect);
+                p.rect_filled(eg, LAYOUT_CORNER_MICRO as u8, pal.ground_panel_alt);
+                p.rect_stroke(
+                    eg,
+                    LAYOUT_CORNER_MICRO as u8,
+                    pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
+                    egui::StrokeKind::Middle,
+                );
+                // The stripe: dominant signal class, signal weight (2 px) — what the module
+                // carries, in the class language, on the tile's left edge.
+                use sparq_module_api::port::Direction;
+                let cls = item
+                    .spec
+                    .ports
+                    .iter()
+                    .find(|pt| pt.direction == Direction::Out)
+                    .or_else(|| item.spec.ports.iter().find(|pt| pt.direction == Direction::In))
+                    .map(sparq_ui::canvas::layout::signal_class)
+                    .unwrap_or(sparq_ui::canvas::layout::SignalClass::Neutral);
+                let stripe = egui::Rect::from_min_size(
+                    eg.left_top(),
+                    egui::vec2(LAYOUT_STROKE_SIGNAL as f32, eg.height()),
+                );
+                p.rect_filled(stripe, LAYOUT_CORNER_NONE as u8, canvas_ui::class_colour(cls, pal));
+                p.text(
+                    egui::pos2(eg.min.x + LAYOUT_SPACE_3 as f32, eg.center().y),
+                    Align2::LEFT_CENTER,
+                    item.spec.display_name.as_str(),
+                    font_xs(),
+                    pal.text_secondary,
+                );
+                let id: String = format!("dock/card/{idx}");
+                self.registry.push(Registered {
+                    id: id.clone(),
+                    rect,
+                    class: TouchClass::M,
+                    action: Action::SpawnFromDock(idx),
+                });
+                self.audit_elements.push(InteractiveElement {
+                    id,
+                    class: TouchClass::M,
+                    rect,
+                    dense_allowed: false,
+                });
+                shown += 1;
+            }
+            x += group_w + LAYOUT_SPACE_5 as f32;
+        }
+        let total = self.canvas.catalog_len();
+        if total > shown {
+            p.text(
+                egui::pos2(dock.max.x - pad, dock.max.y - LAYOUT_SPACE_4 as f32),
+                Align2::RIGHT_CENTER,
+                format!("+ {} more below — resize the dock, or search with MODS", total - shown),
+                font_xs(),
+                pal.text_tertiary,
+            );
+        }
     }
 }

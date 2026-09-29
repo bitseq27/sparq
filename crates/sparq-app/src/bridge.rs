@@ -72,10 +72,13 @@ pub fn demo_graph(registry: &Registry) -> Result<CanvasGraph, String> {
 
     let mut g = CanvasGraph::new();
     let grid = LAYOUT_CANVAS_SNAP as f32;
-    let sine = g.op_add_node(spec("sparq/syn/sine")?, Vec2::new(0.0, 0.0));
-    let gain = g.op_add_node(spec("sparq/util/gain")?, Vec2::new(grid * 40.0, 0.0));
-    let rms = g.op_add_node(spec("sparq/ana/rms")?, Vec2::new(grid * 80.0, 0.0));
-    let _main = g.op_add_node(spec("sparq/out/main")?, Vec2::new(grid * 40.0, grid * 25.0));
+    // Positions tell the patch's story the way the mockup's does (design-mode.svg): source
+    // left, processor centre, analysis below the chain, output right — a patch that reads
+    // left-to-right at first sight instead of huddling in the corner.
+    let sine = g.op_add_node(spec("sparq/syn/sine")?, Vec2::new(0.0, grid * 20.0));
+    let gain = g.op_add_node(spec("sparq/util/gain")?, Vec2::new(grid * 50.0, grid * 20.0));
+    let rms = g.op_add_node(spec("sparq/ana/rms")?, Vec2::new(grid * 50.0, grid * 50.0));
+    let _main = g.op_add_node(spec("sparq/out/main")?, Vec2::new(grid * 100.0, grid * 20.0));
     let (sid, gid, rid) = (node_id(&sine), node_id(&gain), node_id(&rms));
     // sine.out (mono) → gain.in (stereo): the documented fan-out.
     let _ = g.op_add_wire(
@@ -153,6 +156,40 @@ pub fn build_with_map(
     master: CanvasNodeId,
     registry: &Registry,
 ) -> Result<(Executor, KernelNodeId, HashMap<CanvasNodeId, KernelNodeId>), String> {
+    build_with_map_at(graph, master, registry, render_config())
+}
+
+/// The [`ExecConfig`] every OFFLINE canvas path builds at: the render constants, raw latency
+/// (the canvas render reports what the patch declares, it does not silently re-time it —
+/// ADR-006.6's switch is opt-in; the shell will expose it when the canvas does), the default
+/// watchdog. One named door so the live path can differ in exactly one dimension: the numbers.
+#[must_use]
+pub fn render_config() -> ExecConfig {
+    ExecConfig {
+        sample_rate: RENDER_RATE,
+        block_frames: RENDER_BLOCK,
+        device_channels: RENDER_CHANNELS,
+        latency: LatencyMode::Raw,
+        watchdog: Watchdog::default(),
+    }
+}
+
+/// [`build_with_map`] at an explicit config — the LIVE session's door (WO-012 increment 2). The
+/// executor a device stream renders through must be built for the NEGOTIATED truth (the probe
+/// open's rate · block · channels), never for the offline render constants: a shared-mode ladder
+/// can land on the engine's mix format, and a patch built at the wrong rate is a latency lie the
+/// `play` path learned to refuse. Everything else — registry instantiation, node params, the
+/// map — is the identical code path, so an offline and a live build of the same patch at the
+/// same numbers are the same executor.
+///
+/// # Errors
+/// Exactly what [`build_with_map`] reports.
+pub fn build_with_map_at(
+    graph: &CanvasGraph,
+    master: CanvasNodeId,
+    registry: &Registry,
+    cfg: ExecConfig,
+) -> Result<(Executor, KernelNodeId, HashMap<CanvasNodeId, KernelNodeId>), String> {
     let mut kg = KernelGraph::new();
     let mut map: HashMap<CanvasNodeId, KernelNodeId> = HashMap::new();
     for n in graph.nodes() {
@@ -202,15 +239,6 @@ pub fn build_with_map(
         ));
     }
 
-    let cfg = ExecConfig {
-        sample_rate: RENDER_RATE,
-        block_frames: RENDER_BLOCK,
-        device_channels: RENDER_CHANNELS,
-        // Raw latency: the canvas render reports what the patch declares, it does not silently
-        // re-time it (ADR-006.6's switch is opt-in; the shell will expose it when the canvas does).
-        latency: LatencyMode::Raw,
-        watchdog: Watchdog::default(),
-    };
     let ex = Executor::build(kg, builds, cfg).map_err(|e| e.to_string())?;
     Ok((ex, k_master, map))
 }
@@ -349,6 +377,42 @@ mod tests {
         let peak = out.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
         assert!((peak - 0.5).abs() < 1e-3, "peak {peak}");
         assert!(ex.memory_budget_bytes() > 0);
+    }
+
+    #[test]
+    fn the_config_door_delegates_bit_identically_and_the_live_door_takes_the_negotiated_truth() {
+        // WO-012 increment 2, D5: `build_with_map` now delegates to `build_with_map_at` at the
+        // render constants — the delegation must be bit-identical (pinned, not hoped), and the
+        // new door must genuinely build at DIFFERENT numbers, because a live session builds for
+        // the negotiated device truth, whatever it turns out to be.
+        let reg = registry();
+        let g = demo_graph(&reg).unwrap();
+        let master = CanvasState::new().resolve_master(&g).unwrap();
+
+        let (mut a, am, map_a) = build_with_map(&g, master, &reg).unwrap();
+        let (mut b, bm, map_b) = build_with_map_at(&g, master, &reg, render_config()).unwrap();
+        assert_eq!(am, bm, "the master designation is the same node");
+        assert_eq!(map_a, map_b, "the canvas→kernel map is identical");
+        let n = RENDER_BLOCK * RENDER_CHANNELS;
+        let (mut out_a, mut out_b) = (vec![0.0f32; n], vec![0.0f32; n]);
+        for _ in 0..100 {
+            a.render_block(am, &mut out_a).unwrap();
+            b.render_block(bm, &mut out_b).unwrap();
+            assert!(
+                out_a.iter().zip(&out_b).all(|(x, y)| x.to_bits() == y.to_bits()),
+                "the delegation renders bit-identically"
+            );
+        }
+
+        // The live door at numbers no offline path uses: it builds, it renders at ITS block
+        // size, and the map still covers every node — the negotiated truth is honoured.
+        let cfg = ExecConfig::new(44_100, 96, 2);
+        let (mut c, cm, map_c) = build_with_map_at(&g, master, &reg, cfg).unwrap();
+        assert_eq!(map_c.len(), map_a.len(), "every node is mapped at any config");
+        let mut out_c = vec![0.0f32; 96 * 2];
+        c.render_block(cm, &mut out_c).unwrap();
+        let peak = out_c.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+        assert!(peak > 0.0, "the 44.1 kHz/96-frame executor really renders the patch");
     }
 
     #[test]

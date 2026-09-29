@@ -1,19 +1,22 @@
 @echo off
 REM ===========================================================================
-REM  sparq test006 - WO-013 inc3+5: browser, inspector, re-patch, rename,
-REM  inspector scroll, the LOD walk and the cv wire, on SATURN.
+REM  sparq test006 - WO-013 inc3+5 + WO-012 inc2: browser, inspector, re-patch,
+REM  rename, inspector scroll, the LOD walk, the cv wire - and the LIVE audio
+REM  session: PLAY on wasapi-shared, continuous meters, live edits, on SATURN.
 REM
 REM  THE CONTRACT: one file from Qwen - this script. Run it, answer the prompts,
 REM  send back ONE file: test006.log from the repo root - plus logs\ui.log if
 REM  the window session ran.
 REM
-REM  WHY. Increments 3, 4 and 5 are sandbox-green - 733 tests, audit PASS
-REM  with 25 smokes, goldens unchanged. What the sandbox CANNOT prove: real
+REM  WHY. The increments are sandbox-green - 777 tests, audit PASS
+REM  with 37 smokes, goldens unchanged. What the sandbox CANNOT prove: real
 REM  fingers on the browser sheet, the slider following a real drag, the wire-
 REM  end rings under a real touch, the rename sheet under real keys, the
 REM  inspector scroll under real two fingers, the LOD renderings next to the
 REM  mockup, a cv wire lighting from its own value - and the one mechanical
-REM  claim this script makes: an INSPECTOR EDIT REACHES THE RENDER. For that:
+REM  claim this script makes: an INSPECTOR EDIT REACHES THE RENDER - and,
+REM  since WO-012 inc2, that PLAY makes DEVICE SOUND and a live edit is
+REM  heard without stopping. For the hashes:
 REM  step [04] leaves a baseline canvas-render.wav rendered at manifest
 REM  defaults; step [06] asks you to edit a param in the window and render
 REM  again; step [07] hashes both. Same hash = the slider is a lie, and
@@ -50,7 +53,7 @@ del exec.wav >nul 2>&1
 >>"%LOG%" echo ===== test%TVER% RUN %DATE% %TIME% on %COMPUTERNAME% user %USERNAME% =====
 
 call :say ================================================================
-call :say  sparq test%TVER% - WO-013 increments 3+4+5: browser, inspector, levels, rename, scroll, LOD
+call :say  sparq test%TVER% - WO-013 inc 3+4+5 and WO-012 inc 2: browser, inspector, levels, rename, scroll, LOD, LIVE audio
 call :say  at the end you send back ONE file: test%TVER%.log from the repo root
 call :say ================================================================
 
@@ -112,12 +115,14 @@ set "RC03=!RC!"
 
 REM ---- [04] the canvas bridge via the audit --------------------------------------
 call :say " "
-call :say [04] canvas bridge - the audit drives synthetic touch through 25 smokes,
-call :say      including the five new ones: rename commit + undo, rename cancel,
-call :say      the cv wire lit from its own port value, the inspector two-finger
-call :say      scroll, the LOD walk. Its RENDER WAV smoke writes canvas-render.wav
+call :say [04] canvas bridge - the audit drives synthetic touch through 37 smokes,
+call :say      including the five live-session ones: PLAY on the manual null device,
+call :say      a live param edit crossing the command ring with the level FOLLOWING,
+call :say      a live structural edit re-staging at the boundary, the STOP evidence
+call :say      line, and an unplug ending the session with the canvas untouched.
+call :say      Its RENDER WAV smoke writes canvas-render.wav
 call :say      at MANIFEST DEFAULTS - the baseline for step [07].
-call :run "ui --audit - 25 smokes incl. rename, cv levels, scroll, LOD walk"
+call :run "ui --audit - 37 smokes incl. rename, cv levels, scroll, LOD, live, scope, chrome, mouse"
 set "RC04=!RC!"
 
 REM ---- [05] baseline hash --------------------------------------------------------
@@ -162,6 +167,22 @@ call :say      I. wire the thesis chain: spawn an SVF via the browser, drag
 call :say         gain OUT to svf IN, drag rms LEVEL to svf CUTOFF-MOD, then
 call :say         long-press empty canvas - RENDER WAV. The cyan cv wire lights
 call :say         from the rms value; the audio wires light as before.
+call :say      J. LIVE AUDIO, the WO-012 inc2 acceptance: tap PLAY on the rail.
+call :say         The log names the backend, the NEGOTIATED rate and the latency;
+call :say         you HEAR the patch through the device - shared mode, about
+call :say         22.67 ms - and the wires animate CONTINUOUSLY from the engine's
+call :say         own meters while it plays, not only after RENDER WAV.
+call :say      K. while it plays: drag a slider - the sound changes LIVE, no stop,
+call :say         no click at the moment of the edit; drag a new wire - it goes
+call :say         audible at the next block boundary. Tap STOP: sound stops and
+call :say         the evidence line names blocks, xruns, swaps and allocations.
+call :say      WITH A MOUSE, if one is handy: right-click a node opens its menu
+call :say         where a finger long-presses; the wheel scrolls the inspector over
+call :say         the panel and pans the canvas over the canvas; plain hover is
+call :say         silent. Write what felt wrong into the K answer too.
+call :say         OPTIONAL, only with a spare cable: unplug the output device
+call :say         mid-play - one honest Removed line, the session ends, and the
+call :say         canvas is untouched. Write what you heard into the J/K answers.
 call :say      Then close the window; the script continues by itself.
 call :say      Over RDP the rasteriser is WARP - slow but functional; the 60 fps
 call :say      claim waits for the physical screen, as always.
@@ -179,6 +200,8 @@ set "F=n"
 set "G=n"
 set "H=n"
 set "I=n"
+set "J=n"
+set "K=n"
 set /p "A=      A: browser search spawned the Sine node where you pressed, y/n? "
 set /p "B=      B: the slider followed your finger and the log named the value, y/n? "
 set /p "C=      C: you tapped RENDER WAV after the edit, y/n? "
@@ -188,8 +211,10 @@ set /p "F=      F: rename committed with ENTER, one undo restored, ESC or outsid
 set /p "G=      G: two-finger drag scrolled the inspector and the canvas stayed put, y/n? "
 set /p "H=      H: zoomed-out states read as patterns, dot wires are hairlines; what differed from the mockup? "
 set /p "I=      I: the cv wire lit from the rms value after RENDER WAV, y/n? "
+set /p "J=      J: PLAY made device sound and the wires animated while playing, y/n? "
+set /p "K=      K: a live slider edit changed the sound without stopping, y/n? "
 call :say operator answers: A=!A! B=!B! C=!C! D=!D! E=!E! F=!F! G=!G!
-call :say                 H=!H! I=!I!
+call :say                 H=!H! I=!I! J=!J! K=!K!
 
 REM ---- [07] the mechanical claim: the edit reached the render ----------------------
 call :say " "
@@ -218,9 +243,9 @@ if defined RC00 call :verdict "[00b] tree matches SYNC-STAMP.txt" "!RC00!"
 if defined RC01 call :verdict "[01] build + stamp guard" "!RC01!"
 if defined RC02 call :verdict "[02] modules --strict" "!RC02!"
 if defined RC03 call :verdict "[03] exec offline render" "!RC03!"
-if defined RC04 call :verdict "[04] ui --audit, 25 smokes" "!RC04!"
+if defined RC04 call :verdict "[04] ui --audit, 37 smokes" "!RC04!"
 call :say [07] param edit reached the render : !CHG!
-call :say operator answers: A=!A! B=!B! C=!C! D=!D! E=!E! F=!F! G=!G! H=!H! I=!I!
+call :say operator answers: A=!A! B=!B! C=!C! D=!D! E=!E! F=!F! G=!G! H=!H! I=!I! J=!J! K=!K!
 call :say steps failing on rc: !FAILED!
 call :say " "
 REM ---- the compact copies: the full logs stay here, the digests travel -----

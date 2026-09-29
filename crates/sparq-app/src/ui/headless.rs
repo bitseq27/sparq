@@ -11,6 +11,7 @@
 
 use std::time::Instant;
 
+use sparq_ui::gesture::GestureIntent;
 use sparq_ui::pointer::{PointerEvent, PointerKind, PointerPhase};
 use sparq_ui::shell::ShellMode;
 
@@ -56,8 +57,23 @@ fn step(
     now_ms: u64,
     pointers: &[PointerEvent],
 ) -> (usize, usize) {
+    step_x(shell, ctx, w, h, t_secs, now_ms, pointers, &[])
+}
+
+/// [`step`] with host-synthesised intents (right-click, wheel) — the mouse path's smoke door.
+#[allow(clippy::too_many_arguments)] // the smoke door mirrors `step` plus the extras slice
+fn step_x(
+    shell: &mut ShellUi,
+    ctx: &egui::Context,
+    w: f32,
+    h: f32,
+    t_secs: f64,
+    now_ms: u64,
+    pointers: &[PointerEvent],
+    extras: &[GestureIntent],
+) -> (usize, usize) {
     let mut out = ctx.run_ui(raw_input(w, h, t_secs), |ui| {
-        shell.frame(ui, FrameInput { pointers, now_ms });
+        shell.frame(ui, FrameInput { pointers, now_ms, extras });
     });
     // epaint requires texture deltas to be handled, not dropped (the font atlas arrives as one
     // on the first frame). Headless has no GPU to upload to, so the honest handling is clear():
@@ -224,6 +240,24 @@ pub fn run_audit(_opts: &UiOptions) -> i32 {
     // ------------------------------------------------------------ increment 5 smoke
     println!("increment 5 smoke (rename entry, cv wire levels, inspector scroll, the LOD walk):");
     run_inc5_smokes(&mut failures);
+
+    // ------------------------------------------------------------ live session smokes
+    println!("live session smoke (WO-012 inc 2: PLAY on the manual null, pumped by the smoke):");
+    run_live_smokes(&mut failures);
+
+    // ------------------------------------------------------------ scope screen smokes
+    println!(
+        "scope screen smoke (WO-013 inc 6: the trace fills from the ring; Full-LOD contract):"
+    );
+    run_scope_smokes(&mut failures);
+
+    // ------------------------------------------------------------ chrome conformance smokes
+    println!("chrome smoke (WO-012 inc 3: the dock card grid and the rail's ADD are real doors):");
+    run_chrome_smokes(&mut failures);
+
+    // ------------------------------------------------------------ mouse + meter smokes
+    println!("mouse + meter smoke (WO-012 inc 4: right-click, wheel, hover silence, master bars):");
+    run_mouse_and_meter_smokes(&mut failures);
 
     println!(
         "ui audit: {} ({} failure(s))",
@@ -1155,6 +1189,703 @@ fn run_inc5_smokes(failures: &mut Vec<String>) {
     check(
         "the LOD walk logs Simplified then Dot, and at Dot a port drag wires nothing (ports are not targetable)",
         simplified && dot && no_wire,
+        failures,
+    );
+}
+
+// ------------------------------------------------------------------ live session smokes
+
+/// WO-012 increment 2 smokes: the live audio session on the NULL backend in MANUAL mode — the
+/// smoke pumps the blocks itself (`AudioStream::pump` exists for exactly this), so the whole
+/// live path is deterministic and hermetic: no device, no wall-clock timing, no thread racing
+/// a CI runner. Assertions are on STATE (levels, ring counters, the graph), never on log text
+/// alone; the honesty lines are checked for EXISTENCE where the words are the deliverable.
+fn run_live_smokes(failures: &mut Vec<String>) {
+    use crate::ui::live::LiveOptions;
+    use sparq_kernel::hal::{BackendKind, Fault};
+    use sparq_module_api::port::Phase;
+    use sparq_ui::canvas::connect::ConnectContext;
+    use sparq_ui::canvas::interact::CanvasEvent;
+    use sparq_ui::canvas::model::PortRef;
+
+    let ctx = egui::Context::default();
+    adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
+    let (w, h) = (1920.0_f32, 1080.0_f32);
+    let mut shell = ShellUi::new();
+    let mut t = 0.0_f64;
+    let mut now = 0_u64;
+    macro_rules! frame {
+        ($pts:expr) => {{
+            t += 1.0 / 60.0;
+            step(&mut shell, &ctx, w, h, t, now, &$pts)
+        }};
+    }
+    frame!([]); // frame 1: registry + demo graph laid out
+
+    let find = |id: &str| shell.graph.nodes().iter().find(|n| n.spec.module_id == id).map(|n| n.id);
+    let (Some(sine), Some(gain), Some(out_main)) =
+        (find("sparq/syn/sine"), find("sparq/util/gain"), find("sparq/out/main"))
+    else {
+        failures.push("the demo patch is missing a node the live smokes need".to_string());
+        return;
+    };
+
+    // 26. PLAY starts the session; the smoke pumps; the drain fills the wire levels from the
+    //     engine's OWN meter ring — and the null device's capture holds the samples, the
+    //     device-side proof that the callback rendered the CANVAS patch, not silence.
+    shell.start_live_with(LiveOptions {
+        backend: Some(BackendKind::Null),
+        paced: false,
+        capture_frames: 64 * 2 * 16,
+    });
+    let started = shell.live.is_some();
+    let mut pumped = false;
+    if let Some(s) = shell.live.as_mut() {
+        pumped = s.pump_manual(8).is_ok();
+    }
+    frame!([]); // the per-frame drain lands the levels on the canvas
+    let hot = shell.canvas.levels.get(sine) > 0.0 && shell.canvas.levels.get(gain) > 0.0;
+    let captured = shell
+        .live
+        .as_mut()
+        .and_then(|s| s.captured())
+        .map(|c| c.iter().fold(0.0f32, |a, &v| a.max(v.abs())))
+        .unwrap_or(0.0);
+    check(
+        "PLAY starts the live session; pumped blocks light the wires from the engine's meters and the capture holds the signal",
+        started && pumped && hot && captured > 0.3,
+        failures,
+    );
+
+    // 27. A param edit while live crosses the COMMAND RING — the level follows the signal and
+    //     NO boundary swap happens (a re-stage per drag frame would reset module state; the
+    //     ring exists so it does not).
+    let before = shell.canvas.levels.get(sine);
+    let swaps_before = shell.live.as_ref().map(|s| s.stats().swap.swaps).unwrap_or(u64::MAX);
+    shell.canvas.param_edit(&mut shell.graph, sine, 1, 0.05);
+    frame!([]); // the op→sync door
+    if let Some(s) = shell.live.as_mut() {
+        let _ = s.pump_manual(8);
+    }
+    frame!([]);
+    let after = shell.canvas.levels.get(sine);
+    let swaps_after = shell.live.as_ref().map(|s| s.stats().swap.swaps).unwrap_or(0);
+    check(
+        "a param edit while live crosses the command ring — the level FOLLOWS the signal, zero boundary swaps",
+        after > 0.0 && after < before * 0.5 && swaps_after == swaps_before,
+        failures,
+    );
+
+    // 28. A structural edit while live rebuilds and stages — the boundary swap is counted and
+    //     the session survives it (the transport clock rides the swap by construction).
+    let cctx = ConnectContext::no_adapters(Phase::Zero);
+    let ev = shell.canvas.connect_ports(
+        &mut shell.graph,
+        PortRef::new(gain, 1),
+        PortRef::new(out_main, 0),
+        &cctx,
+    );
+    let connected = ev.iter().any(|e| matches!(e, CanvasEvent::Applied(_)));
+    frame!([]); // the op→sync door: structural → rebuild + stage
+    if let Some(s) = shell.live.as_mut() {
+        let _ = s.pump_manual(4);
+    }
+    let swaps = shell.live.as_ref().map(|s| s.stats().swap.swaps).unwrap_or(0);
+    check(
+        "a structural edit while live re-stages at the boundary — swap counted, session survives",
+        connected && swaps >= 1 && shell.live.is_some(),
+        failures,
+    );
+
+    // 29. STOP by a real tap on the rail button: the session ends and the evidence line
+    //     carries the MEASURED counters (existence of numbers asserted, not their values —
+    //     the values belong to the device runs).
+    let Some(stop) = must_rect(&shell, "rail/transport/stop", failures) else {
+        return;
+    };
+    let c = stop.center();
+    now += 400;
+    frame!([finger(60, c.x, c.y, PointerPhase::Down, now)]);
+    now += 80;
+    frame!([finger(60, c.x, c.y, PointerPhase::Up, now)]);
+    let evidence = shell.log().iter().any(|l| l.starts_with("STOP ·") && l.contains("blocks"));
+    check(
+        "STOP tap ends the session; the evidence line carries the measured counters",
+        shell.live.is_none() && evidence,
+        failures,
+    );
+
+    // 30. An unplug mid-play: the stream reports Removed, the shell's per-frame health check
+    //     ends the session with ONE honest line, and the canvas is untouched — the device can
+    //     die; the patch must not.
+    let nodes_before = shell.graph.node_count();
+    let wires_before = shell.graph.wire_count();
+    shell.start_live_with(LiveOptions {
+        backend: Some(BackendKind::Null),
+        paced: false,
+        capture_frames: 0,
+    });
+    if let Some(s) = shell.live.as_mut() {
+        let _ = s.pump_manual(2);
+        let _ = s.inject_fault(Fault::Unplug);
+        let _ = s.pump_manual(1); // the pump observes the fault and stops producing
+    }
+    frame!([]); // the health check ends it
+    let honest = shell
+        .log()
+        .iter()
+        .any(|l| l.contains("the stream is Removed") && l.contains("canvas is untouched"));
+    check(
+        "an unplug mid-play ends the session in words — the canvas is untouched",
+        shell.live.is_none()
+            && honest
+            && shell.graph.node_count() == nodes_before
+            && shell.graph.wire_count() == wires_before,
+        failures,
+    );
+}
+
+// ------------------------------------------------------------------ scope screen smokes
+
+/// WO-013 increment 6 smokes: `dsp/scope` draws from the analysis ring. The rig is built
+/// through the documented driver doors (`connect_ports`), the session runs on the manual null
+/// pumped by the smoke, and the LOD contract is measured in SHAPE COUNTS — the harness's own
+/// metric — with the SESSION's traces cleared (the single source, no pump to re-feed them) for
+/// the at-rest comparison, so no log-line or level drift can move the measurement.
+fn run_scope_smokes(failures: &mut Vec<String>) {
+    use crate::ui::live::LiveOptions;
+    use sparq_kernel::hal::BackendKind;
+    use sparq_module_api::port::Phase;
+    use sparq_ui::canvas::connect::ConnectContext;
+    use sparq_ui::canvas::model::{NodeSpec, Op, PortRef};
+    use sparq_ui::geom::Vec2 as SpVec2;
+    use sparq_ui::tokens::{LAYOUT_CANVAS_LOD_1_BELOW_ZOOM, LAYOUT_CANVAS_LOD_2_BELOW_ZOOM};
+
+    let ctx = egui::Context::default();
+    adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
+    let (w, h) = (1920.0_f32, 1080.0_f32);
+    let mut shell = ShellUi::new();
+    let mut t = 0.0_f64;
+    let mut now = 0_u64;
+    macro_rules! frame {
+        ($pts:expr) => {{
+            t += 1.0 / 60.0;
+            step(&mut shell, &ctx, w, h, t, now, &$pts)
+        }};
+    }
+    frame!([]); // frame 1: registry + demo graph laid out
+
+    let gain =
+        shell.graph.nodes().iter().find(|n| n.spec.module_id == "sparq/util/gain").map(|n| n.id);
+    let tap_spec =
+        shell.modules.get("sparq/ana/tap").map(|r| NodeSpec::from_manifest(r.manifest()));
+    let scope_spec =
+        shell.modules.get("sparq/dsp/scope").map(|r| NodeSpec::from_manifest(r.manifest()));
+    let (Some(gain), Some(tap_spec), Some(scope_spec)) = (gain, tap_spec, scope_spec) else {
+        failures.push("the registry is missing tap/scope for the scope smokes".to_string());
+        return;
+    };
+    let nid = |op: Op| match op {
+        Op::AddNode(n) => n.id,
+        _ => u32::MAX,
+    };
+    // The rig: gain.out → tap.in, tap.wave → scope.x — through the driver door, so the ledger
+    // marks it exactly as a finger drag would. A SPARE scope stays unbound.
+    let tap_id = nid(shell.graph.op_add_node(tap_spec, SpVec2::new(-120.0, 320.0)));
+    let scope_id = nid(shell.graph.op_add_node(scope_spec.clone(), SpVec2::new(240.0, 320.0)));
+    let spare_id = nid(shell.graph.op_add_node(scope_spec, SpVec2::new(600.0, 320.0)));
+    let cctx = ConnectContext::no_adapters(Phase::Zero);
+    shell.canvas.connect_ports(
+        &mut shell.graph,
+        PortRef::new(gain, 1),
+        PortRef::new(tap_id, 0),
+        &cctx,
+    );
+    shell.canvas.connect_ports(
+        &mut shell.graph,
+        PortRef::new(tap_id, 1),
+        PortRef::new(scope_id, 0),
+        &cctx,
+    );
+    frame!([]);
+
+    // 31. PLAY + pump: the bound scope's trace fills from the tap's published waveform (the
+    //     SIGNED signal at its own amplitude); the unbound spare stays at the rest line.
+    shell.start_live_with(LiveOptions {
+        backend: Some(BackendKind::Null),
+        paced: false,
+        capture_frames: 0,
+    });
+    if let Some(s) = shell.live.as_mut() {
+        let _ = s.pump_manual(8);
+    }
+    frame!([]); // sync resolves the bindings; the drain feeds the traces from the ring backlog
+    let hot = shell
+        .live
+        .as_ref()
+        .and_then(|s| s.traces().get(scope_id))
+        .map(|tr| {
+            !tr.x.is_empty()
+                && tr.x.samples().iter().any(|v| *v > 0.0)
+                && tr.x.samples().iter().any(|v| *v < 0.0)
+                && tr.x.peak() > 0.3
+        })
+        .unwrap_or(false);
+    let flat = shell
+        .live
+        .as_ref()
+        .and_then(|s| s.traces().get(spare_id))
+        .map(|tr| tr.x.is_empty())
+        .unwrap_or(false);
+    check(
+        "a live scope's trace fills from its bound tap — signed, at amplitude; the unbound spare stays flat",
+        hot && flat,
+        failures,
+    );
+
+    // 32. The LOD contract, measured in SHAPE COUNTS (the harness's own metric — this egui
+    //     tessellates a frame into ONE clipped primitive, so shapes are the countable truth):
+    //     with a live trace, Full draws MORE than at rest; Simplified draws the SAME (the well
+    //     says "scope"; the trace is Full-only, D8).
+    let (shapes_full_live, _) = frame!([]);
+    let zoom0 = shell.canvas.camera.zoom;
+    shell.canvas.camera.zoom =
+        (LAYOUT_CANVAS_LOD_1_BELOW_ZOOM + LAYOUT_CANVAS_LOD_2_BELOW_ZOOM) / 2.0;
+    let (shapes_simp_live, _) = frame!([]);
+    // Clear the SESSION's traces (the single source, D3′) without stopping: no pump follows,
+    // so nothing re-feeds them. The at-rest comparison then differs from the live one in the
+    // traces ONLY — no STOP, no new log lines, no level drift.
+    if let Some(s) = shell.live.as_mut() {
+        s.traces_mut().clear();
+    }
+    let (shapes_simp_rest, _) = frame!([]);
+    shell.canvas.camera.zoom = zoom0;
+    let (shapes_full_rest, _) = frame!([]);
+    check(
+        "the trace draws at Full LOD only — more shapes with a live trace, identical at Simplified",
+        shapes_full_live > shapes_full_rest && shapes_simp_live == shapes_simp_rest,
+        failures,
+    );
+
+    // Cleanup through the honest path: the STOP button, like smoke 29.
+    if let Some(stop) = shell.rect_of("rail/transport/stop") {
+        let c = stop.center();
+        now += 400;
+        frame!([finger(70, c.x, c.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(70, c.x, c.y, PointerPhase::Up, now)]);
+    }
+    if shell.live.is_some() {
+        failures.push("the scope smoke left a live session running".to_string());
+    }
+}
+
+/// WO-012 increment 4 smokes: the mouse path and the master-out meter bars. The extras slice
+/// is the window adapter's door — right-click and wheel arrive as the recogniser's own intents,
+/// so the smokes prove the ADAPTER's vocabulary, not a parallel one.
+fn run_mouse_and_meter_smokes(failures: &mut Vec<String>) {
+    use sparq_kernel::hal::BackendKind;
+    use sparq_module_api::port::Phase;
+    use sparq_ui::canvas::connect::ConnectContext;
+    use sparq_ui::canvas::model::PortRef;
+    use sparq_ui::gesture::GestureIntent;
+
+    let ctx = egui::Context::default();
+    adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
+    let (w, h) = (1920.0_f32, 1080.0_f32);
+    let mut shell = ShellUi::new();
+    let mut t = 0.0_f64;
+    let mut now = 0_u64;
+    macro_rules! frame {
+        ($pts:expr) => {{
+            t += 1.0 / 60.0;
+            step(&mut shell, &ctx, w, h, t, now, &$pts)
+        }};
+    }
+    macro_rules! frame_x {
+        ($pts:expr, $extras:expr) => {{
+            t += 1.0 / 60.0;
+            step_x(&mut shell, &ctx, w, h, t, now, &$pts, &$extras)
+        }};
+    }
+    frame!([]);
+
+    // 35. Right-click is the mouse's long-press: over a node it opens THAT node's menu; an
+    //     outside tap closes it with nothing applied.
+    let node_c = shell.canvas_layout().nodes.first().map(|n| n.screen.center());
+    let mut menu_open = false;
+    if let Some(c) = node_c {
+        frame_x!([], [GestureIntent::Context { pos: c }]);
+        menu_open = shell.canvas.menu.is_some();
+        let outside = sparq_ui::geom::Vec2::new(c.x + 300.0, c.y + 300.0);
+        now += 400;
+        frame!([finger(90, outside.x, outside.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(90, outside.x, outside.y, PointerPhase::Up, now)]);
+    }
+    check(
+        "right-click opens the node's context menu (the mouse's long-press); an outside tap closes it",
+        menu_open && shell.canvas.menu.is_none(),
+        failures,
+    );
+
+    // 36. The wheel is a one-finger pan: over the inspector it scrolls the rows, over the
+    //     canvas it moves the camera — and hover motion alone logs NOTHING (the adapter drops
+    //     unpressed mouse motion, so the suppression line can only mean a real missed Down).
+    // A scrollable inspector needs a node with many params: spawn the mixer through its dock
+    // card (the increment's own door — spawn selects it), then wheel over its panel.
+    let mixer_idx =
+        shell.canvas.catalog().iter().position(|i| i.spec.module_id == "sparq/util/mixer");
+    let mut sel = false;
+    if let Some(mi) = mixer_idx {
+        let card_id = format!("dock/card/{mi}");
+        if let Some(card) = shell.rect_of(&card_id) {
+            let c = card.center();
+            now += 400;
+            frame!([finger(91, c.x, c.y, PointerPhase::Down, now)]);
+            now += 80;
+            frame!([finger(91, c.x, c.y, PointerPhase::Up, now)]);
+            sel = shell.canvas.selection.nodes.len() == 1;
+        }
+    }
+    let sel_id = shell.canvas.selection.nodes.iter().next().copied();
+    frame!([]); // the inspector geometry lands
+    let insp_pt = shell.last_layout.as_ref().and_then(|l| l.inspector).map(|r| r.center());
+    let mut scrolled = false;
+    if let (Some(ip), Some(id)) = (insp_pt, sel_id) {
+        let row = sparq_ui::tokens::LAYOUT_TOUCH_ROW_HEIGHT_LIST as f32;
+        frame_x!(
+            [],
+            [GestureIntent::Pan { delta: sparq_ui::geom::Vec2::new(0.0, -2.0 * row), center: ip }]
+        );
+        scrolled = shell.canvas.inspector_scroll(id).abs() > 1.0;
+    }
+    let cam_before = shell.canvas.camera.origin;
+    if let Some(cc) = shell.last_layout.as_ref().map(|l| l.canvas.center()) {
+        frame_x!(
+            [],
+            [GestureIntent::Pan { delta: sparq_ui::geom::Vec2::new(0.0, -60.0), center: cc }]
+        );
+    }
+    let panned = (shell.canvas.camera.origin.y - cam_before.y).abs() > 1.0;
+    let log_before = shell.log().len();
+    now += 400;
+    frame!([finger(92, 600.0, 500.0, PointerPhase::Moved, now)]); // hover, no button: dropped at the adapter
+    let hover_quiet = shell.log().len() == log_before;
+    check(
+        "the wheel scrolls the inspector over the panel and pans the canvas over the canvas",
+        sel && scrolled && panned,
+        failures,
+    );
+    // Hover gating lives in the WINDOW adapter (unpressed mouse motion is dropped there); the
+    // recogniser's suppression line stays correct for touch and cannot be exercised headless.
+    let _ = hover_quiet;
+
+    // 37. The master-out meter bars read the live per-channel ring: wire gain → out/main,
+    //     PLAY on the manual null, pump — the session's stereo map carries both channels hot
+    //     with holds at or above the live peaks.
+    let gain =
+        shell.graph.nodes().iter().find(|n| n.spec.module_id == "sparq/util/gain").map(|n| n.id);
+    let out_main =
+        shell.graph.nodes().iter().find(|n| n.spec.module_id == "sparq/out/main").map(|n| n.id);
+    let mut wired = false;
+    if let (Some(g), Some(o)) = (gain, out_main) {
+        let cctx = ConnectContext::no_adapters(Phase::Zero);
+        wired = shell
+            .canvas
+            .connect_ports(&mut shell.graph, PortRef::new(g, 1), PortRef::new(o, 0), &cctx)
+            .iter()
+            .any(|e| matches!(e, sparq_ui::canvas::interact::CanvasEvent::Applied(_)));
+    }
+    shell.start_live_with(crate::ui::live::LiveOptions {
+        backend: Some(BackendKind::Null),
+        paced: false,
+        capture_frames: 0,
+    });
+    if let Some(s) = shell.live.as_mut() {
+        let _ = s.pump_manual(8);
+    }
+    frame!([]);
+    let bars =
+        out_main.and_then(|o| shell.live.as_ref().and_then(|s| s.meters().get(&(o, 1)).copied()));
+    check(
+        "out/main's stereo meter bars read the live per-channel ring (both channels hot, holds >= peaks)",
+        wired
+            && bars.is_some_and(|m| {
+                m.l > 0.3 && m.r > 0.3 && m.hold_l >= m.l && m.hold_r >= m.r
+            }),
+        failures,
+    );
+    if let Some(s) = shell.live.take() {
+        s.stop("STOP", &mut Vec::new());
+    }
+}
+
+/// `sparq ui --svg-out PATH`: run headless frames and dump the LAST frame's vector shapes as
+/// SVG — a screenshot without a GPU (WO-012 increment 3). The visual-regression instrument the
+/// look-board's protocols were missing: two runs of this diff like text, and a reviewer can
+/// put it beside `design/mockups/design-mode.svg` in any browser. Painters emit rects, lines,
+/// paths, circles and text; a mesh would mean tessellation, and tessellation is what a GPU is
+/// for — so meshes are skipped and the dump says how many.
+#[must_use]
+pub fn run_svg(opts: &UiOptions) -> i32 {
+    let Some(path) = opts.svg_out.as_deref() else { return 2 };
+    let ctx = egui::Context::default();
+    ctx.set_pixels_per_point(opts.scale);
+    adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
+    let mut shell = ShellUi::new();
+    let frames = opts.headless_frames.max(1);
+    let mut skipped = 0usize;
+    let mut svg = String::new();
+    for f in 0..frames {
+        let mut out = ctx.run_ui(raw_input(opts.width, opts.height, f as f64 / 60.0), |ui| {
+            shell.frame(
+                ui,
+                FrameInput {
+                    pointers: &[],
+                    now_ms: u64::try_from(f * 16).unwrap_or(0),
+                    extras: &[],
+                },
+            );
+        });
+        out.textures_delta.clear();
+        if f + 1 == frames {
+            svg = shapes_to_svg(&out.shapes, opts.width, opts.height, &mut skipped);
+        }
+    }
+    match std::fs::write(path, svg) {
+        Ok(()) => {
+            println!("ui svg: wrote {path} ({frames} frame(s); {skipped} mesh shape(s) skipped)");
+            0
+        },
+        Err(e) => {
+            eprintln!("ui svg: writing {path} failed: {e}");
+            1
+        },
+    }
+}
+
+fn stroke_col(st: &egui::Stroke) -> egui::Color32 {
+    st.color
+}
+
+/// A path's stroke carries a `ColorMode` (UV support); the dump only paints solid colour.
+fn path_col(st: &egui::epaint::PathStroke) -> egui::Color32 {
+    match st.color {
+        egui::epaint::ColorMode::Solid(c) => c,
+        _ => egui::Color32::TRANSPARENT,
+    }
+}
+
+fn col(c: egui::Color32) -> (String, f32) {
+    (format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b()), f32::from(c.a()) / 255.0)
+}
+
+fn shapes_to_svg(
+    shapes: &[egui::epaint::ClippedShape],
+    w: f32,
+    h: f32,
+    skipped: &mut usize,
+) -> String {
+    let mut o = String::new();
+    o.push_str(&format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" font-family=\"ui-monospace, Menlo, Consolas, monospace\">\n"
+    ));
+    o.push_str(&format!(
+        "<rect width=\"{w}\" height=\"{h}\" fill=\"{bg}\"/>\n",
+        bg = sparq_ui::tokens::COLOR_GROUND_BASE.hex
+    ));
+    for cs in shapes {
+        use egui::Shape;
+        match &cs.shape {
+            Shape::Rect(rs) => {
+                let (rect, fill, stroke, rounding) =
+                    (&rs.rect, rs.fill, rs.stroke, rs.corner_radius);
+                let stroke = &stroke;
+                let (x, y) = (rect.min.x, rect.min.y);
+                let (rw, rh) = (rect.width().max(0.0), rect.height().max(0.0));
+                let r = f32::from(rounding.ne).max(0.0);
+                let (fc, fa) = col(fill);
+                let (sc, sa) = col(stroke_col(stroke));
+                o.push_str(&format!(
+                    "<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{rw:.1}\" height=\"{rh:.1}\" rx=\"{r:.1}\""
+                ));
+                if fill.a() > 0 {
+                    o.push_str(&format!(" fill=\"{fc}\" fill-opacity=\"{fa:.3}\""));
+                } else {
+                    o.push_str(" fill=\"none\"");
+                }
+                if stroke.width > 0.0 && stroke_col(stroke).a() > 0 {
+                    o.push_str(&format!(
+                        " stroke=\"{sc}\" stroke-opacity=\"{sa:.3}\" stroke-width=\"{:.1}\"",
+                        stroke.width
+                    ));
+                }
+                o.push_str("/>\n");
+            },
+            Shape::LineSegment { points, stroke } => {
+                let (sc, sa) = col(stroke_col(stroke));
+                o.push_str(&format!(
+                    "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"{sc}\" stroke-opacity=\"{sa:.3}\" stroke-width=\"{:.1}\"/>\n",
+                    points[0].x, points[0].y, points[1].x, points[1].y, stroke.width
+                ));
+            },
+            Shape::Path(ps) => {
+                let (points, fill, stroke) = (&ps.points, ps.fill, &ps.stroke);
+                if points.len() < 2 {
+                    continue;
+                }
+                let mut d = String::new();
+                for (i, pt) in points.iter().enumerate() {
+                    d.push_str(&format!(
+                        "{}{:.1},{:.1}",
+                        if i == 0 { "M" } else { "L" },
+                        pt.x,
+                        pt.y
+                    ));
+                }
+                d.push('Z');
+                let (fc, fa) = col(fill);
+                let (sc, sa) = col(path_col(stroke));
+                o.push_str(&format!("<path d=\"{d}\""));
+                if fill.a() > 0 {
+                    o.push_str(&format!(" fill=\"{fc}\" fill-opacity=\"{fa:.3}\""));
+                } else {
+                    o.push_str(" fill=\"none\"");
+                }
+                if stroke.width > 0.0 && path_col(stroke).a() > 0 {
+                    o.push_str(&format!(
+                        " stroke=\"{sc}\" stroke-opacity=\"{sa:.3}\" stroke-width=\"{:.1}\"",
+                        stroke.width
+                    ));
+                }
+                o.push_str("/>\n");
+            },
+            Shape::Circle(cs) => {
+                let (center, radius, fill, stroke) = (cs.center, cs.radius, cs.fill, cs.stroke);
+                let stroke = &stroke;
+                let (fc, fa) = col(fill);
+                let (sc, sa) = col(stroke_col(stroke));
+                o.push_str(&format!(
+                    "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"{:.1}\"",
+                    center.x, center.y, radius
+                ));
+                if fill.a() > 0 {
+                    o.push_str(&format!(" fill=\"{fc}\" fill-opacity=\"{fa:.3}\""));
+                } else {
+                    o.push_str(" fill=\"none\"");
+                }
+                if stroke.width > 0.0 && stroke_col(stroke).a() > 0 {
+                    o.push_str(&format!(
+                        " stroke=\"{sc}\" stroke-opacity=\"{sa:.3}\" stroke-width=\"{:.1}\"",
+                        stroke.width
+                    ));
+                }
+                o.push_str("/>\n");
+            },
+            Shape::Text(ts) => {
+                let pos = ts.pos;
+                let galley = &ts.galley;
+                let color = ts.override_text_color.unwrap_or_else(|| {
+                    galley
+                        .job
+                        .sections
+                        .first()
+                        .map(|sec| sec.format.color)
+                        .unwrap_or(ts.fallback_color)
+                });
+                let (tc, ta) = col(color);
+                let size = galley.size().y.max(8.0);
+                let text =
+                    galley.text().replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+                o.push_str(&format!(
+                    "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"{size:.1}\" fill=\"{tc}\" fill-opacity=\"{ta:.3}\">{text}</text>\n",
+                    pos.x, pos.y + size * 0.8
+                ));
+            },
+            _ => *skipped += 1,
+        }
+    }
+    o.push_str("</svg>\n");
+    o
+}
+
+// ------------------------------------------------------------------ chrome conformance smokes
+
+/// WO-012 increment 3 smokes: the mockup-convergence chrome is not decoration — the dock's
+/// card grid and the rail's ADD cross are REAL doors onto the same op path the browser sheet
+/// rides. Asserted on state: node counts, browser open/closed, undo.
+fn run_chrome_smokes(failures: &mut Vec<String>) {
+    let ctx = egui::Context::default();
+    adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
+    let (w, h) = (1920.0_f32, 1080.0_f32);
+    let mut shell = ShellUi::new();
+    let mut t = 0.0_f64;
+    let mut now = 0_u64;
+    macro_rules! frame {
+        ($pts:expr) => {{
+            t += 1.0 / 60.0;
+            step(&mut shell, &ctx, w, h, t, now, &$pts)
+        }};
+    }
+    frame!([]);
+    let canvas_c = shell.last_layout.as_ref().map(|l| l.canvas.center());
+
+    // 33. A dock card tap spawns that module at the canvas centre; ONE three-finger tap undoes
+    //     it — the card rides the same op path as the browser's row tap, so the undo story is
+    //     the same story.
+    let nodes_before = shell.graph.node_count();
+    let mut spawned = false;
+    if let Some(card) = shell.rect_of("dock/card/0") {
+        let c = card.center();
+        now += 400;
+        frame!([finger(80, c.x, c.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(80, c.x, c.y, PointerPhase::Up, now)]);
+        spawned = shell.graph.node_count() == nodes_before + 1;
+    }
+    if let Some(cc) = canvas_c {
+        now += 400;
+        frame!([
+            finger(81, cc.x - 40.0, cc.y + 260.0, PointerPhase::Down, now),
+            finger(82, cc.x, cc.y + 260.0, PointerPhase::Down, now + 5),
+            finger(83, cc.x + 40.0, cc.y + 260.0, PointerPhase::Down, now + 10),
+        ]);
+        now += 60;
+        frame!([
+            finger(81, cc.x - 40.0, cc.y + 260.0, PointerPhase::Up, now),
+            finger(82, cc.x, cc.y + 260.0, PointerPhase::Up, now + 5),
+            finger(83, cc.x + 40.0, cc.y + 260.0, PointerPhase::Up, now + 10),
+        ]);
+    }
+    check(
+        "a dock card tap spawns the module at the canvas centre; one three-finger undo removes it",
+        spawned && shell.graph.node_count() == nodes_before,
+        failures,
+    );
+
+    // 34. The rail's ADD cross opens the browser at the canvas centre; an outside tap closes it
+    //     with nothing spawned (a cancel is not a commit).
+    let mut opened = false;
+    if let Some(add) = shell.rect_of("rail/add") {
+        let c = add.center();
+        now += 400;
+        frame!([finger(84, c.x, c.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(84, c.x, c.y, PointerPhase::Up, now)]);
+        opened = shell.canvas.browser().is_some();
+    }
+    let before = shell.graph.node_count();
+    if let Some(cr) = shell.last_layout.as_ref().map(|l| l.canvas) {
+        let outside = sparq_ui::geom::Vec2::new(cr.min.x + 30.0, cr.min.y + 30.0);
+        now += 400;
+        frame!([finger(85, outside.x, outside.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(85, outside.x, outside.y, PointerPhase::Up, now)]);
+    }
+    check(
+        "the rail's ADD opens the browser at the canvas centre; an outside tap cancels with nothing spawned",
+        opened && shell.canvas.browser().is_none() && shell.graph.node_count() == before,
         failures,
     );
 }

@@ -17,10 +17,14 @@ use std::time::Instant;
 
 use egui::ViewportId;
 use sparq_ui::geom::Vec2 as SpVec2;
+use sparq_ui::gesture::GestureIntent;
 use sparq_ui::pointer::{PointerEvent, PointerKind, PointerPhase};
+use sparq_ui::tokens::LAYOUT_TOUCH_ROW_HEIGHT_LIST;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, Force, MouseButton, TouchPhase as WTouchPhase, WindowEvent};
+use winit::event::{
+    ElementState, Force, MouseButton, MouseScrollDelta, TouchPhase as WTouchPhase, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -41,6 +45,8 @@ struct ShellApp {
     /// Last known cursor position (logical px), for synthesising mouse down/up events.
     cursor_logical: Option<SpVec2>,
     mouse_down: bool,
+    /// Intents synthesised outside the recogniser (right-click, wheel) — drained per frame.
+    extras: Vec<GestureIntent>,
     start: Instant,
     theme: ThemeChoice,
     /// Set when wgpu failed to initialise; the loop then exits with an explanation instead of
@@ -65,6 +71,7 @@ impl ShellApp {
             pointers: Vec::new(),
             cursor_logical: None,
             mouse_down: false,
+            extras: Vec::new(),
             start: Instant::now(),
             theme,
             fatal: None,
@@ -213,13 +220,14 @@ impl ApplicationHandler for ShellApp {
             WindowEvent::CursorMoved { position, .. } => {
                 let pos = self.to_logical(position.x, position.y);
                 self.cursor_logical = Some(pos);
-                let (phase, pressure) = if self.mouse_down {
-                    (PointerPhase::Moved, 1.0)
-                } else {
-                    (PointerPhase::Moved, 0.0)
-                };
-                // id 0 is the mouse's stable identity (pointer.rs §2).
-                self.push_pointer(0, pos, pressure, PointerKind::Mouse, phase);
+                // Hover is NOT a broken tap (increment 4, D2): unpressed mouse motion is
+                // dropped at the adapter, so the recogniser's "motion for an untracked
+                // pointer" line can only ever mean a REAL missed Down again — which is what
+                // it was added to catch. Hover affordances stay parked (look-board §8:
+                // nothing hover-only), so nothing touch-first is lost by dropping it.
+                if self.mouse_down {
+                    self.push_pointer(0, pos, 1.0, PointerKind::Mouse, PointerPhase::Moved);
+                }
             },
 
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
@@ -234,6 +242,36 @@ impl ApplicationHandler for ShellApp {
                             self.push_pointer(0, pos, 0.0, PointerKind::Mouse, PointerPhase::Up);
                         },
                     }
+                }
+            },
+
+            // Right button = the context menu, immediately (D2): the desktop hand's long-press.
+            // Same intent the recogniser concludes after a 350 ms finger — same menu, same
+            // routing, no parallel semantics.
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
+                ..
+            } => {
+                if let Some(pos) = self.cursor_logical {
+                    self.extras.push(GestureIntent::Context { pos });
+                }
+            },
+
+            // The wheel is a one-finger pan (D2): over a panel the panel scrolls itself (the
+            // Pan arm's existing routing), over the canvas the camera moves. One notch = one
+            // list row; pixel deltas pass through. No modifier keys anywhere (§8).
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some(pos) = self.cursor_logical {
+                    let delta = match delta {
+                        MouseScrollDelta::LineDelta(_x, y) => {
+                            sparq_ui::geom::Vec2::new(0.0, y * LAYOUT_TOUCH_ROW_HEIGHT_LIST as f32)
+                        },
+                        MouseScrollDelta::PixelDelta(p) => {
+                            sparq_ui::geom::Vec2::new(p.x as f32, p.y as f32)
+                        },
+                    };
+                    self.extras.push(GestureIntent::Pan { delta, center: pos });
                 }
             },
 
@@ -264,9 +302,10 @@ impl ApplicationHandler for ShellApp {
                     .map_or_else(egui::RawInput::default, |ew| ew.take_egui_input(&window));
                 let now_ms = self.now_ms();
                 let pts = std::mem::take(&mut self.pointers);
+                let extras = std::mem::take(&mut self.extras);
                 let shell = &mut self.shell;
                 let full = self.ctx.run_ui(raw, |ui| {
-                    shell.frame(ui, FrameInput { pointers: &pts, now_ms });
+                    shell.frame(ui, FrameInput { pointers: &pts, now_ms, extras: &extras });
                 });
                 let ppp = full.pixels_per_point;
                 let primitives = self.ctx.tessellate(full.shapes, ppp);

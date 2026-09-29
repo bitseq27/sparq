@@ -6,12 +6,169 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-09-29, sixth session — SECOND increment of the same session (handoff.
-**The device applied `sync-wo006-inc15.zip`** (operator-confirmed; test004 attempt 4 has NOT
-come back yet — the 🔴 blocker stands, its pass shape in `WO006-INC15-RUN-SHEET.md`). The
-sandbox then built the checklist's named next candidate: **WO-008 increment 7 — host-side
-`required`-unconnected enforcement**, its own increment on purpose because it MOVES the
-declared baselines, exactly as LATER.md conditioned. Plan of record: `WO008-INC7-PLAN.md`
+**Last updated:** 2026-09-30, END of eighth session — handoff prepared. **PLAY MAKES SOUND.**
+Operator-confirmed on SATURN with `sync-wo012-inc4.zip` applied: the drawn patch is audible
+through the project's own HAL on the stage machine — the UX pivot's promise, measured where it
+counts. That closes, on hardware: WO-012 inc 2's device box J (live canvas audio on
+`wasapi-shared` at the negotiated latency), inc 4's MTA audio-control thread (the STA refusal
+cannot recur in any host), and the first real-screen look at the converged chrome. Still OPEN
+on the device: test004 attempt 4 (the 🔴 exclusive acceptance — the ADR-008 exit gate), the
+rest of the test006 digests (F–K, the mouse paragraph, the H diff list against the mockup on
+the stage screen), and the gates digest at 777 / `src 94f/2188595B` / 37 smokes. **No bundle is
+waiting**; the next seal comes with the next build.
+
+**Next session, in order:** (1) session-start discipline — `python3 tools/sync_check.py
+--quiet` FIRST; if `modules/out/main/sparqmod.toml` reports MISSING restore it from
+`../sparq-recovery/modules-out-main-sparqmod.toml` and verify sha `725bf07a…`; the `/opt`
+toolchain is gone (recipe in the environment notes; ~150 s warm). (2) **The next sandbox build
+is convergence slice B — WO-012 increment 5: node inset displays + the inspector response
+plot** (LATER §WO-012 increment 5+; the scope well from WO-013 inc 6 is the pattern; the
+mockup's per-module wells — envelope triangles, meter bars, sparklines — draw from LIVE ring
+values where the rings carry them and sit at rest otherwise; the response plot needs a
+per-module curve contract, svf first, declared before drawn). Plan of record first, the
+WO008-INC7 discipline. (3) Then the bare-required-node badge (item 8). (4) When the digests
+land: move the device boxes; and if test004 attempt 4 passes — WO-006 acceptance closes and
+the ADR-008 exit fires (bootstrap deleted, HAL becomes `play`'s default): do NOT do it early.
+
+**Visual review pipeline (new this session, for slice B):** `sparq ui --svg-out PATH --width
+2560 --height 1600` dumps the headless frame's vector shapes; render with the sandbox's
+`/opt/arena-python/bin/resvg` AFTER substituting the monospace family for `DejaVu Sans Mono`
+(fonts-dejavu-core + fontconfig are installed; without the substitution resvg renders no
+text); compare against `design/mockups/design-mode.svg` the same way — the standing sheet is
+`design/mockups/convergence-wo012-inc3.png` (mockup over shell).
+
+---
+
+**Earlier this session (eighth session, first increment — the device blocker cleared and the
+operator's four asks shipped as WO-012 increment 4**: (1) **the COM/APARTMENT
+fix** — the operator's first PLAY on SATURN refused with `this thread already initialised COM as
+single-threaded (STA); the WASAPI HAL needs MTA`; the session now spawns ONE dedicated
+audio-control thread per session (MTA by simply calling the HAL), the only thread that touches
+the backend — enumerate/probe/open/start/stop/drop/pump/fault/capture ride a request-reply
+protocol with bounded waits, the UI thread keeps the `SharedEngine` control half and a polled
+health mirror, and `Drop` stops + joins (a session that leaked its thread would leak the
+device); (2) **mouse usability** — unpressed mouse motion is dropped at the window adapter (the
+suppression line can now only mean a real missed Down), right-click synthesises the
+recogniser's own `Context` intent, the wheel synthesises `Pan` (the panel-over-panel routing
+reused — inspector scrolls over the inspector, camera pans over the canvas, no modifier keys
+anywhere); (3) **`out/main` meter bars like the mockup** — `MeterUpdate` grew `peak_l`/`peak_r`
+(one cache-warm pass; mono ports duplicate, pinned), the bars draw green DATA-class fills with
+amber AUDIO-class peak-hold blocks decaying on AUDIO time (block counts, no wall clock), empty
+wells at rest; (4) **the palette** — dock tiles 112×56 (class M, floor holds), grouped by
+manifest top category under xs words, left stripe in the dominant signal class (§4: colour says
+what it carries, the group says what it is), all seventeen fit at 1920. **Sandbox-green: 777
+tests** (+2 session gates behind `ui`: back-to-back sessions + drop-without-stop, the stereo
+pin), **37 smokes** (+3: dock-card spawn/undo stayed, right-click menu, wheel routing + hover
+silence, master bars), every golden bit-identical (stress `7bb06379bd6845e5`, exec renders,
+`canvas-render.wav`), selftest 9/9, 17/17, every clippy cell incl. MSVC×6 + native ui-window
+(the window adapter changed), 5 python gates (R6 caught nothing new; the disallowed-`Mutex`
+lint got a reasoned control-path allow), stamp **`src 94f/2188595B`**, log_check BASELINE moved.
+Sealed **`sync-wo012-inc4.zip`** — the ONLY waiting bundle now. **Device ask: tap PLAY again —
+sound is the acceptance**; then test004 attempt 4, test006 F–K (+ the mouse paragraph), gates at
+777 / `src 94f/2188595B` / 37 smokes, digests back. **Next sandbox build: convergence slice B**
+(node inset displays + the inspector response plot), then the bare-required badge.)
+
+**Previous handoff (seventh session, third increment — the operator's visual ask shipped as
+WO-012 increment 3 — mockup conformance, chrome**: the shell now draws
+in `design-mode.svg`'s language, measured side by side with the new `sparq ui --svg-out`
+instrument (a headless vector screenshot — the review protocol's first repeatable visual
+comparison; sheet at `design/mockups/convergence-wo012-inc3.png`). **What converged:** the rail
+(glyph + permanent micro-label in the mockup's own 44 px box — the operator's ruling between
+the mockup's icon-only rail and look-board §8; grouped by hairline dividers; the foot carries
+the live level tick in the AUDIO class colour and the magenta ADD cross that opens the browser
+at canvas centre), the top bar (logo glyph, section dividers, the mockup-review's "top-bar
+diagnostics" line — negotiated kHz · frames · xruns · swaps while live, the build stamp at
+rest — and the status dot paired with its word), the wire-encoding legend floating top-right
+(drawn by the canvas painter from the wires' OWN encoding table), the dock (the MODULES tab is
+REAL now: the registry catalogue as 248×80 class-dot cards — tap spawns at canvas centre
+through the browser's own op path, undoable; overflow said in words; the other four tabs stay
+honestly disabled), the inspector (port-dot summary strip in manifest order — rings in, filled
+out — and the mockup's control-cyan sliders with block thumbs), and the shell's COLUMN
+DISCIPLINE (`shell::compute` moved: rail and inspector run full height, the dock lives in the
+canvas column — the layout test pins it). The demo patch spreads left-to-right like the
+mockup's story patch. **Sandbox-green: 777 tests** (count unchanged — chrome moves no audio),
+**34 smokes** (+2 chrome: a dock-card tap spawns and one undo removes; ADD opens the browser
+and an outside tap cancels), every golden bit-identical, selftest 9/9, 17/17, every clippy
+cell, 5 python gates (R6 caught the SVG dumper's page-ground hex — it now reads the token),
+the breakpoint matrix grew with the cards (0 violations, the 44 px floor holding), stamp
+**`src 94f/2155888B`**, log_check BASELINE moved. Deviations declared in `mockup-review.md`
+findings 9–14 (inspector 400 not 480 — tablet reflow; top-bar word buttons — §6; amber level
+tick — §4). Sealed **`sync-wo012-inc3.zip`** — WAITING with inc6/inc2/inc7 for the device runs.
+**Next: increment 5 of the shell line — convergence slice B (node inset displays + the
+inspector response plot), then the bare-required badge.** Device digests still wanted.)
+
+**Earlier this session (second increment — the scope screen: WO-013 increment 6** — the follow-on WO-012 inc 2 named, the operator's pick. Plan of
+record `WO013-INC6-PLAN.md` (twelve decisions before the code; its postscript records the
+correction the smoke caught — **D3′**: the prescribed per-frame SWAP of a canvas-owned trace
+field alternated two sets and blanked alternate frames under manual pumping; the shipped design
+has the SESSION as the single source, read by the painter through a `canvas_ui::draw`
+parameter, empty at rest — a dead stream's signal has nowhere to linger). `dsp/scope` draws its
+bound tap's waveform from the analysis ring: `sparq-ui::canvas::scope` (rolling traces sized by
+timebase × the NEGOTIATED rate, zoom-not-reset resize, rising-edge trigger with the declared
+free-run fallback, stride-decimated clamped geometry, X/Y pairing, NaN sanitised, params
+clamped without trust); **the wire is the binding** — resolved per frame, impossible to stale,
+a rebind clears the traces; **the ring is the payload** — fed from the SAME drain pass the cv
+wire levels read; the painter in the `scope.trace` token map and the WIRES' glow vocabulary —
+well at Full AND Simplified, TRACE at Full only, Dot untouched; unbound/at rest = the flat rest
+line ("a flat line, not a crash" — the manifest's own promise); `Scope::process` stays a no-op
+(zero audio-thread cost, structural). No layout move, no manifest move, no new audit elements.
+**Sandbox-green: 777 tests** (+11 model gates, +3 session gates, +2 smokes = **32**), every
+golden bit-identical (three pinned exec renders, stress `7bb06379bd6845e5` debug AND release,
+`canvas-render.wav` `d7ad294e…`, determinism `0f5c3e86c7f117a9`), selftest 9/9,
+`modules --strict` 17/17, every runnable clippy cell (the increment owed `div_ceil` ×3 —
+clippy caught it), 5 python gates, stamp **`src 94f/2122410B`**, log_check BASELINE moved with
+the seal. Sealed **`sync-wo013-inc6.zip` (16 entries)** — WAITING for the device, stacked on
+inc2 + inc7. Device expectations move again: gates **777 / `src 94f/2122410B` / 32 smokes**;
+test006's counts moved (J–K unchanged in shape — the scope animates on screen during them).
+**Next step: DEVICE EVIDENCE — apply inc7 → inc2 → inc6 in order, run test004 attempt 4,
+test006 F–K, gates, send the digests. The named next SANDBOX build: the canvas badge for the
+bare-required node** (item 8 — the smallest well-specified item now that the scope shipped);
+after it, the operator's save/load question (patch persistence, WO-011's drafted `.sparq`
+format) is the biggest remaining UX gap for "building patches and sounds".)
+
+**Earlier in this session (increment 2 — the UX pivot's first build: WO-012 increment 2, the
+live audio session**, the checklist's ACTIVE item
+6, sealed as **`sync-wo012-inc2.zip`** and WAITING for the device, stacked on the still-waiting
+`sync-wo008-inc7.zip`. Plan of record `WO012-INC2-PLAN.md` — fifteen decisions before the code,
+settling every open question item 6 listed; its postscript records the one decision the CODE
+corrected: `stage` never refuses — it supersedes and counts — so the retry flag D8 prescribed
+does not exist, and the visible refusal is the BUILD's, in the executor's own words. **What
+shipped:** PLAY/STOP/PANIC became a real `LiveSession` (`sparq-app/src/ui/live.rs`) — two-phase
+open (probe → executor built for the NEGOTIATED config via the new `bridge::build_with_map_at` →
+real open), the callback owns the `AudioEngine` and does `render_block` and nothing else; the
+ONE op→sync door (`CanvasState::take_patch_changes`, classified per `Op` exhaustively: params
+cross the command ring with ZERO re-stages, structural edits and master handovers re-stage at
+the boundary, moves/renames mark nothing); the bounded per-frame drain fills `CanvasState.levels`
+from `read_meters` + `read_analysis` — **the continuous half of live wire levels, the painter
+path untouched**; the ring extension it rides (`MeterUpdate.port` — one entry per audio OUTPUT
+port, `FOLDED` sentinel for cv-only nodes, single-output entries BIT-IDENTICAL to the folded
+readings they replace, pinned against an offline reference; block-rate cv publishes as
+one-sample analysis waveforms so a cv wire's live level reads the inc-5 magnitude rule); the
+honesty lines (NEGOTIATED · latency · the STOP evidence line of measured counters); `Removed`/
+`Failed` ends the session in one line, canvas untouched, engine dropped on the control thread
+after `reclaim()` drains. Audit + tests run the **manual null** pumped by the smoke (hermetic;
+`capture_frames` holds the samples as device-side proof); a Windows window gets `wasapi-shared`;
+elsewhere the paced null WITH a line saying so. **Sandbox-green: 766 tests** (+4 workspace: the
+per-port ring gate, the block-rate analysis gate, the ledger gate, the config-door delegation
+pin; +5 `live.rs` session tests and +5 audit smokes behind `ui`), every golden bit-identical
+(the three pinned exec renders, `canvas-render.wav` 1 920 046 B · `d7ad294e…`, stress
+`7bb06379bd6845e5` debug AND release, determinism `0f5c3e86c7f117a9`), selftest 9/9,
+`ui --audit` **PASS 30 smokes**, `modules --strict` 17/17, every runnable clippy cell, 5 python
+gates, stamp **`src 93f/2081612B`**, `log_check.py` BASELINE moved with the seal (#83). test006
+grew **steps J–K** (PLAY audible on shared, wires animating while playing, a live slider edit
+heard without stopping, the STOP evidence line; optional unplug → the Removed line and an
+untouched canvas). **Next step: DEVICE EVIDENCE — apply `sync-wo008-inc7.zip` THEN
+`sync-wo012-inc2.zip`, run test004 attempt 4, test006 (now F–K), gates (766 /
+`src 93f/2081612B` / 30 smokes), send the digests. The named next SANDBOX build: the scope
+screen** (the analysis ring publishes waveforms with nothing drawing them — the plan's declared
+follow-on), then the canvas badge for the bare-required node (item 8).)
+
+**Previous handoff (sixth session — SECOND increment; the device applied
+`sync-wo006-inc15.zip`** (operator-confirmed; test004 attempt 4 has NOT come back yet — the 🔴
+blocker stands, its pass shape in `WO006-INC15-RUN-SHEET.md`). The sandbox then built the
+checklist's named next candidate: **WO-008 increment 7 — host-side `required`-unconnected
+enforcement**, its own increment on purpose because it MOVES the declared baselines, exactly as
+LATER.md conditioned. Plan of record: `WO008-INC7-PLAN.md`
 (eight decisions before the code). `Executor::build` now refuses a bare `required` input in
 words (`ExecError::RequiredUnconnected` — node, module, port, both remedies); the vocabulary
 was already deliberate across the seventeen manifests (six single-input processors required;
@@ -111,20 +268,27 @@ predicted 960 fr shape) and reclassified its runtime half into #92.)
 - **Device state:** every sealed bundle through **`sync-wo006-inc15.zip` is APPLIED on SATURN** —
   inc15 by operator report (2026-09-29; test004 attempt 4 has not come back yet), everything
   before it proven by attempt 3's own build line (`sync_check: OK - 151 files match sync
-  wo006-inc14`). **WAITING: `sync-wo008-inc7.zip` (17 entries, this session — the required-
-  unconnected enforcement; it does NOT touch the test004 contract, so attempt 4 can run under
-  either bundle, but gates.bat must see the NEW expectations below).** Once it lands, the device runs cover thirteen increments of
+  wo006-inc14`). **Operator-reported 2026-09-29/30: the four bundles through
+  `sync-wo012-inc3.zip` are APPLIED — the device carries the live audio session, the scope
+  screen and the converged chrome; the first PLAY then refused on the STA/MTA apartment
+  clash, which increment 4 fixes. **`sync-wo012-inc4.zip` APPLIED 2026-09-30 and
+  DEVICE-VERIFIED: PLAY MAKES SOUND (operator report, end of eighth session).** No bundle
+  waits. The digests (test004 attempt 4, test006 F–K incl. the mouse paragraph, gates at 777 /
+  `src 94f/2188595B` / 37 smokes) are STILL WANTED.** Once it lands, the device runs cover thirteen increments of
   baseline — **`test004` attempt 4 (exclusive acceptance at 48 kHz — still the 🔴 blocker; send
   back `test004-digest.log`; pass shape + the PROPOSED acceptance-rate amendment + the
   failure-reading guide in `WO006-INC15-RUN-SHEET.md`)**, `test006` (canvas window session —
-  the F–I asks stand; NEW with inc7: the demo patch's fourth node is a bare `out/main` instead
+  the F–I asks stand, and **steps J–K are NEW with inc2 — the live audio acceptance: PLAY
+  audible on wasapi-shared, wires animating WHILE it plays, a live slider edit heard without
+  stopping, the STOP evidence line, optionally an unplug mid-play**; NEW with inc7: the demo
+  patch's fourth node is a bare `out/main` instead
   of the spare Gain, and `canvas-render.wav` is byte-identical to the recorded baseline —
   1 920 046 B, sha256 `d7ad294ea0b5e6e9…`; step [05]'s A/B is unchanged in shape), `gates.bat`
-  (**expected test count is now 762**, stamp = whatever `SYNC-STAMP.txt` says (`src 92f/
-  2021628B` — the bundle's own line is truth), and the stress evidence line in the test output
+  (**expected test count is now 777**, stamp = whatever `SYNC-STAMP.txt` says (`src 94f/
+  2188595B` — the bundle's own line is truth), and the stress evidence line in the test output
   reads **`7bb06379bd6845e5` · 2 383 swaps · 7 617 refused** — the moved baseline, not a
   regression), `sparq modules --strict`
-  lists **17**, `selftest --golden` prints **PASS (9 gates)**, `ui --audit` **PASS (25 smokes)**;
+  lists **17**, `selftest --golden` prints **PASS (9 gates)**, `ui --audit` **PASS (37 smokes)**;
   `log_check.py`'s BASELINE moved with the seal, #83's discipline), and the WO-008 **loaded
   soak** (200 modules, 30 min) when the HAL and the machine are both free. WO-009's two device
   boxes: the **30-minute drift measurement** — now riding the NEW delivered-vs-wall metric; read
@@ -646,8 +810,9 @@ default** (that deletion is gated on this device run — do not do it early).
 
 **Device track (SATURN — one bundle WAITING to apply, then the remaining work is EVIDENCE):**
 1. ~~APPLY `sync-wo006-inc15.zip`~~ **DONE (operator-reported 2026-09-29). APPLY
-   `sync-wo008-inc7.zip` (17 entries)** — stacked on inc15; it changes no device contract
-   except the gates' numbers. Then **run the device gates
+   `sync-wo008-inc7.zip` (17 entries), THEN `sync-wo012-inc2.zip` (20), THEN
+   `sync-wo013-inc6.zip` (16)** — stacked in that order; none changes a device contract except
+   the gates' numbers. Then **run the device gates
    and send the DIGESTS back** — every test script ends by making `NAME-digest.log` beside its
    log (compact copies: verdict lines byte-identical, only the periodic-status / cargo /
    duplicate repetition collapses; `scripts\digest.bat` does older logs on demand). Run
@@ -655,13 +820,15 @@ default** (that deletion is gated on this device run — do not do it early).
    PROPOSED acceptance-rate amendment and the failure-reading guide in
    `WO006-INC15-RUN-SHEET.md`; the 🔴 blocker) and `scripts\test006.bat` (the window session;
    step [07] is the mechanical claim: slider edit must change the canvas-render.wav hash — after
-   RENDER WAV the sine/gain wires light with live levels — **and the steps F–I: the rename sheet
+   RENDER WAV the sine/gain wires light with live levels — **the steps F–I: the rename sheet
    under real keys, the inspector two-finger scroll on a Mixer, the LOD walk vs
    `design-mode.svg` (write what differs into the H answer), the cv wire lighting from its own
-   value**). `scripts\gates.bat` now expects **762 passed / 0 failed / 1 ignored**, **17**
+   value — and the NEW steps J–K: PLAY audible on wasapi-shared with the wires animating WHILE
+   it plays, and a live slider edit heard without stopping (the optional unplug → the Removed
+   line and an untouched canvas)**). `scripts\gates.bat` now expects **777 passed / 0 failed / 1 ignored**, **17**
    modules (the mixer row reads v0.2.0, 13 ports, 24 params), **selftest PASS (9 gates)** and
-   **`ui --audit` PASS (25 smokes)** — with the stamp `log_check.py` in the bundle already knows
-   (`src 92f/2021628B`; defect #83's fix made moving it a seal step) — and the stress evidence
+   **`ui --audit` PASS (34 smokes)** — with the stamp `log_check.py` in the bundle already knows
+   (`src 94f/2155888B`; defect #83's fix made moving it a seal step) — and the stress evidence
    line inside the test output reads the MOVED baseline (`7bb06379bd6845e5` · 2 383 swaps ·
    7 617 refused), which is inc 7's recorded intent, not a regression. Wanted evidence, **with
    the pinned durations** (defect #85): `sparq exec --patch mod-demo --seconds 1`
@@ -706,10 +873,20 @@ default** (that deletion is gated on this device run — do not do it early).
    `set_tempo_sync` path is now reached (`tests/tempo_sync.rs`, golden `db4013f41d1fa678`).
    **Remaining from inc 5:** only the <15 %-of-a-core benchmark (stage-machine acceptance — a
    sandbox CPU ratio does not transfer, so no sandbox number is recorded as evidence).
-6. **ACTIVE — THE NEXT SANDBOX BUILD (re-sequenced by the operator's session-6-close pivot;
-   was "after WO-006's exclusive acceptance", now rides the proven shared backend — rationale in
-   the header): the live HAL stream through `SharedEngine` — live canvas audio + continuous
-   meters.** `play`-style HAL stream whose callback holds `AudioEngine`; the control side stages
+6. ~~**ACTIVE — THE NEXT SANDBOX BUILD: the live HAL stream through `SharedEngine` — live
+   canvas audio + continuous meters**~~ **DONE (2026-09-29, seventh session) — shipped as
+   WO-012 increment 2, plan of record `WO012-INC2-PLAN.md`, sealed `sync-wo012-inc2.zip`:**
+   the `LiveSession` (two-phase open, negotiated-config executor, the callback owning the
+   `AudioEngine`), the one op→sync door (params → command ring, zero re-stages; structural +
+   master handovers → boundary re-stage; moves/renames inaudible), the bounded per-frame drain
+   into `CanvasState.levels`, the ring port ids + block-rate cv analysis riding it, five live
+   audit smokes on the manual null (30 total), test006 steps J–K. The research notes below are
+   HISTORICAL — the plan superseded them, and its postscript records the one decision the code
+   corrected (`stage` supersedes, never refuses). **The named next sandbox build: the SCOPE
+   SCREEN** (the analysis ring publishes waveforms with nothing drawing them — the plan's
+   declared follow-on — **DONE TOO, same session, as WO-013 increment 6, sealed
+   `sync-wo013-inc6.zip`**), then the canvas badge for the bare-required node (item 8 — NOW the
+   named next sandbox build). `play`-style HAL stream whose callback holds `AudioEngine`; the control side stages
    from the canvas; `CanvasState.levels` fills from `read_meters` PER FRAME instead of the
    offline preview render (the continuous live-levels half; the offline half shipped in WO-013
    inc 4, per-port meters + ring port ids ride this increment, the scope screen — the analysis
@@ -754,9 +931,8 @@ default** (that deletion is gated on this device run — do not do it early).
    enforcement~~ **DONE (WO-008 inc 7, this session — the baseline moved on purpose and is
    recorded)**; **the canvas badge for the bare-required node** (new from inc 7: the refusal
    reaches the shell log at RENDER; drawing the warning at DROP time is a WO-013-side painter
-   increment, parked beside the watchdog→UI hairline it would share machinery with — queued
-   behind the re-sequenced item 6 by the operator's pivot, and still the smallest well-specified
-   item after it); the compat-matrix review packet (`reviewed = false`, defect #82's
+   increment, parked beside the watchdog→UI hairline it would share machinery with — item 6
+   shipped, so this is now the smallest well-specified item after the scope screen); the compat-matrix review packet (`reviewed = false`, defect #82's
    ordering question inside it); loop-relative beat phase for unaligned loop regions (WO-009's
    declared limit); from inc 5: per-port meters (would light cv wires + a scope's per-channel
    display), a multi-reader epoch (a second reader of the live patch), and narrowing analysis
@@ -764,6 +940,88 @@ default** (that deletion is gated on this device run — do not do it early).
 
 ## Done (most recent first)
 
+- [x] **WO-012 inc 4** (2026-09-30, eighth session) — **the device blocker + the operator's
+      four asks**: the per-session MTA audio-control thread (request-reply protocol, bounded
+      waits, health mirror, Drop stops + joins — the STA refusal cannot recur in any host),
+      mouse usability (hover dropped at the adapter, right-click = `Context`, wheel = `Pan`,
+      no modifiers), `out/main` stereo meter bars (`MeterUpdate.peak_l/peak_r`, green data
+      fills, amber peak-holds on audio time, empty at rest), and the grouped class-striped
+      112×56 palette tiles (all seventeen visible at 1920). Plan `WO012-INC4-PLAN.md`.
+      **777 tests** (+2 session gates), **37 smokes** (+3), goldens bit-identical, selftest
+      9/9, 17/17, every clippy cell (the disallowed-`Mutex` lint took a reasoned control-path
+      allow; `checked_div` and a boxed command variant for the enum-size lint), 5 python gates,
+      stamp `src 94f/2188595B`, log_check BASELINE moved. Sealed `sync-wo012-inc4.zip` — the
+      only waiting bundle. Device acceptance = PLAY makes sound (test006 J).
+- [x] **WO-012 inc 3** (2026-09-29, seventh session, third increment) — **mockup conformance,
+      chrome**: the operator's "make it look like design-mode.svg", sliced in two (this is
+      slice A; B = node displays + inspector plots). Plan `WO012-INC3-PLAN.md`; the rail
+      ruling (glyph + micro-label) and the slice are the operator's decisions via the question
+      tool. Shipped: glyph+word rail with groups, level tick and ADD door; top-bar logo,
+      dividers, live diagnostics line and LIVE dot; the wire legend from the wires' own
+      encoding table; the dock's MODULES card grid (real spawn door, overflow in words, four
+      tabs honestly disabled); inspector port-dot strip + control-cyan block-thumb sliders;
+      `shell::compute`'s column discipline (rail/inspector full height, dock in the canvas
+      column); the demo patch spread; and `sparq ui --svg-out` — the headless vector screenshot
+      the review protocol never had, with the first convergence sheet committed beside the
+      mockups. 777 tests unchanged (chrome moves no audio), 34 smokes, matrix 0 violations at
+      the new element counts, every golden bit-identical, stamp `src 94f/2155888B`. Deviations
+      declared as mockup-review findings 9–14. Sealed `sync-wo012-inc3.zip` — WAITING, stacked
+      on inc6/inc2/inc7.
+- [x] **WO-013 inc 6** (2026-09-29, seventh session, second increment) — **the scope screen**:
+      `dsp/scope` draws from the analysis ring (plan `WO013-INC6-PLAN.md`, twelve decisions +
+      the D3′ correction the smoke caught: the session is the traces' SINGLE SOURCE — the
+      canvas-field swap alternated sets and blanked frames; the painter reads through a `draw`
+      parameter, empty at rest). `sparq-ui::canvas::scope`: rolling traces sized timebase ×
+      negotiated rate (whole blocks, `MAX_TRACE` 65 536 clamp), zoom-not-reset resize,
+      rising-edge trigger with free-run fallback, stride-decimated clamped polylines, X/Y
+      pairing over the shorter axis, NaN sanitised, params clamped without trust; the WIRE is
+      the binding (per-frame resolution, rebind clears); the ring is the payload (the drain's
+      same pass feeds traces and cv levels); `Scope::process` stays a no-op. Painter: the
+      `scope.trace` token map, the wires' glow vocabulary, well at Full+Simplified, TRACE at
+      Full only; unbound = the flat rest line. The manifest param ORDER pinned by a drift-gate
+      test. **777 tests** (+11 model, +3 session, +2 smokes = 32), every golden bit-identical
+      (stress `7bb06379bd6845e5` debug AND release, the three exec renders, canvas-render.wav,
+      determinism), selftest 9/9, 17/17, every runnable clippy cell, 5 python gates, stamp
+      `src 94f/2122410B`, log_check BASELINE moved. Parked and declared: phosphor persistence +
+      the motion-token glow law (one data-first refinement increment for wires AND traces),
+      min/max envelope decimation, larger display tiles (a layout-token increment), the other
+      eleven display modules, offline scope previews (the ring is a LIVE publication). Sealed
+      **`sync-wo013-inc6.zip` (16 entries)** — WAITING, stacked on inc2 + inc7.
+- [x] **WO-012 inc 2** (2026-09-29, seventh session) — **the live audio session**: the UX
+      pivot's first build, checklist item 6 exactly as re-sequenced (plan of record
+      `WO012-INC2-PLAN.md`, fifteen decisions before the code + the postscript correction —
+      `stage` supersedes and counts, it never refuses, so the retry flag does not exist and the
+      visible refusal is the BUILD's in the executor's own words). `LiveSession`
+      (`sparq-app/src/ui/live.rs`): two-phase open, the executor built for the NEGOTIATED config
+      through the new `bridge::build_with_map_at` (`build_with_map` delegates at the render
+      constants — bit-identical, pinned), the callback owning the `AudioEngine` (`render_block`
+      and nothing else), STOP = join → measured evidence line → `reclaim()` drained → the
+      engine drops on the control thread. The ONE op→sync door: `CanvasState` classifies every
+      `Op` exhaustively into `PatchChanges` (structural / param-dirty / inaudible) at the single
+      `commit` choke point undo/redo share — params cross as `set_params` with ZERO re-stages
+      (no click mid-drag), structural edits and master handovers re-stage at the boundary
+      (`inherit_runtime` keeps the transport clock). The bounded per-frame drain
+      (`read_meters` + `read_analysis`, fixed scratch, last-wins) fills `CanvasState.levels` —
+      the CONTINUOUS half of live wire levels; the painter path untouched. The ring extension
+      riding it: `MeterUpdate.port` (one entry per audio OUTPUT port via the new
+      `Executor::with_audio_out`, `FOLDED` sentinel for cv-only nodes, single-output entries
+      bit-identical to the folded readings — pinned against an offline reference executor) and
+      block-rate cv outputs publishing as one-sample analysis waveforms (a cv wire's LIVE level
+      reads the inc-5 magnitude rule; the tap now publishes 3/block — its refusal-count test
+      moved in words). Honesty lines in the house shape; `Removed`/`Failed` ends the session in
+      ONE line, canvas untouched. Backend: manual null for the audit/tests (pumped by the
+      smoke; `capture_frames` is the device-side proof), `wasapi-shared` for a Windows window,
+      paced null elsewhere WITH a line saying so. Two documented driver doors joined the
+      headless convention (`param_edit`, `connect_ports`). **766 tests** (+4 workspace, +5
+      session, +5 smokes = 30), every golden bit-identical (three pinned exec renders,
+      canvas-render.wav `d7ad294e…`, stress `7bb06379bd6845e5` debug AND release, determinism
+      `0f5c3e86c7f117a9`, selftest 9/9, `modules --strict` 17/17, probe_alloc 0/5 000,
+      throughput 262.8×), stamp `src 93f/2081612B`, log_check BASELINE moved with the seal.
+      test006 grew steps J–K. Sealed **`sync-wo012-inc2.zip`** — WAITING for the device,
+      stacked on the still-waiting inc7. Parked and declared: the scope screen (the named
+      follow-on), per-port meter DISPLAYS beyond the wire glow, transport/arrangement binding
+      (WO-009's), multi-reader epochs, `ui-window` release link in the 1 GB sandbox (the clippy
+      cell ran; the link stays a SATURN job).
 - [x] **WO-008 inc 7** (2026-09-29, sixth session, second increment) — host-side `required`-
       unconnected enforcement (the checklist's named next candidate; plan `WO008-INC7-PLAN.md`,
       eight decisions before the code): `ExecError::RequiredUnconnected` in the build gauntlet

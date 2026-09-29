@@ -141,20 +141,81 @@ fn an_absent_analysis_reader_is_counted_not_queued() {
 
     let mut buf: Vec<AnalysisUpdate> = vec![AnalysisUpdate::default(); 64];
     let read = control.read_analysis(&mut buf);
-    // Only the tap has an audio-rate cv output, so exactly one publication per block: 20 offered,
-    // 8 kept (the OLDEST — a ring drops the newest when full), 12 refused-and-counted.
+    // The tap publishes THREE waveforms per block — its audio-rate `wave` plus its block-rate
+    // `peak` and `rms` (a block-rate cv travels as a one-sample waveform, WO-012 increment 2):
+    // 60 offered, 8 kept (the OLDEST — a ring drops the newest when full), 52 refused-and-counted.
     assert_eq!(read, 8, "the ring kept exactly its capacity");
     assert!(buf[..read].iter().all(|u| u.node == tap.0), "every kept update is the tap's");
     let stats = control.stats();
     assert_eq!(
         stats.analysis_refusals,
-        20 - 8,
+        3 * 20 - 8,
         "every publication the ring could not hold is counted"
     );
     println!(
-        "  analysis ring overflow: 20 published, 8 kept, {} refusals counted",
+        "  analysis ring overflow: 60 published, 8 kept, {} refusals counted",
         stats.analysis_refusals
     );
+}
+
+#[test]
+fn block_rate_cv_outputs_travel_as_one_sample_waveforms() {
+    // WO-012 increment 2: the analysis ring carries EVERY cv output — an audio-rate port as its
+    // block buffer (the scope payload, unchanged), a BLOCK-rate port as a one-sample waveform,
+    // so a live cv WIRE's level reads `peak |wave|` off the same ring in the same language for
+    // both rates. The tap publishes `wave` (audio), `peak` and `rms` (block): the two block
+    // ports must arrive as len-1 updates carrying the tap's own computed values of the 0.5-amp
+    // sine — peak at the crest bound, rms inside its window bound (both hand-computed below).
+    const TAP_PEAK: u32 = 2;
+    const TAP_RMS: u32 = 3;
+    let (ex, sine, tap) = tap_world();
+    let master = sine;
+    let (control, audio_engine) = SharedEngine::new(ex, master);
+
+    let audio_thread = std::thread::spawn(move || {
+        let mut ae = audio_engine;
+        let mut out = vec![0.0f32; FRAMES * 2];
+        for _ in 0..5 {
+            ae.render_block(&mut out).unwrap();
+        }
+        ae.shutdown();
+    });
+    audio_thread.join().unwrap();
+
+    let mut buf: Vec<AnalysisUpdate> = vec![AnalysisUpdate::default(); 64];
+    let read = control.read_analysis(&mut buf);
+    let of_port = |port: u32| {
+        buf[..read].iter().filter(|u| u.node == tap.0 && u.port == port).collect::<Vec<_>>()
+    };
+    let peaks = of_port(TAP_PEAK);
+    let rmss = of_port(TAP_RMS);
+    assert_eq!(peaks.len(), 5, "one block-rate publication per rendered block (peak)");
+    assert_eq!(rmss.len(), 5, "one block-rate publication per rendered block (rms)");
+    for u in peaks.iter().chain(rmss.iter()) {
+        assert_eq!(u.len, 1, "a block-rate cv travels as a ONE-sample waveform");
+        assert_eq!(u.wave().len(), 1);
+    }
+    for u in &peaks {
+        let v = u.wave()[0];
+        assert!(
+            (0.45..=0.51).contains(&v),
+            "the tap's published peak is the sine's own: {v} (expected ≈ 0.5)"
+        );
+    }
+    for u in &rmss {
+        let v = u.wave()[0];
+        // Hand-computed bound: rms of a 0.5-amp 440 Hz sine over a 64-frame window at 48 kHz.
+        // The period (~109.1 frames) never divides the window, so each block's mean(sin²) rides
+        // 1/2 − sin(2ωL)/(4ωL) with its start phase: rms ∈ [√(0.25·0.364), √(0.25·0.636)] ≈
+        // [0.302, 0.399], around the integer-period limit 0.5/√2 ≈ 0.3536.
+        assert!(
+            (0.29..=0.41).contains(&v),
+            "the tap's published rms is the sine's own: {v} (window bound around 0.3536)"
+        );
+    }
+    // The audio-rate wave port is untouched by the extension: still full-block waveforms.
+    assert!(of_port(TAP_WAVE).iter().all(|u| u.len as usize == FRAMES));
+    println!("  block-rate cv on the analysis ring: 5 × peak + 5 × rms, len 1, values checked");
 }
 
 #[test]

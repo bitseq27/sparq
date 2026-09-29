@@ -70,6 +70,16 @@ Everything here is a **no** for now. The rule: if an idea isn't in a work order,
 - Automatic global latency compensation *(ADR-006: latency is a timbral resource)*
 - Any feature requiring a modifier key, right-click or hover *(pillar 6)*
 
+## WO-012 increment 5+ (parked from the shell, updated 2026-09-30 — increments 2 (live audio), 3 (convergence chrome) and 4 (the MTA audio-control thread, mouse support, master meters, palette tiles) shipped)
+
+* **Hover affordances** (cursor shapes, hover highlights) stay parked — §8 forbids hover-*only* affordances, and the adapter now drops unpressed mouse motion entirely (WO-012 inc 4), so hover is unobserved, not ignored.
+* **Dock wheel-scroll** waits for dock content that scrolls (the palette fits at 1920; a 40-module registry would not) — until then the wheel over the dock pans the camera, declared.
+* **Per-channel meters on every node** — the bars ship on `out/main` first, per the operator's ask; the ring already carries per-port stereo peaks for all of them.
+
+* **Node inset displays** (increment 4, the convergence's second slice): the mockup's per-module wells — envelope triangles, meter bars, sparklines — drawn from LIVE values where the rings carry them (meters, analysis) and at rest otherwise; the scope well shipped in WO-013 inc 6 and is the pattern.
+* **The inspector response plot** (increment 4): the mockup's filter-curve display with its draggable marker — needs a per-module curve contract (svf first), declared before drawn.
+* **Perform-mode convergence** against `perform-mode.svg` — its own increment, after Design reads like the mockup.
+
 ## WO-012 increment 2+ (parked from the shell prototype, 2026-09-21)
 
 * **WM_POINTER contact area** → real palm rejection on the stage digitiser (winit reports no area; the recogniser's palm path is tested with synthetic areas only).
@@ -82,7 +92,24 @@ Everything here is a **no** for now. The rule: if an idea isn't in a work order,
 * egui default typeface → the chosen WO-002 faces once `chosen` is filled (sizes already token-correct).
 * `preview.html` / `tokens.css` HC rendering: the COLOR_HC_* constants exist and drive the in-app theme switch, but the static preview emitters still render only the base palette — add an HC swatch section when the preview page is next touched.
 
-## WO-013 increment 5+ (parked from the graph canvas, updated 2026-09-27 — increment 5 shipped the "Else column": rename, inspector scroll, per-cv levels, the LOD pass)
+## WO-013 increment 6+ (parked from the graph canvas, updated 2026-09-29 — increment 5 shipped the "Else column": rename, inspector scroll, per-cv levels, the LOD pass; WO-012 inc 2 shipped the live level source; increment 6 shipped the scope screen)
+
+**Shipped in increment 6 (2026-09-29)**: **the scope screen** — `dsp/scope` draws. The
+toolkit-independent model (`sparq-ui::canvas::scope`: rolling `TraceBuf` sized by
+`timebase × the negotiated rate` and clamped to `MAX_TRACE`, a resize that zooms rather than
+resets, rising-edge trigger with a declared free-run fallback, stride-decimated polyline
+geometry with edge clamping, X/Y pairing over the shorter axis, NaN sanitised at the geometry
+boundary, param clamping that does not trust its input) + the session's binding resolution (the
+WIRE is the binding, re-resolved every frame so it cannot go stale; a rebind clears the traces
+so no dead source's tail survives) + the painter (the `scope.trace` map's own row: amber trace
+on `ground.inset`, `hairline.faint` crosshair grid, the WIRES' glow vocabulary — lerp toward
+the class glow by the window peak plus the under-glow pass; the well draws at Full AND
+Simplified, the TRACE at Full only, the Dot contract untouched). The traces live ONLY in the
+session (D3′: the plan's canvas-field swap was built, the LOD smoke caught it alternating two
+sets and blanking frames, and the single-source read replaced it — no canvas copy exists). The
+manifest's param ORDER is pinned by a test (the painter reads by index). 32 audit smokes; the
+LOD contract is measured in SHAPE counts, because this egui tessellates a frame into one
+clipped primitive.
 
 **Shipped in increment 5 (2026-09-27)**: the four items increment 4 declared for its next pass.
 **Rename text entry** — `sparq-ui::canvas::entry` (`TextEntry`: end-caret, printables-only,
@@ -150,13 +177,17 @@ runs on the post-removal graph; refusals restore byte-exact).
   signal flow, and **cv-wire levels SHIPPED (increment 5)**: `NodeLevels` carries per-port
   entries, `wire_level` prefers the source PORT's level, and the bridge reads each cv output's
   real published value from the executor (`node_cv_block` / `node_cv_audio`, magnitude for a
-  bipolar swing, clamped). What stays parked: **per-port AUDIO levels** — an audio wire still
-  carries its source NODE's folded meter, so one wire out of a multi-output node (`util/mixer`)
-  shows the fold, not its own channel; per-port meters + the ring extension (port ids on
-  `MeterUpdate`) ride the live-HAL-through-`SharedEngine` increment, which would also light a
-  scope's per-channel display. And the **continuous play-time refresh**: the canvas `levels` field
-  still fills from an offline preview render (after RENDER WAV); the per-frame `read_meters` fill
-  rides that same increment (the painter path and the model are done — it only swaps the SOURCE).
+  bipolar swing, clamped), and **per-port AUDIO levels + the continuous play-time refresh
+  SHIPPED (WO-012 increment 2, the live audio session)**: `MeterUpdate` carries port ids (one
+  entry per audio OUTPUT port, `FOLDED` for a cv-only node), the analysis ring carries block-rate
+  cv as one-sample waveforms, and while a session runs the shell drains both PER FRAME into the
+  same `levels` field — a wire out of `util/mixer` now lights from its own channel, live, from
+  the engine's own meters, and the **scope screen SHIPPED (WO-013 increment 6)** — the analysis
+  ring's waveforms now have something DRAWING them (`sparq-ui::canvas::scope` + the painter; see
+  the increment-6 note at the top of this section). What stays parked: **per-port meter
+  DISPLAYS** beyond the wire glow (a mixer channel strip's own meters), and the offline path's
+  parity — RENDER WAV still refreshes from a preview render, which the live drain simply
+  overwrites while playing.
 * **LOD visual iteration against `design-mode.svg`**: **the sandbox pass shipped (increment 5)** —
   the renderings now match the declared contracts (Dot = hairline wires; Simplified = no text) and
   the look-board's pattern-first state language at all three levels. What remains is the WO
@@ -288,7 +319,7 @@ audio thread allocates nothing while publishing).
   module docs and LATER's Phase-B entry both carry the derivation debt; the additive interim is
   measured, not hoped.
 
-## WO-008 increment 3+ (parked from the executor, updated 2026-09-25 — tasks 4–7 shipped)
+## WO-008 increment 3+ (parked from the executor, updated 2026-09-29 — tasks 4–7 shipped; the live-HAL reader side shipped as WO-012 inc 2)
 
 **Shipped in increment 3** (no longer parked): the boundary-swap `Engine` + the 10 000-mutation
 stress (allocation-gated, replay-deterministic), per-path latency accounting (kernel map, three
@@ -307,9 +338,12 @@ watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the det
     per-reader quiescent states; the epoch machinery is ready for it, the second reader is not.
   * **The paced zero-xrun proof** — the allowlist's stress sentence ends "zero xruns", which is
     a real-time claim: it rides the loaded soak on SATURN, like every other device-track box.
-  * **HAL integration** — `sparq play` still pumps the static WO-005 graph; routing a live
-    device stream through `SharedEngine` (WASAPI callback = the audio half) is the increment
-    that makes the rig live, gated behind WO-006's exclusive acceptance.
+  * ~~**HAL integration** — routing a live device stream through `SharedEngine`~~ **SHIPPED as
+    WO-012 increment 2 (2026-09-29, `WO012-INC2-PLAN.md`):** the canvas shell's PLAY opens a
+    HAL stream whose callback holds the `AudioEngine`; the operator's session-6 pivot
+    re-sequenced it ahead of WO-006's exclusive acceptance (shared mode is the device-proven
+    path; the ADR-008 exit stays gated). `sparq play` keeps pumping the static WO-005 graph —
+    it is the HAL's own acceptance vehicle, not the canvas's.
 * ~~Multi-port `AudioCtx` (contract v1)~~ **SHIPPED as WO-008 increment 4 (2026-09-26):**
   audio/cv/event payloads travel (data/gpu/atom still refuse in words, now per type); the executor's
   refusals, the merge order and the rate conversions are all measured in `tests/contract_v1.rs`.
@@ -360,14 +394,18 @@ watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the det
   **WO-014 inc 5 added the analysis half:** `AnalysisUpdate` (node, port, block, a bounded waveform)
   rides a sibling `SpscRing`; `AudioEngine::publish_analysis` pushes every audio-rate `cv` output
   per block via `Executor::with_audio_rate_cv_out`, and `SharedEngine::read_analysis` drains it —
-  the payload `ana/tap` writes and `dsp/scope`'s UI reads (`tests/analysis_pub.rs`). And the
-  **UI consumer wiring shipped as WO-013 inc 4** (live wire levels read the meters). Still parked,
-  in pieces: **per-port meters** (a multi-output node meters folded — the rings can carry port ids
-  when a scope wants per-channel levels or a cv wire wants its own value lit), **narrowing analysis
-  publication** to declared analysis sources (today it publishes every audio-rate cv output —
-  generic, bounded, counted; a per-node kind flag at build would narrow it if a large rig wants),
-  and a **continuous play-time refresh** (WO-013 inc 4 refreshes levels from an offline preview
-  render; the per-frame `read_meters` fill rides the live-HAL-through-`SharedEngine` increment).
+  the payload `ana/tap` writes and `dsp/scope`'s UI reads (`tests/analysis_pub.rs`) — **read
+  since WO-013 increment 6: the scope screen draws it**. And the
+  **UI consumer wiring shipped as WO-013 inc 4** (live wire levels read the meters), and
+  **WO-012 inc 2 shipped the rest of the reader side**: **per-port meters** (port ids on
+  `MeterUpdate`, one entry per audio OUTPUT port via `Executor::with_audio_out`, a `FOLDED`
+  sentinel entry for cv-only nodes so their status still crosses) and the **continuous play-time
+  refresh** (the shell drains `read_meters` + `read_analysis` per frame into `CanvasState.levels`;
+  block-rate cv outputs now publish as one-sample waveforms so a cv wire's LIVE level reads the
+  same magnitude rule as the offline one). Still parked: **narrowing analysis publication** to
+  declared analysis sources (today it publishes every cv output — generic, bounded, counted; a
+  per-node kind flag at build would narrow it if a large rig's ring traffic ever wants it) and
+  the **multi-reader epoch** (a second reader of the live patch).
 * **Watchdog → UI flag**: `auto_bypassed(node)` is readable and the journal exists; the canvas's
   red hairline + BYPASS-WATCHDOG badge (ADR-009 d6) is a WO-013-side painter increment.
 * **The degradation ladder beyond auto-bypass** (plan §5.2: FFT size → display refresh → voice

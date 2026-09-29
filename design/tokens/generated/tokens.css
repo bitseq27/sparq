@@ -189,6 +189,8 @@
   --sparq-layout-shell-dock-height: 260;
   --sparq-layout-shell-dock-height-min: 120;
   --sparq-layout-shell-dock-height-max: 520;
+  --sparq-layout-shell-dock-card-w: 112;
+  --sparq-layout-shell-dock-card-h: 56;
   --sparq-layout-shell-inspector-width: 400;
   --sparq-layout-shell-inspector-width-min: 320;
   --sparq-layout-shell-inspector-width-max: 560;

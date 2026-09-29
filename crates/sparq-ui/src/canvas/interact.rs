@@ -292,6 +292,30 @@ impl CanvasEvent {
     }
 }
 
+/// What the patch did since the last [`CanvasState::take_patch_changes`], in the only two
+/// vocabularies a LIVE engine cares about (WO-012 increment 2, the one op→sync door): a
+/// STRUCTURAL change (nodes, wires, flags, the master) means a live session must rebuild and
+/// re-stage the executor; a PARAM edit means it can send a fresh snapshot over the command ring
+/// instead — no re-stage, no reset of module state, no click mid-drag. Ops the engine cannot
+/// hear (`MoveNode`, `Rename`) mark NOTHING: a sync that rebuilds for a pixel move is a lie
+/// about what changed. Toolkit-independent and bounded: `param_nodes` dedupes, so the ledger
+/// cannot grow past the graph even if nobody takes it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PatchChanges {
+    /// Any node/wire/flag/master change happened — rebuild + re-stage is owed.
+    pub structural: bool,
+    /// Nodes whose params were edited — each owes a `set_params` snapshot, not a re-stage.
+    pub param_nodes: Vec<NodeId>,
+}
+
+impl PatchChanges {
+    /// Nothing happened: the value `take_patch_changes` leaves behind.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        !self.structural && self.param_nodes.is_empty()
+    }
+}
+
 /// All canvas state carried between frames.
 #[derive(Clone, Debug)]
 pub struct CanvasState {
@@ -335,6 +359,11 @@ pub struct CanvasState {
     /// it onto wires through [`crate::canvas::levels::wire_level`]. Empty until the first render,
     /// so wires draw at rest exactly as they did before this increment — no faked levels.
     pub levels: crate::canvas::levels::NodeLevels,
+    /// The live-sync ledger: what the engine can hear since the last take. TRANSIENT like
+    /// `levels` — not undoable, because it is a record of edits already in the history, kept
+    /// only so the sync door reads each change exactly once. Private: every mutation site goes
+    /// through `commit`/`note_patch`, and the shell reads it through `take_patch_changes`.
+    patch_changes: PatchChanges,
     last_lod: Lod,
 }
 
@@ -364,7 +393,50 @@ impl CanvasState {
             insp_scroll: 0.0,
             insp_node: None,
             levels: crate::canvas::levels::NodeLevels::new(),
+            patch_changes: PatchChanges::default(),
         }
+    }
+
+    /// Take everything the engine can hear about since the last call, leaving an empty ledger
+    /// behind. The live session calls this once per frame while it plays: `structural` owes a
+    /// rebuild + re-stage, each node in `param_nodes` owes a `set_params` snapshot over the
+    /// command ring. Bounded whether or not anybody takes — `note_patch` dedupes param nodes,
+    /// so an idle ledger cannot grow past the graph.
+    pub fn take_patch_changes(&mut self) -> PatchChanges {
+        std::mem::take(&mut self.patch_changes)
+    }
+
+    /// Record what one op means to a LIVE engine. The classification is exhaustive on purpose:
+    /// a new `Op` variant fails to compile here until somebody decides what it sounds like,
+    /// rather than silently never reaching the audio thread.
+    fn note_patch(&mut self, op: &Op) {
+        match op {
+            // The engine cannot hear a pixel move or a label.
+            Op::MoveNode { .. } | Op::Rename { .. } => {},
+            Op::SetParam { node, .. } => {
+                if !self.patch_changes.param_nodes.contains(node) {
+                    self.patch_changes.param_nodes.push(*node);
+                }
+            },
+            Op::Batch(ops) => {
+                for o in ops {
+                    self.note_patch(o);
+                }
+            },
+            Op::AddNode(_)
+            | Op::RemoveNode { .. }
+            | Op::AddWire(_)
+            | Op::RemoveWire(_)
+            | Op::SetFlags { .. } => self.patch_changes.structural = true,
+        }
+    }
+
+    /// Commit one op to the undo history AND to the live-sync ledger — the single door every
+    /// edit goes through, which is what makes "ops apply to the canvas first, then sync" one
+    /// sentence instead of a per-call-site obligation.
+    fn commit(&mut self, op: Op) {
+        self.note_patch(&op);
+        self.history.push(op);
     }
 
     /// Supply the browser's catalogue (the shell builds it from the registry: one [`BrowserItem`]
@@ -471,6 +543,102 @@ impl CanvasState {
         }
     }
 
+    /// Open the browser sheet at an arbitrary anchor — the documented driver door (the
+    /// `browser_set_query` family): the rail's ADD button opens it at the canvas centre, a
+    /// finger opens it with the empty-canvas long-press, and both ride this path.
+    pub fn browser_open_at(&mut self, anchor: Vec2, view: Rect) -> Vec<CanvasEvent> {
+        let spawn_world = self.camera.to_world(anchor, view);
+        self.browser = Some(BrowserState::open(self.catalog.clone(), anchor, spawn_world));
+        vec![CanvasEvent::Browser(true)]
+    }
+
+    /// Spawn a catalogued module by id at a world position — the dock card's door: the SAME
+    /// snap/cascade/commit path as the browser's row tap (`spawn_node`), undoable and
+    /// ledger-marked like every edit. Refuses in words when the id is not installed — #58
+    /// reaches the dock too.
+    pub fn spawn_module(
+        &mut self,
+        graph: &mut Graph,
+        module_id: &str,
+        world: Vec2,
+    ) -> Vec<CanvasEvent> {
+        let Some(item) = self.catalog.iter().find(|i| i.spec.module_id == module_id) else {
+            return vec![CanvasEvent::Refused(format!(
+                "module `{module_id}` is not installed — the dock cannot offer what does not                  exist (defect #58)"
+            ))];
+        };
+        let spec = item.spec.clone();
+        self.spawn_node(graph, spec, world)
+    }
+
+    /// The catalogue the browser ranks — the dock's card grid reads the SAME list: one source,
+    /// so the dock and the sheet cannot disagree about what is installed.
+    #[must_use]
+    pub fn catalog(&self) -> &[BrowserItem] {
+        &self.catalog
+    }
+
+    /// Edit one param through the model — clamped/snapped, one undo step, and marked on the
+    /// live-sync ledger (`take_patch_changes`). The documented headless/driver path, mirroring
+    /// [`Self::browser_set_query`]: the window path arrives here through a slider drag
+    /// (`apply_param` with coalescing); drivers and smokes call this directly and go through
+    /// the SAME door the finger does.
+    pub fn param_edit(
+        &mut self,
+        graph: &mut Graph,
+        node: NodeId,
+        index: usize,
+        value: f32,
+    ) -> Vec<CanvasEvent> {
+        self.apply_param(graph, node, index, value, false)
+    }
+
+    /// Resolve and commit a wire between two ports — the same `connect::resolve` verdicts and
+    /// the same `commit` door the drag path (`finish_wire`) rides, without the layout and
+    /// pending-wire machinery only a finger can supply. Documented headless/driver path; the
+    /// live-sync ledger marks it exactly as the drag would.
+    pub fn connect_ports(
+        &mut self,
+        graph: &mut Graph,
+        from: PortRef,
+        to: PortRef,
+        ctx: &ConnectContext<'_>,
+    ) -> Vec<CanvasEvent> {
+        // Normalise orientation out→in regardless of argument order, as the drag path does.
+        let from_dir = graph.port(from).map(|pt| pt.direction).unwrap_or(Direction::Out);
+        let to_dir = graph.port(to).map(|pt| pt.direction).unwrap_or(Direction::In);
+        let (src, dst) = match (from_dir, to_dir) {
+            (Direction::Out, Direction::In) => (from, to),
+            (Direction::In, Direction::Out) => (to, from),
+            _ => {
+                return vec![CanvasEvent::Refused(
+                    "a wire runs from an output to an input".to_string(),
+                )];
+            },
+        };
+        match connect::resolve(graph, src, dst, ctx) {
+            ConnectOutcome::Connected { op, conversion, replaced, adapter } => {
+                self.commit(op);
+                let mut ev = vec![CanvasEvent::Applied("connect".to_string())];
+                if replaced {
+                    ev.push(CanvasEvent::Note(
+                        "replaced the wire on that single input".to_string(),
+                    ));
+                }
+                if conversion {
+                    ev.push(CanvasEvent::Note(
+                        "summing to mono — warning hairline drawn".to_string(),
+                    ));
+                }
+                if let Some(a) = adapter {
+                    ev.push(CanvasEvent::Note(format!("inserted adapter {}", a.module_id())));
+                }
+                ev
+            },
+            ConnectOutcome::Refused(r) => vec![CanvasEvent::Refused(r.reason)],
+        }
+    }
+
     /// Replace the sheet's buffer — the documented headless path, mirroring
     /// [`Self::browser_set_query`].
     pub fn rename_set_text(&mut self, text: &str) {
@@ -502,7 +670,7 @@ impl CanvasState {
         };
         match graph.op_rename(r.node, to) {
             Some(op) => {
-                self.history.push(op);
+                self.commit(op);
                 vec![CanvasEvent::Rename(false), CanvasEvent::Applied(msg)]
             },
             None => {
@@ -761,14 +929,22 @@ impl CanvasState {
 
     fn undo(&mut self, graph: &mut Graph) -> Vec<CanvasEvent> {
         match self.history.undo(graph) {
-            Some(op) => vec![CanvasEvent::Undo(op.label().to_string())],
+            Some(op) => {
+                // The inverse is an edit like any other: it goes through the same ledger, so a
+                // live session re-syncs on undo exactly as it does on the original op.
+                self.note_patch(&op);
+                vec![CanvasEvent::Undo(op.label().to_string())]
+            },
             None => vec![CanvasEvent::Refused("nothing to undo".to_string())],
         }
     }
 
     fn redo(&mut self, graph: &mut Graph) -> Vec<CanvasEvent> {
         match self.history.redo(graph) {
-            Some(op) => vec![CanvasEvent::Redo(op.label().to_string())],
+            Some(op) => {
+                self.note_patch(&op);
+                vec![CanvasEvent::Redo(op.label().to_string())]
+            },
             None => vec![CanvasEvent::Refused("nothing to redo".to_string())],
         }
     }
@@ -939,7 +1115,7 @@ impl CanvasState {
             Op::AddNode(n) => (n.id, n.title().to_string()),
             _ => return vec![CanvasEvent::Refused("spawn failed".to_string())],
         };
-        self.history.push(op);
+        self.commit(op);
         self.selection.clear();
         self.selection.nodes.insert(new_id);
         vec![
@@ -997,6 +1173,10 @@ impl CanvasState {
                             from: *pfrom,
                             to: *to,
                         });
+                        // The merged value is a fresh edit the ledger has not seen (the earlier
+                        // take may already have carried the first waypoint away) — note it, or
+                        // the live engine keeps playing the drag's first frame.
+                        self.note_patch(&op);
                     }
                     return Vec::new();
                 }
@@ -1010,7 +1190,7 @@ impl CanvasState {
                 .unwrap_or_else(|| format!("param {index} = {to}")),
             _ => "param".to_string(),
         };
-        self.history.push(op);
+        self.commit(op);
         vec![CanvasEvent::Applied(text)]
     }
 
@@ -1110,6 +1290,10 @@ impl CanvasState {
             (MenuTarget::Node(id), MenuAction::Duplicate) => self.duplicate(graph, id),
             (MenuTarget::Node(id), MenuAction::SetMaster) => {
                 self.master = Some(id);
+                // Not an `Op` (the master designation carries no undo entry), but the live
+                // engine hears it: which node feeds the device is structural. The session
+                // re-stages with the new master on its next sync.
+                self.patch_changes.structural = true;
                 vec![CanvasEvent::MasterSet(id)]
             },
             (MenuTarget::Empty, MenuAction::RenderWav) => vec![CanvasEvent::RenderWav],
@@ -1149,7 +1333,7 @@ impl CanvasState {
             Op::AddNode(n) => n.id,
             _ => return vec![CanvasEvent::Refused("duplicate failed".to_string())],
         };
-        self.history.push(op);
+        self.commit(op);
         self.selection.clear();
         self.selection.nodes.insert(new_id);
         vec![CanvasEvent::Applied("duplicate".to_string()), CanvasEvent::Selection(1)]
@@ -1188,7 +1372,7 @@ impl CanvasState {
         };
         match graph.op_set_flags(id, to) {
             Some(op) => {
-                self.history.push(op);
+                self.commit(op);
                 vec![CanvasEvent::Applied(label.to_string())]
             },
             None => vec![CanvasEvent::Note("no change".to_string())],
@@ -1204,7 +1388,7 @@ impl CanvasState {
         }
         match graph.op_remove_node(id) {
             Some(op) => {
-                self.history.push(op);
+                self.commit(op);
                 self.selection.clear();
                 vec![CanvasEvent::Applied("delete node".to_string())]
             },
@@ -1215,7 +1399,7 @@ impl CanvasState {
     fn delete_wire(&mut self, graph: &mut Graph, id: WireId) -> Vec<CanvasEvent> {
         match graph.op_remove_wire(id) {
             Some(op) => {
-                self.history.push(op);
+                self.commit(op);
                 self.selection.clear();
                 vec![CanvasEvent::Applied("delete wire".to_string())]
             },
@@ -1493,7 +1677,7 @@ impl CanvasState {
         };
         match connect::resolve(graph, src, dst, ctx) {
             ConnectOutcome::Connected { op, conversion, replaced, adapter } => {
-                self.history.push(Op::Batch(vec![rm, op]));
+                self.commit(Op::Batch(vec![rm, op]));
                 let mut ev = vec![CanvasEvent::Applied("re-patch".to_string())];
                 if replaced {
                     ev.push(CanvasEvent::Note(
@@ -1552,7 +1736,7 @@ impl CanvasState {
         let count = ops.len();
         let op =
             if count == 1 { ops.pop().unwrap_or(Op::Batch(Vec::new())) } else { Op::Batch(ops) };
-        self.history.push(op);
+        self.commit(op);
         vec![CanvasEvent::Applied(format!("move {count} node(s)"))]
     }
 
@@ -1590,7 +1774,7 @@ impl CanvasState {
         };
         match connect::resolve(graph, src, dst, ctx) {
             ConnectOutcome::Connected { op, conversion, replaced, adapter } => {
-                self.history.push(op);
+                self.commit(op);
                 let mut ev = vec![CanvasEvent::Applied("connect".to_string())];
                 if replaced {
                     ev.push(CanvasEvent::Note(
@@ -1653,7 +1837,7 @@ mod tests {
     use super::*;
     use crate::canvas::connect::ConnectContext;
     use crate::canvas::layout::compute;
-    use crate::canvas::model::{NodeSpec, ParamDesc, ParamKind};
+    use crate::canvas::model::{NodeFlags, NodeSpec, ParamDesc, ParamKind};
     use sparq_module_api::manifest::Port;
     use sparq_module_api::port::Phase;
     use sparq_module_api::port::{ChannelSet, CvRange, CvRate, Multiplicity, PortType};
@@ -2857,5 +3041,56 @@ mod tests {
         // Closing the panel drops the offset entirely.
         s.set_inspector(None);
         assert_eq!(s.inspector_scroll(big), 0.0);
+    }
+
+    #[test]
+    fn the_patch_ledger_classifies_what_a_live_engine_can_hear() {
+        // WO-012 increment 2, the one op→sync door: structural edits owe a rebuild + re-stage,
+        // param edits owe a set_params snapshot, and edits the engine cannot hear (a move, a
+        // rename) mark NOTHING — a sync that rebuilds for a pixel move would reset module state
+        // for no reason an operator could name.
+        let mut g = Graph::new();
+        let id = nid(&g.op_add_node(sine_with_params(), Vec2::ZERO));
+        let g2 = nid(&g.op_add_node(gain(), Vec2::new(300.0, 0.0)));
+        let mut s = CanvasState::new();
+
+        // A param edit: param-dirty, NOT structural — and deduped per node.
+        s.apply_param(&mut g, id, 0, 500.0, false);
+        s.apply_param(&mut g, id, 0, 600.0, false);
+        let c = s.take_patch_changes();
+        assert!(!c.structural, "a param edit is not structural");
+        assert_eq!(c.param_nodes, vec![id], "one entry per node, not per edit");
+        assert!(s.take_patch_changes().is_empty(), "the take left an empty ledger");
+
+        // A coalesced drag frame AFTER a take re-marks (the merge replaces the top entry
+        // without pushing — the ledger must not depend on the push).
+        s.apply_param(&mut g, id, 0, 700.0, false);
+        s.take_patch_changes();
+        s.apply_param(&mut g, id, 0, 800.0, true);
+        assert_eq!(s.take_patch_changes().param_nodes, vec![id], "the merge re-marked");
+
+        // Ops the engine cannot hear.
+        s.commit(Op::MoveNode { id, from: Vec2::ZERO, to: Vec2::new(10.0, 10.0) });
+        s.commit(g.op_rename(id, Some("voice".into())).unwrap());
+        assert!(s.take_patch_changes().is_empty(), "a move and a rename are inaudible");
+
+        // Structural edits, each on its own.
+        s.commit(g.op_add_wire(PortRef::new(id, 0), PortRef::new(g2, 0)));
+        assert!(s.take_patch_changes().structural, "a wire is structural");
+        let flags = NodeFlags { bypassed: true, ..NodeFlags::default() };
+        s.commit(g.op_set_flags(id, flags).unwrap());
+        assert!(s.take_patch_changes().structural, "a flag is structural");
+
+        // Undo goes through the same door: undoing the flag edit is structural again…
+        s.undo(&mut g);
+        assert!(s.take_patch_changes().structural, "undo of a flag edit re-syncs");
+        // …and redo likewise.
+        s.redo(&mut g);
+        assert!(s.take_patch_changes().structural, "redo of a flag edit re-syncs");
+
+        // SET MASTER is not an Op, but it is structural: which node feeds the listener moved.
+        s.run_menu_action(&mut g, MenuTarget::Node(g2), MenuAction::SetMaster, Vec2::ZERO, view());
+        assert_eq!(s.master, Some(g2));
+        assert!(s.take_patch_changes().structural, "a master handover is structural");
     }
 }

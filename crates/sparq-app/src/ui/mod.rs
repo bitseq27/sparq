@@ -20,6 +20,8 @@ pub mod canvas_ui;
 #[cfg(feature = "ui")]
 pub mod headless;
 #[cfg(feature = "ui")]
+pub mod live;
+#[cfg(feature = "ui")]
 pub mod shell_ui;
 #[cfg(feature = "ui-window")]
 pub mod window;
@@ -39,6 +41,9 @@ pub struct UiOptions {
     pub scale: f32,
     /// Start in the high-contrast theme.
     pub contrast: bool,
+    /// Dump the final headless frame's vector shapes to an SVG file (the visual-regression
+    /// instrument: a screenshot without a GPU — WO-012 increment 3).
+    pub svg_out: Option<String>,
 }
 
 impl Default for UiOptions {
@@ -46,6 +51,7 @@ impl Default for UiOptions {
         Self {
             headless_frames: 0,
             audit: false,
+            svg_out: None,
             width: 1920.0,
             height: 1080.0,
             scale: 1.0,
@@ -61,6 +67,9 @@ pub fn run(opts: UiOptions) -> i32 {
     {
         if opts.audit {
             return headless::run_audit(&opts);
+        }
+        if opts.svg_out.is_some() {
+            return headless::run_svg(&opts);
         }
         if opts.headless_frames > 0 {
             return headless::run_frames(&opts);

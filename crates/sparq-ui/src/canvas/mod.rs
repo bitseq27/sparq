@@ -18,6 +18,9 @@
 //!   under a clamped scroll offset (a fixed header, rows that slide under it).
 //! * [`entry`] — text entry: the single-line buffer and sheet geometry the rename modal runs on,
 //!   the surface the browser's provisional keyboard feed was declared to be waiting for.
+//! * [`scope`] — the `dsp/scope` display model: rolling trace accumulation, trigger alignment
+//!   and polyline geometry, toolkit-independent — the manifest's "the UI accumulates blocks up
+//!   to the timebase" made code (WO-013 increment 6).
 //! * [`interact`] — [`interact::CanvasState`], the intent→operation table: gestures in, ops and
 //!   *explained* refusals out.
 //!
@@ -35,12 +38,18 @@ pub mod interact;
 pub mod layout;
 pub mod levels;
 pub mod model;
+pub mod scope;
 
 /// The stable id of the master-output module (WO-014 increment 5). The canvas's master-handover
 /// rule keys on it: when a patch contains an `out/main`, THAT node is the master by name, so the
 /// MASTER badge never lies about which node feeds the listener. A named constant, not a literal
 /// scattered through the resolve rule and its tests, so the id and the rule cannot drift apart.
 pub const OUT_MAIN_ID: &str = "sparq/out/main";
+
+/// The stable id of the scope display module (WO-013 increment 6). The painter keys its display
+/// rendering on it and the live session keys its trace bindings on it — one named constant, so
+/// the id and its two consumers cannot drift apart (the `OUT_MAIN_ID` discipline).
+pub const SCOPE_ID: &str = "sparq/dsp/scope";
 
 pub use browser::{fuzzy_score, rank, BrowserHit, BrowserItem, BrowserState};
 pub use camera::{Camera, Lod};

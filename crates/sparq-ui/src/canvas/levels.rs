@@ -32,6 +32,31 @@ use std::collections::BTreeMap;
 
 use crate::canvas::model::{Graph, NodeId, WireId};
 
+/// One stereo meter reading for the live bars (WO-012 increment 4): the two channel peaks and
+/// their peak-hold positions, all in `0.0..=1.0`. The hold decays on AUDIO time (block counts
+/// at the negotiated rate — no wall clock on the display path), half-life `motion.toml`'s
+/// 300 ms expressed in blocks.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StereoMeter {
+    /// Left (or mono) channel peak this block.
+    pub l: f32,
+    /// Right channel peak (a mono port duplicates `l`).
+    pub r: f32,
+    /// Peak-hold position, left.
+    pub hold_l: f32,
+    /// Peak-hold position, right.
+    pub hold_r: f32,
+    /// The block the peaks were taken at — the hold decays on AUDIO time (block distance),
+    /// never on a wall clock the display path could lie about.
+    pub block: u64,
+}
+
+/// The live per-(node, output port) stereo meters the session drains per frame — the single
+/// source the painter's meter bars read (the `ScopeTraces` discipline: at rest the shell hands
+/// the painter an empty map and the wells stay empty). `BTreeMap` for deterministic iteration.
+pub type LiveMeters =
+    std::collections::BTreeMap<(crate::canvas::model::NodeId, usize), StereoMeter>;
+
 /// Per-node signal levels for one frame, keyed by canvas node id, each in `0.0..=1.0`. The bridge
 /// fills this from the executor's meters (see `sparq-app`'s `bridge::node_levels`); the canvas
 /// maps it onto wires and the painter reads it. `BTreeMap` (not `HashMap`) so iteration — and any

@@ -146,27 +146,47 @@ pub struct LivePatch {
     pub master: NodeId,
 }
 
-/// One node's meter snapshot, published per block (ADR-009 decision 8: analysis taps and
-/// meters are PUBLISHED, not polled — the audio thread writes into a lock-free ring and the
-/// UI/visuals consume; visual work never touches the audio thread).
+/// One meter reading, published per block per audio OUTPUT port (ADR-009 decision 8: analysis
+/// taps and meters are PUBLISHED, not polled — the audio thread writes into a lock-free ring and
+/// the UI/visuals consume; visual work never touches the audio thread). A node with no audio
+/// outputs publishes ONE [`MeterUpdate::FOLDED`] entry so its status still crosses the ring.
 ///
 /// `Copy` and fixed-size so it rides the kernel's [`SpscRing`] without allocation. This is the
-/// reader WO-013's live wire levels and (later) `dsp/scope`'s transport consume.
+/// reader the live wire levels consume — offline through the executor's folded [`crate::executor::
+/// Executor::meter`], live through this ring's per-port entries.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MeterUpdate {
     /// The node this reading belongs to.
     pub node: u32,
+    /// The manifest port index of the AUDIO OUTPUT this reading belongs to — the ring's port
+    /// id (WO-012 increment 2: per-port meters, so one wire out of a multi-output node can
+    /// carry its own level instead of the node's fold). [`MeterUpdate::FOLDED`] for a node
+    /// with no audio outputs at all, whose status must not vanish from the ring.
+    pub port: u32,
     /// The block count the reading was taken at (the stream's clock, inherited across swaps).
     pub block: u64,
-    /// Peak |sample| across the node's audio outputs in that block.
+    /// Peak |sample| across the port's channels in that block (the folded reading for a
+    /// [`MeterUpdate::FOLDED`] entry: zeros, with the node's status).
     pub peak: f32,
-    /// RMS across the node's audio outputs in that block.
+    /// The FIRST channel's peak in that block — the left meter bar (WO-012 increment 4). A
+    /// mono port duplicates `peak`; the `FOLDED` entry keeps honest zeros.
+    pub peak_l: f32,
+    /// The SECOND channel's peak (the right meter bar); a mono port duplicates `peak_l`.
+    pub peak_r: f32,
+    /// RMS across the port's channels in that block (same f64 accumulator as the executor's
+    /// folded meter — for a single-output node the two readings are bit-identical).
     pub rms: f32,
-    /// The node's block status, in the executor's wire encoding.
+    /// The node's block status, in the executor's wire encoding — repeated on every port entry
+    /// of the node, because status is a NODE fact and an entry that carried it conditionally
+    /// would make every consumer ask which entry is the special one.
     pub status: u8,
 }
 
 impl MeterUpdate {
+    /// The port value of a node with NO audio outputs: the entry carries the node's status and
+    /// zeroed levels. A named sentinel, not a magic number at the call sites.
+    pub const FOLDED: u32 = u32::MAX;
+
     /// The status as the contract's enum (the wire encoding exists only to keep this struct
     /// `Copy` and small enough for a ring slot).
     #[must_use]
@@ -190,10 +210,12 @@ pub const ANALYSIS_WAVE_LEN: usize = 128;
 /// publishes it here once per block, the visual thread draws it. Zero audio-thread cost on the
 /// display side is structural: the display consumer is on the other end of this ring.
 ///
-/// Published for EVERY audio-rate `cv` output in the patch (see
-/// [`AudioEngine::publish_analysis`]) — the generic rule needs no per-node kind storage, it is
-/// bounded by the ring depth, and it means any audio-rate cv signal (a tap's waveform, an
-/// envelope, an LFO) is scopable. A consumer filters by the `(node, port)` its display is bound to.
+/// Published for EVERY `cv` output in the patch (see [`AudioEngine::publish_analysis`]) — the
+/// generic rule needs no per-node kind storage, it is bounded by the ring depth, and it means any
+/// cv signal (a tap's waveform, an envelope, an LFO) is scopable. An audio-rate port travels as
+/// its block buffer; a block-rate port travels as a ONE-sample waveform (`len == 1`), so a
+/// consumer's peak rule reads both rates the same way and a cv wire's live level needs no second
+/// channel. A consumer filters by the `(node, port)` its display is bound to.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnalysisUpdate {
     /// The node that produced the waveform.
@@ -556,32 +578,57 @@ impl AudioEngine {
         }
     }
 
-    /// Publish every node's meter for the block just rendered. Allocation-free: the ring
-    /// storage exists, `order()` is the cached sort, and `MeterUpdate` is `Copy`.
+    /// Publish the block's meters, one entry per AUDIO OUTPUT port. Allocation-free: the ring
+    /// storage exists, `order()` is the cached sort, [`Executor::with_audio_out`] walks the
+    /// build-time port map, and `MeterUpdate` is `Copy`. A node with no audio outputs publishes
+    /// one [`MeterUpdate::FOLDED`] entry instead, so a cv-only node's status still crosses.
     fn publish_meters(&self) {
         let patch = self.audio.live();
         let block = patch.executor.blocks_rendered();
         for &node in patch.executor.order() {
-            if let Some(m) = patch.executor.meter(node) {
-                let update = MeterUpdate {
+            let Some(m) = patch.executor.meter(node) else { continue };
+            let status = status_to_u8(m.status);
+            let mut ports = 0u32;
+            let block_frames = patch.executor.config().block_frames.max(1);
+            patch.executor.with_audio_out(node, |port, buf| {
+                let (peak, rms, peak_l, peak_r) = peak_rms_channels(buf, block_frames);
+                // A full ring refuses and counts inside itself — the publication never waits.
+                self.meters.push(MeterUpdate {
                     node: node.0,
+                    port,
+                    block,
+                    peak,
+                    rms,
+                    peak_l,
+                    peak_r,
+                    status,
+                });
+                ports += 1;
+            });
+            if ports == 0 {
+                self.meters.push(MeterUpdate {
+                    node: node.0,
+                    port: MeterUpdate::FOLDED,
                     block,
                     peak: m.peak,
+                    peak_l: 0.0,
+                    peak_r: 0.0,
                     rms: m.rms,
-                    status: status_to_u8(m.status),
-                };
-                // A full ring refuses and counts inside itself — the publication never waits.
-                self.meters.push(update);
+                    status,
+                });
             }
         }
     }
 
-    /// Publish every audio-rate `cv` output's waveform for the block just rendered — the payload
-    /// a `dsp/scope` draws. Allocation-free and bounded: the executor hands over the buffers it
-    /// already holds ([`Executor::with_audio_rate_cv_out`]), the update is a `Copy` struct built
-    /// on the stack, and a full ring refuses-and-counts inside itself (a dropped waveform is a
-    /// dropped frame of a scope, which is what a real-time display is allowed to do — the audio
-    /// thread never waits for the visual consumer).
+    /// Publish every cv OUTPUT's waveform for the block just rendered — the payload a
+    /// `dsp/scope` draws, and (since WO-012 increment 2) the live source of a cv WIRE's level:
+    /// audio-rate ports travel as their block buffer, block-rate ports as a one-sample waveform,
+    /// so a consumer's `peak |wave|` rule reads the same language for both rates.
+    /// Allocation-free and bounded: the executor hands over the buffers/cells it already holds
+    /// ([`Executor::with_audio_rate_cv_out`] / [`Executor::with_block_rate_cv_out`]), the update
+    /// is a `Copy` struct built on the stack, and a full ring refuses-and-counts inside itself
+    /// (a dropped waveform is a dropped frame of a display, which is what a real-time display is
+    /// allowed to do — the audio thread never waits for the visual consumer).
     fn publish_analysis(&self) {
         let patch = self.audio.live();
         let block = patch.executor.blocks_rendered();
@@ -596,8 +643,44 @@ impl AudioEngine {
                 update.set_samples(wave);
                 self.analysis.push(update);
             });
+            patch.executor.with_block_rate_cv_out(node, |port, v| {
+                update.node = node.0;
+                update.port = port;
+                update.block = block;
+                update.set_samples(&[v]);
+                self.analysis.push(update);
+            });
         }
     }
+}
+
+/// Peak and RMS over ONE port buffer — the same arithmetic as the executor's folded
+/// `peak_rms_ports` (f64 accumulator, same order), so for a single-output node the per-port
+/// reading is bit-identical to the folded reading it sits beside. Empty → zeros; no allocation.
+/// [`peak_rms`] plus the per-CHANNEL peaks the meter bars read (WO-012 increment 4): the
+/// buffer is interleaved frames × channels, and the channel count is the buffer length over
+/// the block size — a mono port therefore duplicates its single channel into `peak_l` and
+/// `peak_r`, which is exactly the additive pin the cross-thread test holds. One cache-warm
+/// pass, same f64 accumulator, no allocation.
+fn peak_rms_channels(buf: &[f32], block_frames: usize) -> (f32, f32, f32, f32) {
+    let channels = buf.len().checked_div(block_frames).unwrap_or(1).max(1);
+    let mut peak = 0.0f32;
+    let mut sum = 0.0f64;
+    let mut ch = [0.0f32; 2];
+    for (i, &s) in buf.iter().enumerate() {
+        let a = s.abs();
+        if a > peak {
+            peak = a;
+        }
+        sum += f64::from(s) * f64::from(s);
+        let c = i % channels;
+        if c < 2 && a > ch[c] {
+            ch[c] = a;
+        }
+    }
+    let rms = if buf.is_empty() { 0.0 } else { (sum / buf.len() as f64).sqrt() as f32 };
+    let (l, r) = if channels >= 2 { (ch[0], ch[1]) } else { (ch[0], ch[0]) };
+    (peak, rms, l, r)
 }
 
 #[cfg(test)]

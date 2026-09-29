@@ -1896,6 +1896,43 @@ impl Executor {
         }
     }
 
+    /// Visit every BLOCK-rate `cv` OUTPUT of `node` after a block, calling `f(manifest_port,
+    /// value)` with the most recent published value of each. The block-rate sibling of
+    /// [`Executor::with_audio_rate_cv_out`]: the cross-thread engine publishes both through the
+    /// analysis ring (a block-rate value travels as a one-sample waveform — the consumer's
+    /// `peak |wave|` rule then reads the SAME language for both cv rates). Allocation-free for
+    /// the same reasons: it walks the build-time port map and copies the stored cells. A node
+    /// with no block-rate cv outputs (or an unknown node) calls `f` zero times.
+    pub fn with_block_rate_cv_out(&self, node: NodeId, mut f: impl FnMut(u32, f32)) {
+        let Some(&slot) = self.slot_of.get(&node) else { return };
+        let n = &self.nodes[slot];
+        for (idx, &port) in self.plans[slot].cv_out.iter().enumerate() {
+            if n.cv_out_rates.get(idx) == Some(&CvRate::Block) {
+                if let Some(&v) = n.cv_out_cells.get(idx) {
+                    f(port, v);
+                }
+            }
+        }
+    }
+
+    /// Visit every AUDIO OUTPUT port of `node` after a block, calling `f(manifest_port,
+    /// samples)` for each — the per-port sibling of the folded [`Executor::meter`] reading,
+    /// and the hook the cross-thread engine uses to publish per-port meter updates (ring port
+    /// ids) without the executor knowing anything about rings. The buffers are the ones the
+    /// render just wrote, so a publish-time walk is cache-warm; the folded meter atomics stay
+    /// exactly where they were. Allocation-free: it walks the build-time port map and borrows
+    /// the stored output buffers. A node with no audio outputs (or an unknown node) calls `f`
+    /// zero times — which is how the publisher knows to fall back to the folded entry.
+    pub fn with_audio_out(&self, node: NodeId, mut f: impl FnMut(u32, &[f32])) {
+        let Some(&slot) = self.slot_of.get(&node) else { return };
+        let n = &self.nodes[slot];
+        for (idx, &port) in self.plans[slot].audio_out.iter().enumerate() {
+            if let Some(buf) = n.out_bufs.get(idx) {
+                f(port, buf);
+            }
+        }
+    }
+
     /// A node's meters. Any thread holding a reference; relaxed loads, no locks.
     #[must_use]
     pub fn meter(&self, node: NodeId) -> Option<MeterReading> {

@@ -69,9 +69,9 @@ WO-002 ─┬─> WO-003                        WO-008 ─> WO-013 ────�
 | WO-004 | **done (3 of 3 mockups)** | Design mode, Perform mode, display sheet — all generated from tokens, all passing `token_audit`. **Open:** the human protocols (blind identity, distance, dark-room, glove, monochrome) and the display-sheet tablet/wall breakpoints. |
 | WO-005 | **done except live playback (Phase A)** | Offline render, DSP chain, control ring, diagnostics, golden reference, selftest, soak. Deviation: **no window** — the egui shell is WO-012, so Phase 0 uses a terminal control surface. Everything the window would have driven (control ring, counters, render path) is real and tested. `play` compiles and lints clean in CI on all three OSes but **has never produced sound**: no audio device exists in this environment. |
 | WO-006 | **in progress — increment 1.5 built (2026-09-29) after test004 attempt 3 GRANTED the default 10 ms period and stalled anyway (defect #92: the stall is period-independent — delivered = wakes × buffer, exactly, on both attempts) and exposed defect #91 (the exclusive rate envelope was sieved through the shared probe, so play's 48 kHz ask was adjusted UP to 96 kHz); acceptance = the `test004` re-run at the driver's own 48 kHz, with #76's delivered-vs-wall drift as the instrument** | HAL trait + diagnostics + null backend + conformance + WASAPI exclusive/shared, 242 tests, four clippy matrix cells clean. **Physical SATURN session (operator present, no RDP, High-performance scheme):** the endpoints are RESOLVED by name — the default is **OUT 1-2 (BEHRINGER UMC 204HD 192k)**; shared mode is proven on the real interface: **first sound ever through the HAL** (tone audible), 10 s plays + a 5-min soak @96k/64 all **0 xruns / 0 allocations** (450 307 blocks, p50 1.0 µs / p99 2.0 µs / max 108 µs, 3 outliers), 4 ch f32 @96k negotiated on OUT 1-4 via the two-shapes ladder (#38/#46 fix working on hardware), **the unplug acceptance criterion PASSED** (mid-run removal → `Removed` state, dev-err 1, 0 xruns, clean stop, recovery play + tone after re-plug), reopen-leak 0 on hardware. **Multichannel criterion resolved honestly** (interface maxes at 4 out; caps say so; null proves ≥8). Remaining for acceptance: **the 2 h zero-xrun soak at 96 kHz/64 EXCLUSIVE — blocked by defect #77**: the exclusive ladder probes f32 only and the Behringer driver refuses f32 exclusive (`AUDCLNT_E_UNSUPPORTED_FORMAT`, not policy — both checkboxes ticked); increment 1.2 adds integer rungs (i32/24-in-32/i16 + pump conversion), then test004 runs the acceptance. Also found: **#75** (friendly-name `E_ACCESSDENIED` on REAL endpoints with no remote session — #40's "RDP quirk" attribution falsified; registry reads names fine → fallback path proven) and **#76** (the `SUSPECT` drift decoded: `(buffer_frames ÷ event_period) ÷ rate − 1` = +1.2 M ppm on BOTH the RDP and Behringer sessions to four digits — `IAudioClock` advances in buffer steps per event tick; the #45 guard did its job, throughput stayed truthful). `docs/hal/windows-notes.md` §4/§4b carry the rows and the arithmetic. |
-| WO-012 | **in progress — increment 1 built and headless-green** | Toolkit-independent UI core in `sparq-ui` (pointer model, gesture recogniser with the full §14.3 table, shell layout computation, touch-target audit — 37 tests, zero dependencies) + the egui shell in `sparq-app` behind `ui`/`ui-window` features (token-generated style adapter incl. the derived high-contrast theme, window host with per-monitor DPI via winit, headless driver). `sparq ui --audit` is a gate: 5 viewports × 4 DPI scales × 2 modes + DPI-invariance + 9 synthetic-gesture smokes — **PASS (0 failures)** in sandbox; frame logic med 94 µs headless. Defects #50–#53 found and fixed (table below). **Awaiting device:** the DPI matrix on real monitors, touch with a real finger, palm rejection (needs WM_POINTER contact area — winit reports none), 60 fps on the stage device. |
+| WO-012 | **in progress — increments 1–3 built and sandbox-green; increment 2 is the LIVE audio session (PLAY streams the drawn patch through the HAL over `SharedEngine`; continuous per-frame wire levels from the engine's rings), increment 3 the mockup-conformance chrome (the shell draws in `design-mode.svg`'s language; `sparq ui --svg-out` is the visual gate); awaiting device: test006 steps J–K and the chrome's first real-screen look** | Toolkit-independent UI core in `sparq-ui` (pointer model, gesture recogniser with the full §14.3 table, shell layout computation, touch-target audit — 37 tests, zero dependencies) + the egui shell in `sparq-app` behind `ui`/`ui-window` features (token-generated style adapter incl. the derived high-contrast theme, window host with per-monitor DPI via winit, headless driver). `sparq ui --audit` is a gate: 5 viewports × 4 DPI scales × 2 modes + DPI-invariance + 9 synthetic-gesture smokes — **PASS (0 failures)** in sandbox; frame logic med 94 µs headless. Defects #50–#53 found and fixed (table below). **Awaiting device:** the DPI matrix on real monitors, touch with a real finger, palm rejection (needs WM_POINTER contact area — winit reports none), 60 fps on the stage device. |
 | WO-007 | **task 1 done — the contract is data, and ten decisions are taken** | `docs/api/compat-matrix.toml` (6 port types, 21 same-type cases, 5 verdicts, 4 adapters, 1 cell still open) and `docs/api/manifest-fields.toml` (82 field rows, 22 required, an error code per violation) — the tables-first artefact task 1 asks for, both parsing, neither consumed by code yet. `WO007-TASK1-REVIEW.md` carries the ten ratified decisions and the two acceptance blockers found. §16's five open questions are all answered, Q1 **by measurement** (`tools/dispatch-bench`: enum dispatch is within noise of monomorphised; per-sample trait objects cost 27–36 µs for 100 null modules against a 20 µs budget, so `process(block)` may be a trait object and nothing per-sample may be). Amended: `manifest-schema.md`, `module-api-v1.md` (§2 cascade rule, §3, §14, §16), ADR-005 addendum, **ADR-009 executor decision 7 + Consequences**, Appendix B and §17 Phase 1 (12 → 15 modules). Defects #54–#65 below. **Tasks 2–3 built** (increment below): `sparq-module-api` — the closed port vocabulary as types, the connection rules as functions, the derived error catalogue (19 legacy kinds + 5), the manifest with every required field an `Option` so absence is reportable, `validate()` returning either a `ValidatedManifest` the executor may use or *every* failure at once, `Copy` param snapshots through the kernel's lock-free ring, and the dyn-compatible `Module` trait whose `AudioCtx` exposes no allocator, clock, filesystem or lock. Three conforming modules as contract tests (`util/gain`, `syn/sine`, `ana/rms`). **368 tests** (was 280 before WO-007), clippy clean in seven of eight cells, **0 allocations across 15 000 `process` calls through `Box<dyn Module>`**. Increment 2 added the **TOML reader** — `toml.rs`, a dependency-free subset parser, and `decode.rs`, text → `ValidatedManifest` reporting syntax and type failures before semantic ones — so a real `sparqmod.toml` can now be read; sections v0 does not decode are still *key-checked*, because accepting `[ui]` while ignoring a typo inside it would be an invisible failure. New stamp **`src 65f/1034459B`**. Defects #60–#63 below. Increment 3 added the **registry and discovery** and task 5's two gates — the API-surface snapshot and the throwaway-module test that walks every engine source file to prove criterion 1 mechanically — so **all six acceptance criteria are now addressed** (3 only as far as Rust allows, and the log says so). **388 tests**, stamp `src 67f/1063788B`, defects #64–#65. Increment 4 closed the last two: **task 4** (`docs/module-author-guide-v0.md`, written from the three reference modules) and the **app-side scan** (`sparq modules [--root DIR] [--strict]` in `crates/sparq-app/src/modules.rs` — the only place in the workspace that reads a directory; the contract crate still holds no I/O). **WO-007 is complete.** The one piece deliberately left open is reading `compat-matrix.toml` at discovery instead of mirroring it in `port.rs` — carried to WO-008, because until then the mirror is the only copy of the matrix that can drift. **P1 device run (2026-09-23, SATURN physical): the first real MSVC build of the increment is green where it counts** — clippy audio+hal clean, release build 58 s, golden bit-identical (`ba577186c988db21`), selftest 8/8, `ui --audit` PASS, 1059× realtime, exe stamp `src 68f/1070593B` — and found six defects, #66–#71 below, fixed in `sync-p1-fixes.zip` (tests + scripts only; stamp unchanged) |
-| WO-013 | **in progress — increments 2/2b device-VERIFIED (test005 PASS 2026-09-25); increments 3 (browser + inspector + wire re-patch), 4 (live wire levels + out/main master handover) and 5 (rename entry + inspector scroll + per-cv levels + the LOD pass) built and sandbox-green, device run pending (test006, now with steps F–I)** | The graph canvas: `sparq-ui::canvas` (model with invertible ops + undo/redo, camera + LOD, computed layout + hit-testing, connect verdicts delegated to `sparq-module-api`'s own `connect_*`, the intent→op interaction table) + the egui painter in `sparq-app/src/ui/canvas_ui.rs` (nodes/wires/ports in the token signal-class language, glow/dim affordances, marquee, long-press menu). Shell routes canvas intents and binds the WO-012 `DoubleTap`/`Context`/`Undo` stubs. Demo patch = the reference modules that actually exist (#58 honoured). **474 tests**, `sparq ui --audit` PASS (16 smokes incl. 7 canvas; Design cells audit 24 touch targets), goldens unchanged, `ui-window` compiles. **Increment 2 shipped the bridge:** `sparq-app/src/bridge.rs` (ungated — the default CI test path exercises canvas graph → registry → executor → WAV), master resolution (SET MASTER + MASTER badge + the documented default rule), the RENDER WAV menu row, the registry-driven demo graph, `scripts/test005.bat` for SATURN. Artefacts `sparq-ui::canvas`, `docs/ui/gestures.md`. Defect #73 (recogniser release position) found + fixed. **Increment 2b (no product code):** test005's first run on
+| WO-013 | **in progress — increments 2/2b device-VERIFIED (test005 PASS 2026-09-25); increments 3 (browser + inspector + wire re-patch), 4 (live wire levels + out/main master handover), 5 (rename entry + inspector scroll + per-cv levels + the LOD pass) and 6 (the SCOPE SCREEN — `dsp/scope` draws from the analysis ring) built and sandbox-green, device run pending (test006, now with steps F–K)** | The graph canvas: `sparq-ui::canvas` (model with invertible ops + undo/redo, camera + LOD, computed layout + hit-testing, connect verdicts delegated to `sparq-module-api`'s own `connect_*`, the intent→op interaction table) + the egui painter in `sparq-app/src/ui/canvas_ui.rs` (nodes/wires/ports in the token signal-class language, glow/dim affordances, marquee, long-press menu). Shell routes canvas intents and binds the WO-012 `DoubleTap`/`Context`/`Undo` stubs. Demo patch = the reference modules that actually exist (#58 honoured). **474 tests**, `sparq ui --audit` PASS (16 smokes incl. 7 canvas; Design cells audit 24 touch targets), goldens unchanged, `ui-window` compiles. **Increment 2 shipped the bridge:** `sparq-app/src/bridge.rs` (ungated — the default CI test path exercises canvas graph → registry → executor → WAV), master resolution (SET MASTER + MASTER badge + the documented default rule), the RENDER WAV menu row, the registry-driven demo graph, `scripts/test005.bat` for SATURN. Artefacts `sparq-ui::canvas`, `docs/ui/gestures.md`. Defect #73 (recogniser release position) found + fixed. **Increment 2b (no product code):** test005's first run on
 SATURN compiled the new `sparq-app` against the *previous* increment's `sparq-ui` — cargo answered
 `Fresh` for an rlib whose source had been replaced by a zip with archive-restored mtimes (#41's
 mechanism, on the side of the failure the stamp guard cannot see). Now `SYNC-STAMP.txt` +
@@ -1123,6 +1123,176 @@ block beneath it), unplug-in-exclusive, and the **2 h zero-xrun soak at 96 kHz/6
 When it passes: WO-006 acceptance closes and ADR-008's exit condition fires (cpal bootstrap
 deleted, HAL becomes `play`'s default). Artefacts: `sparq-kernel::hal::period`,
 `docs/hal/windows-notes.md` §4c, `WO006-INC13-RUN-SHEET.md`.
+
+**WO-012 increment 4 — the MTA audio-control thread, the mouse, the master meters, the palette tiles (2026-09-30, sandbox-built):**
+the operator's first PLAY on SATURN refused with the sentence this increment answers: *this
+thread already initialised COM as single-threaded (STA); the WASAPI HAL needs MTA* — the
+winit UI thread can never host the HAL's persistent per-thread MTA, so the session now spawns
+ONE dedicated audio-control thread per session: the only thread that touches the backend
+(enumerate → probe → open → start → stop → drop, pump/fault/capture on the manual null), over a
+request-reply protocol with bounded waits (a driver that owns its thread over 5 s is a device
+fault said in words, not a frozen shell); the UI thread keeps the `SharedEngine` control half,
+the drain, and a health mirror the worker polls at 50 ms; `Drop` sends Stop and joins — a
+session that leaked its thread would leak the device. The same increment carries the operator's
+three other asks: **mouse usability** (unpressed motion dropped at the adapter — the suppression
+line can now only mean a real missed Down; right-click synthesises the recogniser's `Context`;
+the wheel synthesises `Pan` and reuses the panel-over-panel routing — no parallel semantics, no
+modifier keys); **`out/main` meter bars like the mockup** (`MeterUpdate` grew `peak_l`/`peak_r`
+in the same cache-warm publish pass — mono ports duplicate and the cross-thread bit-identity
+pin grew to cover them; green DATA-class fills, amber AUDIO-class peak-hold blocks decaying on
+block counts; empty wells at rest); **the palette** (dock tiles 112×56 through the token
+generator, grouped by manifest top category under xs words, left stripe in the dominant signal
+class — §4's rule, not accent-by-category; all seventeen tiles fit at 1920). Plan
+`WO012-INC4-PLAN.md`; deviations and the mouse/meter rulings are mockup-review findings 15–17.
+
+**Measured in sandbox:** **777 tests** (+2 behind `ui`: back-to-back sessions prove the worker
+teardown, drop-without-stop proves `Drop`) · **37 smokes** (+3: right-click menu, wheel routing
++ hover silence, master bars from the live ring) · matrix 0 violations at the new element
+counts (tiles are class M; the 44 px floor holds) · fmt clean · clippy clean in every runnable
+cell incl. native `ui-window` (the window adapter changed) and MSVC×6 — the increment owed the
+disallowed-`Mutex` lint a reasoned allow (control-path mirror, the defect-#66 precedent),
+`checked_div` for the channel count, and a boxed command variant for the enum-size lint · 5
+python gates · release goldens bit-identical (stress `7bb06379bd6845e5` debug AND release, the
+pinned exec renders, `canvas-render.wav` `d7ad294e…`, determinism `0f5c3e86c7f117a9`) ·
+selftest 9/9 · `modules --strict` 17/17 · `probe_alloc` 0/5 000 · stamp `src 94f/2188595B`.
+**Hardware acceptance is one tap: PLAY makes sound (test006 J).** Artefacts:
+`WO012-INC4-PLAN.md`, the reworked `ui/live.rs`, `window.rs`'s adapter gate.
+
+**WO-012 increment 3 — mockup conformance, chrome: the shell draws like `design-mode.svg` (2026-09-29, sandbox-built):**
+the operator applied all waiting bundles on SATURN and then asked for the interface itself:
+*"I would like it looking like the design-mode.svg."* Slice A of the operator-approved two
+(increment 4 = node inset displays + the inspector response plot). Plan of record
+`WO012-INC3-PLAN.md`; the rail question went to the operator (the mockup's icon-only rail
+violates look-board §8, and finding 3's tooltip remedy violates §8's hover-only ban on a touch
+instrument): **glyph + permanent micro-label** inside the mockup's own 44 px box. **What
+converged, measured against the mockup with a NEW instrument** — `sparq ui --svg-out PATH`
+dumps the headless frame's vector shapes to SVG (a screenshot without a GPU; the review
+protocol's first repeatable visual comparison; first sheet committed at
+`design/mockups/convergence-wo012-inc3.png`): the rail (glyphs + words, hairline groups, the
+foot's live level tick in the AUDIO class colour and the magenta ADD cross opening the browser
+at canvas centre through a new driver door), the top bar (logo glyph, section dividers, the
+review's "top-bar diagnostics" line — negotiated kHz · frames · xruns · swaps while live, the
+build stamp at rest — status dot paired with LIVE), the wire-encoding legend top-right (drawn
+by the canvas painter from the wires' OWN `class_encoding` table — legend and wires cannot
+drift), the dock (MODULES tab REAL: the registry catalogue as 248×80 class-dot cards — the
+review's touch table — tap spawns at canvas centre through the browser's op path, undoable;
+overflow counted in words; four tabs stay honestly disabled), the inspector (port-dot summary
+strip — rings in, filled out, manifest order — and control-cyan sliders with the mockup's block
+thumbs), `shell::compute`'s column discipline (rail and inspector FULL HEIGHT, the dock in the
+canvas column — the mockup's geometry, pinned by the moved layout test), and the demo patch
+spread left-to-right like the mockup's story. Declared deviations (mockup-review findings
+9–14): inspector default stays 400 (480 would force-collapse at tablet-min), top-bar keeps
+word buttons (§6), the level tick is amber not green (§4), wires at rest stay dim ("silence
+looks silent" — the mockup depicts a live patch). Two new tokens through the generator
+(`dock_card_w/h`, the review's touch-table numbers).
+
+**Measured in sandbox:** **777 tests** (unchanged — chrome moves no audio path) · **34 smokes**
+(+2 chrome: dock-card tap spawns and one undo removes; ADD opens the browser, outside tap
+cancels) · the breakpoint matrix grew with the cards (33–42 elements per Design cell, **0
+violations**, 44 px floor holding, 3 dense) · fmt clean · clippy clean in every runnable cell ·
+5 python gates — `token_audit` R6 caught the SVG dumper's page-ground hex on its first pass;
+the dumper now reads `COLOR_GROUND_BASE.hex` · release goldens bit-identical (stress
+`7bb06379bd6845e5` debug AND release, the three pinned exec renders, `canvas-render.wav`
+1 920 046 B · `d7ad294e…`, determinism `0f5c3e86c7f117a9`) · selftest 9/9 · `modules --strict`
+17/17 · `probe_alloc` 0/5 000 · stamp `src 94f/2155888B` · log_check BASELINE moved with the
+seal. Artefacts: `WO012-INC3-PLAN.md`, the convergence sheet, `mockup-review.md` findings 9–14.
+
+**WO-013 increment 6 — the scope screen: `dsp/scope` draws from the analysis ring (2026-09-29, sandbox-built):**
+the follow-on WO-012 increment 2 named, chosen by the operator as the next build: the analysis
+ring has published waveforms since WO-014 inc 5 and block-rate cv since inc 2 — now something
+DRAWS them. The plan of record is `WO013-INC6-PLAN.md` (twelve decisions before the code; its
+postscript records the correction the smoke caught — D3′: the prescribed per-frame SWAP of a
+canvas-owned trace field alternated two sets and blanked alternate frames under manual pumping;
+the shipped design has the session as the SINGLE SOURCE, read by the painter through a
+`canvas_ui::draw` parameter, with an empty set at rest — a dead stream's signal has nowhere to
+linger). **What shipped:** `sparq-ui::canvas::scope` — the toolkit-independent model: rolling
+`TraceBuf` sized `timebase × the negotiated rate` (whole blocks, clamped to `MAX_TRACE`
+65 536 — 500 ms fits at every HAL rate), a resize that ZOOMS (retains the tail) rather than
+resets, rising-edge trigger with the declared free-run fallback (a blank screen pretending to
+be a bug is refused), stride-decimated polyline geometry (≤ one point per pixel column; the
+min/max envelope refinement is declared parked), X/Y pairing over the shorter axis, NaN
+sanitised at the geometry boundary, and param clamping that does not trust its input. The
+manifest's contract, honoured literally: **the wire is the binding** (a scope's x/y inputs
+resolve per frame to the SOURCE `(node, port)` whose `AnalysisUpdate` they display — impossible
+to stale; a rebind clears the traces so no dead tail survives), **the ring is the payload** (the
+drain feeds bound traces from the SAME updates the cv wire levels read — one pass), the params
+configure the DISPLAY (read by index — the order pinned by a drift-gate test — and clamped by
+the model), the UI owns the buffer (session-owned display state, not project state), and
+`Scope::process` stays the no-op it shipped as: zero audio-thread cost is structural, not an
+optimisation. The painter draws the `scope.trace` map's own row — amber trace on `ground.inset`,
+`hairline.faint` crosshair — in the WIRES' glow vocabulary (class-colour→glow lerp by the
+window peak + the under-glow pass at the wires' alpha rule; the motion-token ^1.5 law and
+phosphor persistence are declared parked for one data-first refinement increment that will move
+wires and traces together). The well draws at Full AND Simplified (a scope reads as a scope at
+a glance); the TRACE is Full-only (the Simplified contract is text-free and an unreadable trace
+is decoration); Dot is untouched. Unbound or at rest: the flat rest line — "a flat line, not a
+crash". No layout move: the display rides the EXISTING node box (the display-sheet's larger
+tiles are a layout-token increment, parked), steals no gestures, adds no audit elements.
+
+**Measured in sandbox:** **777 tests** (was 766; +11 scope-model gates) plus 3 session gates and
+2 audit smokes behind `ui` — **32 smokes total** (the trace fills signed at amplitude from the
+bound tap while the unbound spare stays flat; the LOD contract measured in SHAPE counts — this
+egui tessellates a frame into ONE clipped primitive, so primitives cannot be the metric) · fmt
+clean · clippy clean in every runnable cell (the increment owed `div_ceil` in three places —
+MSRV-legal, clippy caught it) · 5 python gates clean (R6 accepted the painter: tokens only, the
+one COUNT documented as a count) · release goldens bit-identical (the three pinned exec renders,
+stress `7bb06379bd6845e5` debug AND release, `canvas-render.wav` 1 920 046 B · `d7ad294e…`) ·
+selftest 9/9 · `modules --strict` 17/17 (no manifest moved) · `probe_alloc` 0/5 000 · stamp
+`src 94f/2122410B`. **Hardware acceptance:** none new — the scope rides test006's steps J–K
+window session (the trace animates on screen while the patch plays); the sandbox proves the
+whole path hermetically on the manual null. Artefacts: `sparq-ui::canvas::scope`,
+`WO013-INC6-PLAN.md`, the painter's `draw_scope_display`.
+
+**WO-012 increment 2 — the live audio session: the HAL stream through `SharedEngine`, continuous meters (2026-09-29, sandbox-built):**
+the FIRST UX increment of the operator's session-6 pivot ("start fleshing out the interface and
+start building patches and sounds"), re-sequenced ahead of WO-006's exclusive acceptance because
+shared mode is the device-proven path and the ADR-008 exit — not live audio — is what the
+acceptance gates. The plan of record is `WO012-INC2-PLAN.md` (fifteen decisions before the code,
+settling every open question checklist item 6 listed; its postscript records the one decision the
+CODE corrected: `stage` never refuses — it supersedes and counts — so D8's retry flag does not
+exist and the visible refusal is the BUILD's, in the executor's own words). **What shipped:** the
+shell's PLAY/STOP/PANIC stubs became a real `LiveSession` (`sparq-app/src/ui/live.rs`): a
+two-phase open (probe → build the executor for the NEGOTIATED config through the new
+`bridge::build_with_map_at` → real open) with a callback that owns the `AudioEngine` and does
+`render_block` and nothing else; the one op→sync door (`CanvasState::take_patch_changes` — an
+exhaustive per-`Op` classification: param edits cross as `set_params` commands with ZERO
+re-stages, structural edits and master handovers rebuild and stage at the boundary, moves and
+renames are inaudible and mark nothing); the bounded per-frame drain that fills
+`CanvasState.levels` from `read_meters` + `read_analysis` (the continuous half of live wire
+levels — the painter path was done; this swapped the SOURCE); the ring extension it rides
+(`MeterUpdate` grew `port` — one entry per audio OUTPUT port via `Executor::with_audio_out`, a
+`FOLDED` sentinel for cv-only nodes so their status still crosses, single-output nodes
+bit-identical to the folded reading they replace, pinned against an offline reference executor;
+and block-rate cv outputs publish as one-sample analysis waveforms so a cv wire's LIVE level
+reads the increment-5 magnitude rule); the honesty lines in the house shape (NEGOTIATED rate ·
+ch · block, latency, and a STOP evidence line of measured counters — blocks, xruns, overruns,
+callback allocations, swaps, cmds, ring drops, reclamations); and the failure discipline —
+`Removed`/`Failed` ends the session in ONE line with the canvas untouched, teardown drops the
+engine on the control thread after `reclaim()` drains. Backend choice: the audit and tests run
+the null backend in MANUAL mode pumped by the smoke (hermetic, deterministic, `capture_frames`
+proving real samples); a Windows window gets `wasapi-shared`; anywhere else gets the paced null
+WITH a log line saying so. Two documented driver doors joined the headless convention
+(`param_edit`, `connect_ports` — the same surface `browser_set_query`/`rename_set_text`
+established). RENDER WAV did not move; the bootstrap did not move (ADR-008 gated); the executor's
+semantics did not move (stress hash unchanged).
+
+**Measured in sandbox:** **766 tests** (was 762; +4: the per-port ring gate, the block-rate
+analysis gate, the ledger gate, the config-door delegation pin — plus 5 `live.rs` session tests
+and 5 audit smokes behind the `ui` feature) · fmt clean · clippy clean in the default, `ui`,
+`bootstrap-audio`, combined audio+hal and native `ui-window` (single-job) cells and all six
+runnable MSVC cells · 5 python gates clean · `selftest --golden` **PASS (9 gates)**, golden
+`ba577186c988db21`, determinism `0f5c3e86c7f117a9` · `ui --audit` **PASS, 30 smokes** (25 +
+the five live-session ones) · stress `7bb06379bd6845e5` · 10 001 blocks · 2 383 swaps ·
+7 617 refused · 0 allocations, debug AND release bit-identical · the cross-thread ledger holds
+(2 299 staged = swaps = reclaimed, alloc 0) · `canvas-render.wav` bit-identical (1 920 046 B ·
+sha256 `d7ad294e…`) · the three pinned exec renders bit-identical (`f2303f13aa0cf299`,
+`1621e1f65b1b64e1`, `53de3b1f3f40e3c9`) · `modules --strict` 17/17 · `probe_alloc` 0 across
+5 000 blocks · throughput 262.8× realtime (1 min at 96 kHz/64) · stamp `src 93f/2081612B`.
+**Hardware acceptance (test006 steps J–K, in the bundle):** PLAY audible on `wasapi-shared` at
+the negotiated latency with the wires animating WHILE it plays; a live slider edit heard without
+stopping; the STOP evidence line; optionally an unplug mid-play → the Removed line and an
+untouched canvas. Artefacts: `crates/sparq-app/src/ui/live.rs`, `WO012-INC2-PLAN.md`,
+`scripts/test006.bat` steps J–K.
 
 **WO-008 increment 7 — host-side `required`-unconnected enforcement, the declared baseline moved ON PURPOSE (2026-09-29, sandbox-built):**
 the sandbox-track item the checklist named "the next candidate in this list" — small,

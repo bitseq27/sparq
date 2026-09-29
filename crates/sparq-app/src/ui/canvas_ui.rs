@@ -20,11 +20,20 @@ use sparq_ui::canvas::camera::Lod;
 use sparq_ui::canvas::connect::{self, ConnectContext, Preview};
 use sparq_ui::canvas::interact::{CanvasState, Interaction};
 use sparq_ui::canvas::layout::{CanvasLayout, NodeLayout, SignalClass, WireEndSide};
+use sparq_ui::canvas::levels::LiveMeters;
 use sparq_ui::canvas::model::{Graph, Node, NodeId};
+use sparq_ui::canvas::scope::{self, ScopeTraces, ScopeView};
+use sparq_ui::canvas::{OUT_MAIN_ID, SCOPE_ID};
 use sparq_ui::geom::{Rect, Vec2};
 use sparq_ui::tokens::*;
 
-use crate::ui::adapter::{c32, egui_rect, font_s, font_xs, Palette};
+use crate::ui::adapter::{c32, egui_rect, font_s, font_xs, sp_rect, Palette};
+
+/// The port-label character budget the scope display's left inset clears (a count, not a
+/// visual size — the `LOG_LINES` convention): the labels are the port id uppercased plus the
+/// class letter ("X C"), and the monospace advance is the space scale (`MenuState::width`'s
+/// documented convention).
+const SCOPE_LABEL_CHARS: usize = 6;
 
 /// Paint the whole canvas for one frame. `view` is the canvas rect (screen px); `audit` collects
 /// the touch targets the layout audit measures.
@@ -37,6 +46,8 @@ pub fn draw(
     layout: &CanvasLayout,
     view: Rect,
     ctx: &ConnectContext<'_>,
+    traces: &ScopeTraces,
+    meters: &LiveMeters,
     audit: &mut Vec<InteractiveElement>,
 ) {
     draw_grid(p, pal, canvas, view);
@@ -46,7 +57,7 @@ pub fn draw(
     // The resolved master (explicit or the documented default rule) wears a MASTER badge: the
     // user must be able to see which node the render will carry, in words, before asking.
     let master_id = canvas.resolve_master(graph);
-    draw_nodes(p, pal, graph, canvas, layout, master_id, audit);
+    draw_nodes(p, pal, graph, canvas, layout, master_id, traces, meters, audit);
     draw_marquee(p, pal, canvas);
     draw_menu(p, pal, canvas, view, audit);
     draw_browser(p, pal, canvas, view, audit);
@@ -55,7 +66,9 @@ pub fn draw(
 
 // --------------------------------------------------------------------- colour helpers
 
-fn class_colour(c: SignalClass, pal: &Palette) -> Color32 {
+/// The class accent — shared with the shell chrome (the inspector's port dots, the wire
+/// legend) so a signal class has ONE colour everywhere.
+pub fn class_colour(c: SignalClass, pal: &Palette) -> Color32 {
     match c {
         SignalClass::Audio => pal.audio,
         SignalClass::Cv => pal.cv,
@@ -394,6 +407,8 @@ fn draw_nodes(
     canvas: &CanvasState,
     layout: &CanvasLayout,
     master_id: Option<NodeId>,
+    traces: &ScopeTraces,
+    meters: &LiveMeters,
     audit: &mut Vec<InteractiveElement>,
 ) {
     for nl in &layout.nodes {
@@ -402,8 +417,12 @@ fn draw_nodes(
         let is_master = master_id == Some(nl.id);
         match layout.lod {
             Lod::Dot => draw_node_dot(p, pal, node, nl, selected, is_master),
-            Lod::Simplified => draw_node_box(p, pal, node, nl, selected, is_master, false, audit),
-            Lod::Full => draw_node_box(p, pal, node, nl, selected, is_master, true, audit),
+            Lod::Simplified => {
+                draw_node_box(p, pal, node, nl, selected, is_master, false, traces, meters, audit)
+            },
+            Lod::Full => {
+                draw_node_box(p, pal, node, nl, selected, is_master, true, traces, meters, audit)
+            },
         }
     }
 }
@@ -419,6 +438,89 @@ fn dominant_class(node: &Node) -> SignalClass {
             .map(|(_, pt)| sparq_ui::canvas::layout::signal_class(pt))
     };
     pick(Direction::Out).or_else(|| pick(Direction::In)).unwrap_or(SignalClass::Neutral)
+}
+
+/// The `dsp/scope` display (WO-013 increment 6): a `ground.inset` well with a hairline-faint
+/// crosshair grid — the `scope.trace` colour map's own row, tokens only — and, at Full LOD, the
+/// trace itself in the WIRES' glow vocabulary (class colour lerped toward the class glow by the
+/// window's peak, plus the under-glow pass at the wires' alpha rule). The samples come from the
+/// analysis ring through the session's traces — never faked, never stale: an unbound or at-rest
+/// scope shows the flat rest line, which is the manifest's promised "a flat line, not a crash".
+/// The display steals no gestures: it is pixels under the node body's existing touch target.
+fn draw_scope_display(
+    p: &Painter,
+    pal: &Palette,
+    node: &Node,
+    nl: &NodeLayout,
+    full: bool,
+    traces: &ScopeTraces,
+) {
+    let body = egui_rect(nl.screen);
+    let header = egui_rect(nl.header_screen);
+    let inset = LAYOUT_SPACE_2 as f32;
+    // The left inset clears the port circles AND their labels, so the trace never runs under a
+    // word (the label budget is token-derived: circle radius + gap + the monospace advance).
+    let label_budget =
+        LAYOUT_TOUCH_PORT_RADIUS as f32 + inset + SCOPE_LABEL_CHARS as f32 * LAYOUT_SPACE_2 as f32;
+    let disp = egui::Rect::from_min_max(
+        Pos2::new(body.min.x + label_budget, header.max.y + inset),
+        Pos2::new(body.max.x - inset, body.max.y - inset),
+    );
+    if disp.width() <= 0.0 || disp.height() <= 0.0 {
+        return; // a collapsed viewport is not a scope's problem to solve
+    }
+    p.rect_filled(disp, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+    let grid = pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32);
+    let c = disp.center();
+    p.line_segment([Pos2::new(disp.min.x, c.y), Pos2::new(disp.max.x, c.y)], grid);
+    p.line_segment([Pos2::new(c.x, disp.min.y), Pos2::new(c.x, disp.max.y)], grid);
+    if !full {
+        return; // Simplified: the well says "scope"; the trace is a Full-LOD reading (D8)
+    }
+
+    // The view params, read from the node per frame and clamped by the model (D10). Index
+    // order is the manifest's own — timebase, mode, trigger, gain — pinned by a session test.
+    let prm = node.effective_params();
+    let view = ScopeView::from_params(
+        prm.first().copied().unwrap_or(20.0),
+        prm.get(1).copied().unwrap_or(0.0),
+        prm.get(2).copied().unwrap_or(0.0),
+        prm.get(3).copied().unwrap_or(1.0),
+    );
+    let r = sp_rect(disp);
+    let tr = traces.get(nl.id);
+    let pts: Vec<Pos2> = match (view.mode_xy, tr) {
+        (true, Some(t)) => scope::xy_polyline(&t.x, &t.y, &view, r),
+        (false, Some(t)) => scope::trace_polyline(&t.x, &view, r),
+        (_, None) => Vec::new(),
+    }
+    .into_iter()
+    .map(pos)
+    .collect();
+    let level = tr
+        .map(|t| if view.mode_xy { t.x.peak().max(t.y.peak()) } else { t.x.peak() })
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+
+    if pts.len() >= 2 {
+        let base = class_colour(SignalClass::Audio, pal);
+        let colour = if level > 0.0 {
+            lerp_colour(base, class_glow(SignalClass::Audio, pal), level)
+        } else {
+            base
+        };
+        let width = class_width(SignalClass::Audio);
+        // The under-glow pass, the wires' own expression — glow is data: it encodes level.
+        if level > 0.02 {
+            let glow = with_alpha(class_glow(SignalClass::Audio, pal), 0.15 + 0.45 * level);
+            p.line(pts.clone(), Stroke::new(width + LAYOUT_SPACE_1 as f32 * (0.5 + level), glow));
+        }
+        p.line(pts, Stroke::new(width, colour));
+    } else {
+        // The rest line: unbound, at rest, or a zero signal — the same claim, the same pixels.
+        let [a, b] = scope::rest_line(r);
+        p.line_segment([pos(a), pos(b)], grid);
+    }
 }
 
 /// A node at Dot LOD, with its states as SHAPES (increment 5 — the Dot contract is "a
@@ -476,6 +578,8 @@ fn draw_node_box(
     selected: bool,
     master: bool,
     full: bool,
+    traces: &ScopeTraces,
+    meters: &LiveMeters,
     audit: &mut Vec<InteractiveElement>,
 ) {
     let body = egui_rect(nl.screen);
@@ -567,6 +671,18 @@ fn draw_node_box(
             p.text(Pos2::new(badge_x, header.center().y), Align2::LEFT_CENTER, label, g, col);
             badge_x -= LAYOUT_SPACE_2 as f32;
         }
+    }
+
+    // The scope display (WO-013 increment 6): the well and its grid draw under the ports at
+    // Full AND Simplified; the TRACE is a Full-LOD reading only (D8 of the increment plan).
+    if node.spec.module_id == SCOPE_ID {
+        draw_scope_display(p, pal, node, nl, full, traces);
+    }
+    // The master-out meter bars (WO-012 increment 4, the operator's ask): two channel wells
+    // with data-class fills and audio-class peak-hold blocks — the mockup's bars, read from
+    // the live per-channel meter ring. At rest: empty wells, never a frozen bar.
+    if node.spec.module_id == OUT_MAIN_ID {
+        draw_master_meters(p, pal, node, nl, full, meters);
     }
 
     // Ports.
@@ -935,5 +1051,119 @@ fn draw_browser(
             rect: rr,
             dense_allowed: false,
         });
+    }
+}
+
+/// The wire-encoding legend (WO-012 increment 3, the mockup's floating box): five rows, each
+/// the EXACT stroke the class draws on a wire (same `class_encoding` table, same class colour —
+/// the legend and the wires cannot drift) beside the class word. Chrome, not a control: nothing
+/// to touch, nothing registered. Drawn by the canvas painter because the encoding table lives
+/// here.
+pub fn draw_wire_legend(p: &Painter, pal: &Palette, r: Rect) {
+    let eg = egui_rect(r);
+    p.rect_filled(eg, LAYOUT_CORNER_MICRO as u8, pal.ground_panel);
+    p.rect_stroke(
+        eg,
+        LAYOUT_CORNER_MICRO as u8,
+        pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32),
+        egui::StrokeKind::Middle,
+    );
+    let row_h = LAYOUT_SPACE_4 as f32;
+    let sample_w = LAYOUT_SPACE_7 as f32;
+    let x0 = eg.min.x + LAYOUT_SPACE_3 as f32;
+    let mut y = eg.min.y + LAYOUT_SPACE_2 as f32 + row_h / 2.0;
+    for (class, word) in [
+        (SignalClass::Audio, "AUDIO"),
+        (SignalClass::Cv, "CONTROL"),
+        (SignalClass::Event, "EVENT"),
+        (SignalClass::Data, "DATA"),
+        (SignalClass::Spatial, "SPATIAL"),
+    ] {
+        let col = class_colour(class, pal);
+        let a = egui::pos2(x0, y);
+        let b = egui::pos2(x0 + sample_w, y);
+        let enc = class_encoding(class);
+        let (pattern, double) = parse_encoding(enc);
+        let st = Stroke::new(class_width(class), col);
+        if let Some((on, off)) = pattern {
+            draw_dashed(p, &[a, b], on, off, st);
+        } else if double {
+            let off = LAYOUT_STROKE_HAIRLINE as f32 * 2.0;
+            p.line_segment([a - egui::vec2(0.0, off), b - egui::vec2(0.0, off)], st);
+            p.line_segment([a + egui::vec2(0.0, off), b + egui::vec2(0.0, off)], st);
+        } else {
+            p.line_segment([a, b], st);
+        }
+        p.text(
+            egui::pos2(x0 + sample_w + LAYOUT_SPACE_3 as f32, y),
+            Align2::LEFT_CENTER,
+            word,
+            font_xs(),
+            pal.text_secondary,
+        );
+        y += row_h;
+    }
+}
+
+/// The `out/main` node's stereo meter bars (WO-012 increment 4): two wells, one per channel,
+/// filled in the DATA class (a meter is data *about* the audio — the mockup's green, §4 under
+/// that reading) with an amber peak-hold block decaying on audio time in the session's drain.
+/// Full and Simplified (a meter is a reading, not text); Dot stays a dot. The wells read the
+/// session's [`LiveMeters`] — at rest the shell hands over an empty map and the bars sit empty,
+/// because a frozen bar from a dead stream is a lie with a scale on it.
+fn draw_master_meters(
+    p: &Painter,
+    pal: &Palette,
+    node: &Node,
+    nl: &NodeLayout,
+    full: bool,
+    meters: &LiveMeters,
+) {
+    let _ = full; // the bars draw at Full and Simplified alike
+    use sparq_module_api::port::{Direction, PortType};
+    let Some(port) = node
+        .spec
+        .ports
+        .iter()
+        .enumerate()
+        .find(|(_, pt)| pt.direction == Direction::Out && pt.port_type == PortType::Audio)
+        .map(|(i, _)| i)
+    else {
+        return; // an out/main without an audio out is a manifest bug, not a drawing problem
+    };
+    let m = meters.get(&(nl.id, port)).copied().unwrap_or_default();
+    let body = egui_rect(nl.screen);
+    let header = egui_rect(nl.header_screen);
+    let inset = LAYOUT_SPACE_2 as f32;
+    let bar_h = LAYOUT_SPACE_2 as f32;
+    let well_w = body.width() - inset * 4.0;
+    let x0 = body.min.x + inset * 2.0;
+    let mut y = header.max.y + inset * 2.0;
+    for (level, hold) in [(m.l, m.hold_l), (m.r, m.hold_r)] {
+        let well = egui::Rect::from_min_size(egui::pos2(x0, y), egui::vec2(well_w, bar_h));
+        p.rect_stroke(
+            well,
+            LAYOUT_CORNER_NONE as u8,
+            pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
+            egui::StrokeKind::Middle,
+        );
+        let lv = level.clamp(0.0, 1.0);
+        if lv > 0.0 {
+            let fill = egui::Rect::from_min_size(
+                well.left_top(),
+                egui::vec2((well_w * lv).max(LAYOUT_STROKE_SIGNAL as f32), bar_h),
+            );
+            p.rect_filled(fill, LAYOUT_CORNER_NONE as u8, pal.data);
+        }
+        let hd = hold.clamp(0.0, 1.0);
+        if hd > 0.0 {
+            let hx = x0 + well_w * hd;
+            let block = egui::Rect::from_min_size(
+                egui::pos2((hx - LAYOUT_SPACE_1 as f32).max(x0), y),
+                egui::vec2(LAYOUT_SPACE_1 as f32, bar_h),
+            );
+            p.rect_filled(block, LAYOUT_CORNER_NONE as u8, pal.audio);
+        }
+        y += bar_h + inset;
     }
 }

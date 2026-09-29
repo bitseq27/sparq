@@ -71,10 +71,10 @@ def read_text(path: pathlib.Path) -> str:
 # EVERY SEAL - defect #83 was exactly that nobody moved it for two increments, so the device's next
 # gates run would have hard-failed a perfectly good tree against numbers three increments old.
 BASELINE: dict[str, object] = {
-    "stamp": "src 92f/2021628B",
+    "stamp": "src 94f/2188595B",
     "golden_hash": "ba577186c988db21",
     "tests_failed": 0,
-    "tests_passed": 762,  # workspace suite only - the release golden rerun is scoped out (#72)
+    "tests_passed": 777,  # workspace suite only - the release golden rerun is scoped out (#72)
     "selftest": "PASS",
     "ui_audit": "PASS",
     "allocations": 0,
@@ -288,7 +288,7 @@ def report(found: dict[str, object], logdir: pathlib.Path) -> int:
 
 # ---------------------------------------------------------------- self-test
 SELF_LOGS = {
-    "build.log": "sparq build\n  stamp: src 92f/2021628B\n  rebuilt 12 crates\n",
+    "build.log": "sparq build\n  stamp: src 94f/2188595B\n  rebuilt 12 crates\n",
     "gates.log": (
         "test result: ok. 300 passed; 0 failed; 1 ignored\n"
         "test result: ok. 88 passed; 0 failed; 0 ignored\n"
