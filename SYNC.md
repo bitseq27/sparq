@@ -1,144 +1,157 @@
-# Sync manifest — WO-006 increment 1.4 (defect #89: the exclusive period the driver ACCEPTED and could not SUSTAIN — plus the compact log digest the operator asked for)
+# Sync manifest — WO-008 increment 7 (host-side `required`-unconnected enforcement — the declared baseline moved ON PURPOSE and recorded)
 
-**Current bundle: `sync-wo006-inc14.zip` (15 entries, listed below).** Applies on top of
-**`sync-wo008-inc6.zip` — which is APPLIED**: test004 attempt 2's own build line proved the whole
-chain landed (2026-09-28: `sync_check: OK - 149 files match sync wo008-inc6, src 92f/1986012B`).
-Extract at the repo root `Q:\morphosis\code\sparq`, overwriting. No drift-repair copy step.
+**Current bundle: `sync-wo008-inc7.zip` (17 entries, listed below).** Applies on top of
+**`sync-wo006-inc15.zip` — which is APPLIED** (operator-reported, 2026-09-29). Extract at the
+repo root `Q:\morphosis\code\sparq`, overwriting. No drift-repair copy step. This bundle
+changes **no device contract** — test004 attempt 4 runs exactly as `WO006-INC15-RUN-SHEET.md`
+says, before or after applying it — but it MOVES the gates' numbers, so apply it before the
+next `gates.bat` run.
 
-**The stamp changes: `src 92f/2001521B`** (`SYNC-STAMP.txt` regenerated for a **151-file**
-covered set — two new files join it: `tools/log_digest.py` and `scripts/digest.bat`; the `src`
-fingerprint's file count is unchanged at 92, its byte count moved because `hal/period.rs` and
-`hal/wasapi.rs` grew. `Cargo.lock` stays SOFT and is NOT in the zip; SATURN keeps its own.)
+**The stamp changes: `src 92f/2021628B`** (`SYNC-STAMP.txt` regenerated for the same
+**151-file** covered set — no new covered files; the `src` fingerprint's file count is
+unchanged at 92, its byte count moved because `executor.rs`, `determinism.rs`, `bridge.rs` and
+`headless.rs` grew. `Cargo.lock` stays SOFT and is NOT in the zip; SATURN keeps its own.
+`modules/**` is untouched — no manifest moved; the vocabulary was already declared, only its
+enforcement ships.)
 
 ## What this is
 
-ONE increment from the 2026-09-28 fifth session, driven by **test004 attempt 2** — the most
-informative device run yet. Attempt 2 **opened WASAPI exclusive for the first time**
-(`i24-in-32 (converting)` @ 96 kHz on the UMC 204HD — #77's format ladder and #79's period
-asking both did their job; caps, shared unplug → `Removed`, recovery, the 2 h shared soak and
-all three conformance suites PASSED) — and then the stream **stalled**: the open landed at
-**288 fr (3.00 ms)**, the driver's reported minimum / alignment granularity, and the driver
-could not sustain what it had accepted. The numbers, which all agree (arithmetic in
-`docs/hal/windows-notes.md` §4d): 1718 wakes in ~10.07 s splitting into ~1559 at ~3.0 ms plus
-~159 at ~33.2 ms — one ~33 ms stall every ~62.5 ms — half throughput (7732 blocks ≈ 49.1k fr/s
-against a 96 kHz negotiation), drift −491 656 ppm, no clean tone, rc 1, with **0 budget overruns
-and 0 FIFO starvations** (the pump kept every promise it could see). The control experiment ran
-in the same session: the shared 10 ms engine on the same endpoint soaked **2 h, 719 895 wakes,
-0 xruns, max jitter 12.04 ms**. **Defect #89: the third lying-`min` face — `Initialize` ACCEPTS
-the period and the engine cannot SUSTAIN it**, which no open-path probe can see. The attempt-1
-log copy in the repo is truncated, so which door produced the 3 ms ask is not pinnable from the
-evidence; the fix therefore closes all three doors, each as pure data in `hal/period.rs` where
-Linux unit-tests it (the null backend's discipline applied to a negotiation, as in inc 1.3):
+ONE increment from the 2026-09-29 sixth session (its second build, after `sync-wo006-inc15`):
+the sandbox-track item the checklist named "the next candidate in this list" — **host-side
+`required`-unconnected enforcement** — small, well-specified, declared in LATER.md §WO-008
+since increment 3, and deliberately its own increment because it is the one change that MOVES
+the stress baseline. Plan of record: `WO008-INC7-PLAN.md` (eight decisions, recorded before the
+code).
 
-1. **Default-first for coarse engines.** When the driver's reported minimum sits ABOVE the sparq
-   block period — a driver saying it needs an engine coarser than the block — its minimum is not
-   a promise: the ladder now asks the **default period first** (the number its engine actually
-   runs — the shared 10 ms engine is the same-session proof this machine sustains it), the
-   min-clamped ask demoted to fallback. Sub-block engines keep the honest low-latency ask first
-   (#79's shape unchanged — a liar there refuses at `Initialize`, which the ladder survives);
-   four of inc 1.3's seven unit pins pass untouched, and the fifth — which pinned the UMC's own
-   shape the WRONG way round — is replaced in place by
-   `the_defect_89_device_asks_its_default_before_its_min` (`[10 ms, 3 ms]`).
-2. **The alignment two-step rounds UP.** On `BUFFER_SIZE_NOT_ALIGNED`, `GetBufferSize` reports
-   the driver's granularity; inc 1.3 re-asked the granularity itself (the documented recipe's
-   literal reading — and a way a 10 ms ask could silently become the 3 ms open). Now
-   `align_up_frames` rounds the ORIGINAL ask up to whole units: 960 fr ask × 288 fr granularity
-   → **1152 fr = 12.000 ms** — aligned AND default-class. Sub-granularity asks still land on one
-   unit (inc 1.2's two-step behaviour, pinned).
-3. **The silent-shrink guard.** A driver that ACCEPTS an ask and then allocates seriously less
-   (< ¾, `allocation_seriously_shrunk`) is reporting its granularity through the allocation:
-   one rounded-up re-ask on a fresh client; if that refuses, the shrunken open is KEPT and the
-   open line prints the mismatch — `device period 288 fr (3.00 ms, ask 960 fr)` — rather than
-   dressing it as a clean negotiation (`Negotiated.ask_frames`, exclusive only; the shared
-   engine picking its own buffer is documented behaviour, not a mismatch).
-
-The pump needed **no change** (Period ≠ block; the FIFO absorbs any period the ladder lands on).
-Expected attempt-3 open line: **`device period 960 fr (10.00 ms)`**, or **`1152 fr (12.00 ms)`**
-if the driver enforces its 288 fr alignment. **A 288 fr (3.00 ms) period must never open
-silently again.**
-
-**Defect #90 rode along — the acceptance script's own honesty:** attempt 2's summary printed
-"exclusive still refused — the [04] probe table is the diagnosis" when exclusive had OPENED and
-run rough (`EXCL_OK` keyed off rc alone; no probe table was in the log, correctly), and the
-banner still announced "increment 1.2" two increments later. `test004.bat` now captures
-`EXCL_OPENED` (findstr on the [04] output), distinguishes refused from opened-but-not-clean in
-the summary, names #89's runtime signature in its hints, and names both legal periods (960 fr /
-1152 fr) plus the 288-fr signature in its [04] expectation text.
-
-**And the operator's ask, shipped in the same bundle: the compact log copies.** The device logs
-had grown to the point where a 2 h soak's 240 identical status lines drowned the dozen lines
-that decide the run (attempt 2's `test004.log`: 67 569 B). **`tools/log_digest.py`** writes
-`NAME-digest.log` beside any log: a COPY, not a rewrite — every line byte-identical except
-inside runs of exactly three classes: `[t+ Ns]` periodic status runs (first 2 + last 2 kept, the
-middle replaced by ONE count line carrying the blocks/xrun ranges), cargo build chatter, and
-runs of 4+ identical lines. The header states exactly what was collapsed; `--self-test` (16
-checks) proves every class fires and every verdict line survives; re-digesting a digest is
-refused (idempotence guard). Attempt 2's log digests to **30 994 B (−54 %)** with every
-diagnostic line intact. `test004.bat`, `test006.bat` and `gates.bat` make their digests at the
-end of a run (and delete stale ones first, so the send-back file is always from THIS run);
-`scripts\digest.bat` sweeps every `test*.log` and `logs\*.log` on demand. **The digest is the
-send-back artefact; the full log stays on the device.** Without Python on PATH the scripts say
-so and ask for the full log — no run ever depends on the digest.
+* **The rule:** `Executor::build` refuses a patch in which any node has a `required` input port
+  with zero incoming edges — a new `ExecError::RequiredUnconnected { node, module, port }`
+  rendered as ONE sentence naming both remedies (connect a source, or remove the node; a
+  genuinely optional port is a manifest `required = false` — a module change, not a patch
+  change). Placed after the edge-rules pass (an ILLEGAL wire is a more specific defect than a
+  MISSING one) and before buffer allocation; graph order × manifest order, first violation
+  wins — deterministic like every refusal in the gauntlet. Scope is the compiled contract's own
+  words (`Port::required` = "whether an unconnected INPUT is an error"): outputs stay free (a
+  sinkless `out/main`, an undrawn `rms.level` wire remain legal), ≥1 carried edge satisfies a
+  port, and cv fan-in was already refused upstream — the check can never legitimise a wiring
+  the matrix refuses. No bypass/mute exemption (build enforces the manifest; runtime states do
+  not excuse structural ones — declared in the plan).
+* **The two declared dependents moved with it.** (1) The determinism world's unwired spare gain
+  is now WIRED — from the chain gain's output, not the sine, on purpose: the spare is the
+  world's initial master, so retune mutations reach the rendered samples and the script's hash
+  stays sensitive to parameter edits (pin moved: 4 nodes, 3 edges). (2) The canvas demo patch's
+  fourth node became a bare **`out/main`** — the one shipped module DESIGNED to sit bare
+  (optional input): the smokes keep their free stereo input to drag onto, `resolve_master`'s
+  documented handover rule ignores an unwired out/main (the master stays the chain gain), and
+  **`canvas-render.wav` does not move**: 1 920 046 bytes — the device baseline's exact size —
+  sha256 `d7ad294ea0b5e6e960f8dbc7f231dcbd84edec327e6352e80dc2f6ed786ec0b7` recorded for
+  future A/Bs (bit-identical by construction: same master, ×1.0 path). The wire-level gates
+  gained an honest COLD subject (the bare out/main renders `Silenced` and reads 0.0).
+* **The unconnected-signal semantics survive at their declared home — OPTIONAL ports:** the
+  `an_unconnected_input_is_silenced_and_reported` test migrated in place (its probe declares
+  `required = false`), the test probes' audio inputs all declare optionality (the suite run was
+  the census: exactly 8 tests touched the enforcement, all migrated or reworked in place), and
+  the new gate `a_required_input_with_no_wire_is_refused_in_words` proves the refusal sentence
+  AND its compliant twin. `cross_thread.rs`'s status pin TIGHTENED to `Ok` only — a `Silenced`
+  meter would now mean the enforcement leaked.
+* **The baseline moved ON PURPOSE and is recorded** (LATER.md's condition for this increment):
+  **stress `7bb06379bd6845e5` — 10 001 blocks · 2 383 swaps · 7 617 refused · 0 audio-path
+  allocations · 2 nodes / 0 edges final · max path latency 94 — debug AND release
+  bit-identical** (was `b42068ec7b206789` · 7 203 swaps · 2 797 refused). The mix flipped
+  because add/disconnect mutations that bare a required input are now build refusals: the
+  leave-no-trace refusal path is exercised 2.7× harder, the swap machinery still cycles 2 383
+  times under churn (acceptance floor: > 1 000), and every invariant assertion is
+  rate-independent of the baseline by design. The cross-thread ledger moved with it (21 509
+  blocks · 2 299 staged = swaps = reclaimed · 7 701 refused · 0 allocs · 0 errors). Historical
+  entries keep the old hash as history; the live citations moved (CHECKLIST, LATER.md,
+  `cross_thread.rs`'s doc comment).
+* **Docs moved in the same session (#88's lesson):** `module-api-v1.md`'s "still declared open"
+  list loses the item (replaced by the enforcement record), the `manifest-fields.toml` note and
+  the `manifest-schema.md` row grow the host-enforcement clause (notes, not vocabulary — no
+  table-first move needed; the paths pin is untouched), the executor header's v0 bullet is
+  replaced. Parked in LATER.md beside the watchdog→UI hairline: **a canvas badge for the
+  bare-required node** (the refusal reaches the shell log at RENDER time; drawing the warning
+  at DROP time is a WO-013-side painter increment).
+* **Defect #93 logged + remedied in passing (environment/delivery class):** the sandbox
+  workspace drops any directory named `out` at message boundaries — `modules/out/main/
+  sparqmod.toml` (stamp-covered) vanished mid-increment; upstream GitHub 404'd (repo
+  rebuilt/private — #86's class). The operator supplied the file; restored byte-exact,
+  hash-verified against the seal (`725bf07a…`, 2 691 B) before use; a durable recovery copy
+  lives at the workspace root's `sparq-recovery/`, and the CHECKLIST environment notes carry
+  the session-start discipline. The device tree was never affected.
 
 ## Measured in sandbox
 
-**757 tests** (was 752; +6 `hal/period.rs` unit gates, 1 replaced in place — ALL RUNNING ON
-LINUX, including the exact attempt-2 device shape pinned twice) · 0 failed, 1 ignored · fmt
-clean · clippy clean in every runnable cell: default workspace, `bootstrap-audio`, `ui`, native
-`ui-window`/gles (`-j 1`, dev debuginfo off), and all six MSVC cells (module-api, music,
-kernel+hal-wasapi, app+hal-wasapi, kernel default, app default — the two `windows`-crate OOM
-cells remain documented-unrunnable) · release golden tests **2/2, hashes unchanged**
-(`ba577186c988db21`) — the offline path never sees a device period, and `hal/period.rs` feeds
-only the `cfg(windows)` exclusive open, so every golden is unchanged **by construction** ·
-5 python gates clean · `log_digest --self-test` **16/16** · `log_check --self-test` **25/25**
-(BASELINE moved with the seal — 757 / `src 92f/2001521B`, #83's discipline) · `sync_check
---write` → `--quiet` clean → `--self-test` 11/11 failable · `selftest --golden` and `ui --audit`
-NOT re-run this session: the release-app build was cut short by the sandbox's memory ceiling and
-the diff touches neither surface (windows-gated HAL open + tools + docs); SATURN's `gates.bat`
-runs both and its log_check comparison will say so if that was wrong.
+**762 tests** (was 761; +1 the refusal gate; the silenced-report test and the reference-chain
+pin migrated in place) · 0 failed, 1 ignored · fmt clean · clippy clean in every runnable cell:
+default workspace, `bootstrap-audio`, `ui`, native `ui-window`/gles (`-j 1`, dev debuginfo off),
+and all six MSVC cross-lint cells (the two `windows`-crate OOM cells remain
+documented-unrunnable) · release goldens **bit-identical**: the three pinned exec renders at
+their durations (`1621e1f65b1b64e1` / `f2303f13aa0cf299` / `53de3b1f3f40e3c9`), the wo005 +
+phase-b manifests, every module golden — enforcement only ADDS refusals, no render path moved ·
+`selftest --golden` **PASS (9 gates)** · `ui --audit` **PASS (25 smokes)** with the new demo
+node · `modules --strict` **17/17** · `canvas-render.wav` 1 920 046 B (sha256 above) · 5 python
+gates clean · `log_digest --self-test` **16/16** · `log_check --self-test` **25/25** (BASELINE
+moved with the seal — 762 / `src 92f/2021628B`, #83's discipline) · `sync_check --write` →
+`--quiet` clean → `--self-test` 11/11 failable.
 
-## Files in this zip (15)
+## Files in this zip (17)
 
-Covered by the stamp — 8:
+Covered by the stamp — 5:
 
 ```
-crates/sparq-kernel/src/hal/period.rs   (the #89 ladder: default-first for coarse engines; align_up_frames / frames_to_100ns / period_100ns_to_frames / allocation_seriously_shrunk — all pure, all pinned; 12 unit tests)
-crates/sparq-kernel/src/hal/wasapi.rs   (open_exclusive: the round-UP two-step, the silent-shrink retry, Negotiated.ask_frames, the honest open line; comments carry #89's story)
-scripts/digest.bat                      (NEW — sweep every test*.log and logs\*.log into digests)
-scripts/gates.bat                       (digest hook after the log is saved; cannot change the gates verdict)
-scripts/test004.bat                     (#90: EXCL_OPENED, refused vs opened-but-not-clean summary, current banner/hints/expectations; digest hook replaces the send-back line)
-scripts/test006.bat                     (digest hook for test006.log + logs\ui.log)
-tools/log_check.py                      (BASELINE moved: 757 tests / src 92f/2001521B; fixture stamp)
-tools/log_digest.py                     (NEW — the compactor; --self-test 16 checks; idempotence guard)
+crates/sparq-app/src/bridge.rs          (the demo patch's fourth node: bare out/main, the master-handover module waiting to be wired; the wire-level gates' cold subject)
+crates/sparq-app/src/ui/headless.rs     (smokes 6/7 comments: the free stereo input is out/main.in now — an optional port, the only legal bare one)
+crates/sparq-audio/src/determinism.rs   (the world WIRES its spare from the chain gain; the reference-chain pin moves to 3 edges; the master-cone rationale in the doc)
+crates/sparq-audio/src/executor.rs      (the enforcement: ExecError::RequiredUnconnected + its sentence, the gauntlet step, the header bullet replaced)
+tools/log_check.py                      (BASELINE moved: 762 tests / src 92f/2021628B; fixture stamp moved with it)
 ```
 
-Documents — 7 (excluded from the stamp on purpose):
+Test sources — 2 (crates' `tests/` dirs are deliberately outside the stamp's covered set; they
+ship because the device's `gates.bat` runs them):
 
 ```
-CHECKLIST.md   LATER.md   PHASE0-WORKORDERS.md   SYNC.md   SYNC-STAMP.txt
-WO006-INC14-RUN-SHEET.md   docs/hal/windows-notes.md
+crates/sparq-audio/tests/cross_thread.rs (the doc's hash citation moved; the status pin tightened to Ok-only)
+crates/sparq-audio/tests/executor.rs     (probes declare optional inputs; the silenced-report test migrated in place; the new refusal gate + compliant twin)
 ```
 
-Heading = list = contents = **15** (8 + 7), checked against the zip's namelist below.
+Documents — 10 (excluded from the stamp on purpose):
+
+```
+CHECKLIST.md   EXTRACT-AT-REPO-ROOT.txt   LATER.md   PHASE0-WORKORDERS.md   SYNC.md
+SYNC-STAMP.txt   WO008-INC7-PLAN.md   docs/api/manifest-fields.toml   docs/api/manifest-schema.md
+docs/api/module-api-v1.md
+```
+
+Heading = list = contents = **17** (5 + 2 + 10), checked against the zip's namelist below.
 
 ## What SATURN runs
 
 The standing order stacks, with baselines moved (`log_check.py` in the bundle already expects
-them). Apply this bundle, then:
+them). Apply this bundle (on top of the applied inc15), then:
 
-1. `scripts\test004.bat` — the WO-006 exclusive acceptance, **attempt 3** (still the 🔴
-   blocker; pass shape and both legal open lines in `WO006-INC14-RUN-SHEET.md`). Same prep
-   discipline as attempt 2.
-2. `scripts\test006.bat` — the WO-013 window session with steps F–I (unchanged by this bundle).
-3. `scripts\gates.bat` — full table. **Expected in `gates.log`: 757 passed / 0 failed /
-   1 ignored**, stamp `src 92f/2001521B`, `sparq modules --strict` lists **17**, selftest
-   **PASS (9 gates)**, `ui --audit` **PASS (25 smokes)**.
+1. `scripts\test004.bat` — the WO-006 exclusive acceptance, **attempt 4** (still the 🔴
+   blocker; unchanged by this bundle — pass shape, the PROPOSED acceptance-rate amendment and
+   the failure-reading guide are in `WO006-INC15-RUN-SHEET.md`). Same prep discipline.
+2. `scripts\test006.bat` — the window session, steps F–I standing. NEW reading with inc7: the
+   demo patch shows a **Main Out** node instead of the spare Gain (bare, legal, waiting to be
+   wired — wire it and the MASTER badge moves to it, the handover rule's demo); [05]'s
+   `canvas-render.wav` baseline hash must be UNCHANGED (1 920 046 B, sha256
+   `d7ad294ea0b5e6e960f8dbc7f231dcbd84edec327e6352e80dc2f6ed786ec0b7`), and [07]'s slider edit
+   must still move it.
+3. `scripts\gates.bat` — full table. **Expected in `gates.log`: 762 passed / 0 failed /
+   1 ignored**, stamp `src 92f/2021628B`, `sparq modules --strict` lists **17**, selftest
+   **PASS (9 gates)**, `ui --audit` **PASS (25 smokes)** — and the mutation-stress evidence line
+   inside the test output reads **`7bb06379bd6845e5` · 2 383 swaps · 7 617 refused**: the moved
+   baseline, recorded on purpose, NOT a regression.
 4. Evidence, **with the pinned durations** (defect #85): `sparq exec --patch mod-demo --seconds 1`
    (`1621e1f65b1b64e1`), `sparq exec --patch drum-demo --seconds 2` (`f2303f13aa0cf299`),
-   `sparq exec --patch demo --seconds 2.8` (`53de3b1f3f40e3c9`), and — when the HAL is free — the
-   two WO-009 device boxes (a LISTENED tempo sweep and the 30-min drift run).
+   `sparq exec --patch demo --seconds 2.8` (`53de3b1f3f40e3c9`) — all three re-verified
+   bit-identical in the sandbox — and, when the HAL is free, the two WO-009 device boxes: a
+   LISTENED tempo sweep and the 30-min drift run (on inc15's delivered-vs-wall metric).
 5. Still wanted: dispatch-bench `C. VERDICT` + both `D. PER-CALL COST` lines (ADR-009),
-   `logs\ui.log`, the DPI matrix, and the WO-008 **loaded soak** (200 modules, 30 min, zero xruns).
+   `logs\ui.log`, the DPI matrix, and the WO-008 **loaded soak** (200 modules, 30 min, zero
+   xruns) — note for the loaded soak's rig: every processor node in it must have its required
+   inputs wired now, or the build refuses in words (that is the feature).
 
 **Wanted back — the DIGESTS, not the full logs: `test004-digest.log`, `test006-digest.log`
 (with the F–I answers), `gates-digest.log`, `logs\ui-digest.log`.** Each script makes its own at
@@ -148,9 +161,11 @@ instead.
 
 ## Superseded bundles
 
-Applied chain (each on top of the previous, newest first): `sync-wo008-inc6.zip` (17 — APPLIED,
-proven by attempt 2's build line 2026-09-28), `sync-wo014-inc6.zip` (13 — APPLIED, same
-evidence), `sync-wo013-inc5.zip` (20 — APPLIED, user-confirmed 2026-09-27),
+Applied chain (each on top of the previous, newest first): `sync-wo006-inc15.zip` (15 —
+APPLIED, operator-reported 2026-09-29), `sync-wo006-inc14.zip` (15 — APPLIED, proven by
+attempt 3's build line 2026-09-28 evening), `sync-wo008-inc6.zip` (17 — APPLIED, proven by
+attempt 2's build line), `sync-wo014-inc6.zip` (13 — APPLIED, same evidence),
+`sync-wo013-inc5.zip` (20 — APPLIED, user-confirmed 2026-09-27),
 `sync-wo014-inc5+wo013-inc4.zip` (29), `sync-wo008-inc5.zip` (22), `sync-wo014-inc4.zip` (12),
 `sync-wo009-inc1.zip` (26), `sync-wo014-inc3.zip` (19), `sync-wo008-inc4.zip` (38),
 `sync-wo014-inc2.zip` (29), `sync-wo008-inc3.zip` (15), `sync-wo006-inc13.zip` (10),
@@ -162,18 +177,20 @@ evidence), `sync-wo013-inc5.zip` (20 — APPLIED, user-confirmed 2026-09-27),
 
 ```
 CHECKLIST.md
+EXTRACT-AT-REPO-ROOT.txt
 LATER.md
 PHASE0-WORKORDERS.md
 SYNC-STAMP.txt
 SYNC.md
-WO006-INC14-RUN-SHEET.md
-crates/sparq-kernel/src/hal/period.rs
-crates/sparq-kernel/src/hal/wasapi.rs
-docs/hal/windows-notes.md
-scripts/digest.bat
-scripts/gates.bat
-scripts/test004.bat
-scripts/test006.bat
+WO008-INC7-PLAN.md
+crates/sparq-app/src/bridge.rs
+crates/sparq-app/src/ui/headless.rs
+crates/sparq-audio/src/determinism.rs
+crates/sparq-audio/src/executor.rs
+crates/sparq-audio/tests/cross_thread.rs
+crates/sparq-audio/tests/executor.rs
+docs/api/manifest-fields.toml
+docs/api/manifest-schema.md
+docs/api/module-api-v1.md
 tools/log_check.py
-tools/log_digest.py
 ```

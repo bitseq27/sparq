@@ -44,7 +44,9 @@ pub struct DiagRecorder {
     jitter_max_ns: AtomicU64,
     jitter_sum_ns: AtomicU64,
     jitter_count: AtomicU64,
-    /// Device clock: total frames the device says it has consumed/produced.
+    /// Consumption truth: total frames the device has ACCEPTED (every backend counts its own
+    /// releases — defect #76: WASAPI's `IAudioClock::GetPosition` advances in buffer-sized
+    /// steps per event tick and was removed as a drift source, not repaired).
     device_frames: AtomicU64,
     /// Wall time (ns since stream start) at which `device_frames` was read.
     wall_ns: AtomicU64,
@@ -147,7 +149,10 @@ impl DiagRecorder {
         }
     }
 
-    /// Record a device-clock reading: total frames per the device, wall time since stream start.
+    /// Record a consumption reading: cumulative frames the device has accepted, and the wall
+    /// time (since stream start) at which that count stood. The pair becomes `drift_ppm`:
+    /// throughput vs the negotiated rate — the number that says whether the device is really
+    /// consuming what `Initialize` accepted (defect #76's re-derivation).
     pub fn record_device_clock(&self, device_frames: u64, wall: Duration) {
         self.device_frames.store(device_frames, Ordering::Relaxed);
         self.wall_ns.store(wall.as_nanos().min(u128::from(u64::MAX)) as u64, Ordering::Relaxed);
@@ -224,22 +229,27 @@ impl DiagRecorder {
         let rate = self.rate.load(Ordering::Relaxed);
         let device_frames = self.device_frames.load(Ordering::Relaxed);
         let wall_ns = self.wall_ns.load(Ordering::Relaxed);
-        // Drift: device frames vs wall-time expectation. Two atomic loads ⇒ the pair may be one
-        // read apart; at 96 kHz that is ~10 µs of staleness — noise against a ppm figure measured
-        // over seconds. Documented, deliberate.
+        // Drift: accepted frames vs wall-time expectation (defect #76's derivation — the pump
+        // counts what the device took, never what a device clock claims). Two atomic loads ⇒
+        // the pair may be one read apart; at 96 kHz that is ~10 µs of staleness — noise against
+        // a ppm figure measured over seconds. Documented, deliberate.
         let drift_ppm = if wall_ns > 0 && rate > 0 {
             let expected = wall_ns as f64 * f64::from(rate) / 1e9;
             Some((device_frames as f64 - expected) / expected.max(1.0) * 1e6)
         } else {
             None
         };
-        // Plausibility bound: real clocks sit inside ±100 ppm; anything beyond 1 % is not drift,
-        // it is a *lying clock* — observed on the RDP virtual endpoint at +1 200 000 ppm (defect
-        // #45, the third appearance of the Phase A lesson "the telemetry was wrong"). The number
-        // stays visible (hiding it would be worse), but it is labelled so nobody tunes a PLL, a
-        // buffer size or a career against it. The throughput and jitter numbers remain the
-        // trustworthy ones on such endpoints.
-        let drift_suspect = drift_ppm.is_some_and(|d| d.abs() > DRIFT_SUSPECT_PPM);
+        // Plausibility bound: real clocks sit inside ±100 ppm; beyond 1 % the stream's
+        // throughput does not match its negotiated rate — the device is consuming what
+        // `Initialize` accepted at some OTHER rate (test004 attempt 3: half throughput against
+        // a 96 kHz exclusive open, windows-notes.md §4e), or sustained starvation kept feeding
+        // it silence it still accepted (the xrun/late-wake counts say which; the two stories
+        // must never share one label again — the old GetPosition derivation read +1.2 M ppm on
+        // a soaked-clean SHARED stream, §4b). The verdict waits for the trust window: frames
+        // are counted in whole device periods, so on short runs a big ratio is quantisation,
+        // not evidence (DRIFT_TRUST_NS carries the arithmetic).
+        let drift_suspect =
+            drift_ppm.is_some_and(|d| d.abs() > DRIFT_SUSPECT_PPM) && wall_ns >= DRIFT_TRUST_NS;
 
         DiagSnapshot {
             rate,
@@ -268,10 +278,18 @@ impl DiagRecorder {
     }
 }
 
-/// Above this magnitude, "drift" is not a clock error but a broken/virtual device clock (1 %).
-/// Real crystal oscillators sit within ±100 ppm; a resampling engine mismatch might reach a few
-/// hundred. Beyond 1 % the "clock" is fiction (the RDP virtual endpoint measured +120 %).
+/// Above this magnitude, "drift" is not a clock error but a throughput that does not match the
+/// negotiated rate (1 %). Real crystal oscillators sit within ±100 ppm; a resampling engine
+/// mismatch might reach a few hundred. Beyond 1 % something structural is true — the device
+/// clocks at a different rate than it accepted, or the stream spent its life starving.
 pub const DRIFT_SUSPECT_PPM: f64 = 10_000.0;
+
+/// Wall time a stream must have run before `drift_suspect` may fire (2 s). The numerator counts
+/// whole device periods: at 96 kHz a 10 ms period is 960 frames, so the quantisation of ONE
+/// period over a 2 s window is ±5 000 ppm — half the suspect threshold. Below the floor a large
+/// ratio is arithmetic, not a verdict; the number still prints, the label does not. Short runs
+/// (the conformance fallback, a 1 s play) are exactly what this protects.
+pub const DRIFT_TRUST_NS: u64 = 2_000_000_000;
 
 /// An immutable diagnostics readout.
 #[derive(Clone, Debug)]
@@ -304,10 +322,13 @@ pub struct DiagSnapshot {
     pub jitter_max_ns: Option<u64>,
     /// Wake intervals observed.
     pub jitter_count: u64,
-    /// Device clock vs wall clock, in ppm (`None` until the backend reports a device position).
+    /// Accepted-frames throughput vs wall clock, in ppm (`None` until the backend reports its
+    /// first consumption reading). ≈ 0 ppm is a stream running at its negotiated rate.
     pub drift_ppm: Option<f64>,
-    /// `drift_ppm` exceeded [`DRIFT_SUSPECT_PPM`]: the device clock is implausible *as a clock*
-    /// (virtual/RDP endpoints). Displayed, never acted on.
+    /// `drift_ppm` exceeded [`DRIFT_SUSPECT_PPM`] past the [`DRIFT_TRUST_NS`] window: the
+    /// device is not consuming at the negotiated rate (or the stream starved sustainably —
+    /// the xrun counters discriminate). Displayed AND acted on: the play/soak verdicts treat
+    /// it as not-clean, because a stream at half its rate is not a passing stream.
     pub drift_suspect: bool,
     /// RT discipline actually applied on the pump thread.
     pub rt: RtReport,
@@ -377,17 +398,19 @@ impl DiagSnapshot {
         }
     }
 
-    /// Long drift readout for report blocks. A suspect reading says why it is not actionable:
-    /// the number is real, the *clock* is not (defect #45).
+    /// Long drift readout for report blocks. A suspect reading says what it now MEANS: the
+    /// number is throughput truth (defect #76's derivation), so the verdict is actionable.
     #[must_use]
     pub fn drift_text_long(&self) -> String {
         match self.drift_ppm {
             Some(d) if self.drift_suspect => format!(
-                "{d:+.2} ppm device clock vs wall — SUSPECT: beyond ±{DRIFT_SUSPECT_PPM:.0} ppm \
-                 this is not a clock error but an implausible clock (virtual/RDP endpoint); \
-                 trust the throughput and jitter numbers instead"
+                "{d:+.2} ppm accepted frames vs wall — SUSPECT: beyond ±{DRIFT_SUSPECT_PPM:.0} ppm \
+                 the throughput does not match the negotiated rate — the device is consuming \
+                 what Initialize accepted at some other rate (the exclusive half-throughput \
+                 signature, windows-notes.md §4e), or sustained starvation fed it silence — \
+                 the late-wake and xrun counts say which"
             ),
-            Some(d) => format!("{d:+.2} ppm device clock vs wall"),
+            Some(d) => format!("{d:+.2} ppm accepted frames vs wall"),
             None => String::from("not reported by backend"),
         }
     }
@@ -524,16 +547,20 @@ mod tests {
     }
 
     #[test]
-    fn implausible_drift_is_labelled_suspect_not_hidden() {
+    fn implausible_throughput_is_labelled_suspect_not_hidden() {
         let r = DiagRecorder::new(44_100);
-        // The RDP-endpoint case, replayed: a device clock advancing far faster than wall time.
-        r.record_device_clock(88_200, Duration::from_secs(1));
+        // A stream accepting frames at twice its negotiated rate, past the trust window.
+        r.record_device_clock(176_400, Duration::from_secs(2));
         let s = r.snapshot();
         let d = s.drift_ppm.unwrap();
         assert!(d > 800_000.0, "expected a huge drift, got {d}");
-        assert!(s.drift_suspect, "beyond ±1 % must be flagged suspect");
+        assert!(s.drift_suspect, "beyond ±1 % past the trust window must be flagged suspect");
         assert!(s.drift_text().contains("SUSPECT"));
-        assert!(s.drift_text_long().contains("implausible clock"));
+        // The label now says what the number MEANS (defect #76's re-derivation): throughput
+        // against the negotiated rate — never the old "implausible clock" excuse again.
+        assert!(s.drift_text_long().contains("accepted frames vs wall"));
+        assert!(s.drift_text_long().contains("does not match the negotiated rate"));
+        assert!(!s.drift_text_long().contains("implausible clock"));
         // The raw number stays visible — labelling is not hiding.
         assert!(s.lines().contains("SUSPECT"));
         // A real crystal's worth of drift is NOT suspect.
@@ -542,6 +569,67 @@ mod tests {
         let s2 = r2.snapshot();
         assert!(!s2.drift_suspect);
         assert!(!s2.drift_text().contains("SUSPECT"));
+    }
+
+    #[test]
+    fn the_suspect_verdict_waits_for_the_trust_window() {
+        // Frames are counted in whole device periods, so a short run's ratio is quantisation,
+        // not a verdict: one 960-frame period at 96 kHz inside a 0.5 s window reads ±20 000
+        // ppm — twice the threshold — and must NOT label a healthy startup a rate lie.
+        let r = DiagRecorder::new(96_000);
+        r.record_device_clock(48_000 - 960, Duration::from_millis(500)); // −20 000 ppm at 0.5 s
+        let s = r.snapshot();
+        assert!(s.drift_ppm.unwrap().abs() > DRIFT_SUSPECT_PPM, "the raw ratio is large");
+        assert!(!s.drift_suspect, "...but 0.5 s of wall is below the trust floor");
+        assert!(!s.drift_text().contains("SUSPECT"));
+        // One period of quantisation at the floor itself (960 fr / 2 s = −5 000 ppm) stays
+        // inside the threshold — the floor and the threshold are matched arithmetic. A REAL
+        // lie past the floor is a verdict: half throughput at 2 s reads −500 000 ppm.
+        let r2 = DiagRecorder::new(96_000);
+        r2.record_device_clock(192_000 - 960, Duration::from_secs(2));
+        assert!(!r2.snapshot().drift_suspect, "−5 000 ppm is quantisation at the floor");
+        let r3 = DiagRecorder::new(96_000);
+        r3.record_device_clock(96_000, Duration::from_secs(2));
+        assert!(r3.snapshot().drift_suspect, "half throughput past the floor is a verdict");
+    }
+
+    #[test]
+    fn the_attempt_3_exclusive_shape_reads_as_half_throughput() {
+        // test004 attempt 3 (2026-09-28, SATURN, windows-notes.md §4e) replayed under the new
+        // derivation: a 96 kHz exclusive stream that accepted 496 384 frames over ~10.05 s —
+        // the device consumed at half the rate Initialize said yes to. The OLD GetPosition
+        // derivation happened to read −49 % here too (position advanced in buffer steps per
+        // event tick, 517 × 960), but it read +1.2 M ppm on the SAME session's soaked-clean
+        // shared stream — one label, two opposite stories. The delivered derivation gives both
+        // runs their true verdicts (this one and the next test).
+        let r = DiagRecorder::new(96_000);
+        r.record_device_clock(496_384, Duration::from_secs_f64(10.05));
+        let s = r.snapshot();
+        let d = s.drift_ppm.unwrap();
+        // −485 506 ppm at a 10.05 s wall; the log's own −491 161 was measured against its
+        // final wall (~10.17 s). The verdict lives in the band, not in its third digit.
+        assert!((-500_000.0..-480_000.0).contains(&d), "expected ≈ −49 %, got {d}");
+        assert!(s.drift_suspect);
+        assert!(s.drift_text_long().contains("SUSPECT"));
+    }
+
+    #[test]
+    fn the_defect_76_shared_session_reads_zero_under_the_new_derivation() {
+        // The §4b regression fixture, both recorded sessions: the Behringer shared stream
+        // (2026-09-24: 15 112 blocks × 64 fr delivered over ≈10.07 s at 96 kHz — a stream the
+        // 2 h soak proved healthy) read +1 182 084 ppm under GetPosition and must read ≈0 ppm
+        // under delivered-vs-wall. The RDP session of 2026-09-21 (6945 × 64 fr over ≈10.08 s
+        // at 44.1 kHz, "throughput within ~1 % of 44.1 kHz") must land inside the threshold.
+        let r = DiagRecorder::new(96_000);
+        r.record_device_clock(15_112 * 64, Duration::from_secs_f64(10.07));
+        let s = r.snapshot();
+        assert!(s.drift_ppm.unwrap().abs() < 1_000.0, "healthy shared: {:?}", s.drift_ppm);
+        assert!(!s.drift_suspect);
+        let r2 = DiagRecorder::new(44_100);
+        r2.record_device_clock(6_945 * 64, Duration::from_secs_f64(10.08));
+        let s2 = r2.snapshot();
+        assert!(s2.drift_ppm.unwrap().abs() < DRIFT_SUSPECT_PPM, "RDP session: {:?}", s2.drift_ppm);
+        assert!(!s2.drift_suspect);
     }
 
     #[test]

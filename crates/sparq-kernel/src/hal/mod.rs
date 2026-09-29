@@ -34,8 +34,10 @@
 //!    where available), so an aggregator can open N streams against N ids through this same trait.
 //! 2. **Per-device latency** — [`LatencyReport`] is per-stream and carries the *reported hardware*
 //!    period, which is what latency alignment across devices needs.
-//! 3. **A clock to master against** — [`DiagSnapshot::drift_ppm`] exposes each stream's device
-//!    clock against wall time; the aggregator's resampling PLL consumes exactly this signal.
+//! 3. **A clock to master against** — [`DiagSnapshot::drift_ppm`] exposes each stream's accepted-
+//!    frames throughput against wall time (defect #76's re-derivation: device `GetPosition`
+//!    reads were buffer-step fiction on the first hardware tested); the aggregator's resampling
+//!    PLL consumes exactly this signal.
 //! 4. **Independent lifecycles** — [`AudioStream`] is `Send` and start/stop per stream, so one
 //!    device can be restarted (unplug/replug) without touching the others.
 //!
@@ -215,7 +217,10 @@ impl RateRange {
 pub struct Capabilities {
     /// Accepted rates in shared/mix operation (union of probed ranges).
     pub rates: Vec<RateRange>,
-    /// Rates verified for exclusive-mode f32 open (discrete probes). Empty = exclusive unsupported.
+    /// Rates verified for exclusive-mode open by discrete four-rung probes (f32 → i24-in-32 →
+    /// i32 → i16; a rate counts when ANY rung is accepted). Probed against the DRIVER, never
+    /// sieved through the shared/engine envelope — the two ask different questions (defect #91,
+    /// `wasapi.rs::capabilities`). Empty = exclusive unsupported.
     pub exclusive_rates: Vec<u32>,
     /// (min, max) output channels.
     pub channels_out: (u16, u16),
@@ -250,6 +255,35 @@ impl Capabilities {
     #[must_use]
     pub fn supports_exclusive_rate(&self, rate: u32) -> bool {
         self.exclusive_rates.contains(&rate)
+    }
+
+    /// The rate an EXCLUSIVE open should ask for when `requested` is not in the verified
+    /// envelope: the nearest verified exclusive rate, ties going to the LOWER one (a slower
+    /// clock is the conservative lie — less data per second to sustain, and every standard
+    /// rate below the request is a rate the hardware family grew up with). An empty exclusive
+    /// envelope falls back to `default_rate` so the open ladder still runs and refuses with
+    /// its full probe table — the adjustment must never manufacture a rate the probes did not
+    /// vouch for.
+    ///
+    /// This exists because the shared adjustment (`default_rate`) is the wrong answer for
+    /// exclusive streams (defect #91, test004 attempt 3): on SATURN's UMC 204HD the engine
+    /// sieve left `exclusive_rates = [96000]`, a 48 kHz request was "adjusted" UP to the mix
+    /// rate, and the exclusive stream then proved the one rate the driver could not sustain at
+    /// the asked cadence. The exclusive envelope belongs to the driver, and the adjustment
+    /// belongs inside it.
+    #[must_use]
+    pub fn exclusive_rate_for(&self, requested: u32) -> u32 {
+        if self.exclusive_rates.is_empty() {
+            return self.default_rate.max(1);
+        }
+        if self.exclusive_rates.contains(&requested) {
+            return requested;
+        }
+        self.exclusive_rates
+            .iter()
+            .copied()
+            .min_by_key(|&r| ((i64::from(r) - i64::from(requested)).abs(), r))
+            .unwrap_or_else(|| self.default_rate.max(1))
     }
 
     /// Multi-line human readout (the `sparq devices --caps` table).
@@ -781,6 +815,45 @@ mod tests {
             Err(e) => panic!("expected an honest refusal, got Err({e})"),
             Ok(b) => panic!("expected an honest refusal, got backend `{}`", b.display_name()),
         }
+    }
+
+    fn caps_with_exclusive(rates: &[u32], default_rate: u32) -> Capabilities {
+        Capabilities {
+            rates: rates.iter().map(|&r| RateRange { min: r, max: r }).collect(),
+            exclusive_rates: rates.to_vec(),
+            channels_out: (2, 2),
+            channels_in: (0, 0),
+            default_rate,
+            default_channels_out: 2,
+            exclusive: !rates.is_empty(),
+            event_driven: true,
+            full_duplex: false,
+            hw_period: None,
+            hw_period_min: None,
+            f32_native: true,
+        }
+    }
+
+    #[test]
+    fn exclusive_rate_adjustment_stays_inside_the_probed_envelope() {
+        // The SATURN shape after defect #91's decoupling: the driver's TRUE exclusive
+        // envelope, probed against the driver — not sieved through the engine's shared list.
+        let caps = caps_with_exclusive(&[44_100, 48_000, 88_200, 96_000, 176_400, 192_000], 96_000);
+        // play's standing 48 kHz ask SURVIVES — attempt 3's "adjusted 48000 -> 96000" was the
+        // shared sieve bending an exclusive request into the one rate the exclusive path then
+        // proved pathological at (windows-notes.md §4e).
+        assert_eq!(caps.exclusive_rate_for(48_000), 48_000);
+        assert_eq!(caps.exclusive_rate_for(96_000), 96_000);
+        // Unlisted asks land on the nearest verified rate…
+        assert_eq!(caps.exclusive_rate_for(46_000), 44_100); // 1900 away, vs 2000 to 48k
+        assert_eq!(caps.exclusive_rate_for(47_000), 48_000); // 1000 away, vs 2900 to 44.1k
+        assert_eq!(caps.exclusive_rate_for(200_000), 192_000);
+        // …exact ties go to the LOWER rate — the conservative clock.
+        assert_eq!(caps.exclusive_rate_for(46_050), 44_100); // exactly 1950 from both
+                                                             // An empty exclusive envelope never manufactures a rate: the default rides along so
+                                                             // the open ladder still runs and refuses with its full probe table.
+        let none = caps_with_exclusive(&[], 96_000);
+        assert_eq!(none.exclusive_rate_for(48_000), 96_000);
     }
 
     #[test]

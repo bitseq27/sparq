@@ -447,7 +447,7 @@ fn run_gesture_smoke(failures: &mut Vec<String>) {
     //    the "connecting incompatible ports is impossible" acceptance criterion, end to end.
     let wires0 = shell.graph.wire_count();
     let cv_out = port_screen(shell.canvas_layout(), 2, PDir::Out); // rms.level (cv)
-    let free_in = port_screen(shell.canvas_layout(), 3, PDir::In); // gain2.in (audio, free)
+    let free_in = port_screen(shell.canvas_layout(), 3, PDir::In); // out/main.in (audio, free — optional input)
     match (cv_out, free_in) {
         (Some(from), Some(to)) => {
             now += 400;
@@ -469,7 +469,9 @@ fn run_gesture_smoke(failures: &mut Vec<String>) {
     // 7. drag a compatible pair (stereo out → free stereo in) → a wire is created.
     let wires1 = shell.graph.wire_count();
     let gain_out = port_screen(shell.canvas_layout(), 1, PDir::Out); // gain.out (stereo)
-    let free_in2 = port_screen(shell.canvas_layout(), 3, PDir::In); // gain2.in (free)
+    let free_in2 = port_screen(shell.canvas_layout(), 3, PDir::In); // out/main.in (free; a wired
+                                                                    // required input would leave
+                                                                    // no legal drag target — inc 7)
     match (gain_out, free_in2) {
         (Some(from), Some(to)) => {
             now += 400;

@@ -69,7 +69,7 @@ A port declaration:
 | `name` | human label |
 | `direction` | `in` \| `out` |
 | `type` | `audio` \| `cv` \| `event` \| `data` \| `gpu` \| `atom` |
-| `required` | bool — optional inputs receive an explicit *unconnected* signal, never silence-by-accident |
+| `required` | bool — optional inputs receive an explicit *unconnected* signal, never silence-by-accident; a REQUIRED input with no wire is refused at build (host-enforced since WO-008 inc 7 — the declaration is a contract the host keeps) |
 | `channel_set` | for `audio`: fixed tag, `variable`, or a list of accepted tags (§3.1) |
 | `rate` | for `cv`: `audio` (per sample) \| `block` (one value per block) |
 | `range` | for `cv`: `bipolar` (−1..1) \| `unipolar` (0..1) |
@@ -341,8 +341,16 @@ the Rust surface is `tests/api_snapshot.rs`):
   static `tick = 0` the goldens were built against. Transport triggers reach modules through the
   same `event` ports and the same host-event door as any other producer; a scheduled tick fires
   at its exact sample (±0, measured against an independent implementation of the map).
+* **`required`-unconnected inputs are host-enforced (WO-008 increment 7, 2026-09-29):**
+  `Executor::build` refuses a patch in which a node's `required` input has no wire — one
+  sentence naming the node, the module, the port and both remedies (connect a source or remove
+  the node; a genuinely optional port is a manifest `required = false`, a module change). The
+  explicit-unconnected-signal vocabulary lives at its declared home — OPTIONAL ports — where
+  modules see the signal and answer with their status (`Silenced` for the reference modules),
+  never silence-by-accident. The determinism world's spare and the canvas demo's fourth node
+  moved with it (the world wires its spare; the demo's spare became a bare `out/main`, the one
+  module designed to sit unwired), and the stress baseline moved on purpose and is recorded
+  (hash `7bb06379bd6845e5`, 2 383 swaps · 7 617 refusals — was `b42068ec7b206789`, 7 203 · 2 797).
 * Still declared open: audio-only delay edges, single-pass `variable` channel-set resolution,
-  unenforced `required`-unconnected inputs (the module sees the explicit unconnected signal and
-  answers with its status; host-side enforcement is a declared open item so the determinism
-  harness's refusal counters stay comparable), and sub-block transport positions (module-api
-  §16 Q2's forbidden territory — loops fold at block granularity for the same reason).
+  and sub-block transport positions (module-api §16 Q2's forbidden territory — loops fold at
+  block granularity for the same reason).

@@ -19,7 +19,9 @@
 //! Unlike `mutation_stress.rs`, nothing here hashes to a golden: WHICH block a mutation lands
 //! on is a scheduling fact, and a golden over scheduling would be a flake generator. The
 //! determinism claim stays where it is provable (the single-owner stress, hash
-//! `b42068ec7b206789`); the cross-thread claims are counters, ledgers and orderings — every one
+//! `7bb06379bd6845e5` since increment 7's required-input enforcement moved the baseline on
+//! purpose — `b42068ec7b206789` before it); the cross-thread claims are counters, ledgers and
+//! orderings — every one
 //! of them exact, none of them timing-dependent, because staging is paced: a patch is consumed
 //! (swapped or superseded) before the next is offered.
 
@@ -450,10 +452,13 @@ fn meters_are_published_per_block_and_an_absent_reader_is_counted_not_queued() {
         assert!(node_ids.contains(&u.node), "meter for a node that is not in the graph");
         assert!(u.block >= 1 && u.block <= 2, "with nobody reading, only the first blocks fit");
         assert!(u.peak >= 0.0 && u.peak.is_finite());
-        // The chain nodes run Ok; the world's unwired spare gain honestly reports Silenced —
-        // the meter publication tells the truth about every node, including the idle one.
+        // Every rendered node runs Ok — and since increment 7 that is the ONLY legal answer:
+        // the world's spare gain used to sit unwired and honestly report Silenced, but a bare
+        // required input is now refused at build, so no world node can render without its
+        // signal. The meter publication tells the truth about every node; a Silenced here
+        // would mean the enforcement leaked.
         assert!(
-            matches!(u.block_status(), BlockStatus::Ok | BlockStatus::Silenced),
+            matches!(u.block_status(), BlockStatus::Ok),
             "unexpected status {:?}",
             u.block_status()
         );

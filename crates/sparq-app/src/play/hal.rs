@@ -73,13 +73,25 @@ pub fn run(o: PlayOpts, kind: BackendKind) -> Result<ExitCode, String> {
     let asked_channels = o.channels.unwrap_or(2);
     let mut rate = o.sample_rate;
     let mut out_ch = asked_channels;
-    if !caps.supports_rate(rate) {
+    // The envelope this adjustment consults is the one the OPEN negotiates in (defect #91):
+    // exclusive asks the DRIVER (its own probed rate list), shared/null ask the ENGINE. An
+    // exclusive request adjusted through the shared sieve is how test004 attempt 3's 48 kHz
+    // ask became the one 96 kHz stream the driver accepted and could not sustain.
+    let exclusive = kind == BackendKind::WasapiExclusive;
+    let listed =
+        if exclusive { caps.supports_exclusive_rate(rate) } else { caps.supports_rate(rate) };
+    if !listed {
+        let adjusted =
+            if exclusive { caps.exclusive_rate_for(rate) } else { caps.default_rate.max(1) };
         println!(
-            "  adjusted    rate {} Hz -> {} Hz (this device does not list {} Hz; \
-             `sparq devices --caps` shows what it does)",
-            rate, caps.default_rate, rate
+            "  adjusted    rate {} Hz -> {} Hz (this device does not list {} Hz for {} \
+             operation; `sparq devices --caps` shows what it does)",
+            rate,
+            adjusted,
+            rate,
+            if exclusive { "exclusive" } else { "shared" }
         );
-        rate = caps.default_rate.max(1);
+        rate = adjusted;
     }
     let (cmin, cmax) = (usize::from(caps.channels_out.0), usize::from(caps.channels_out.1));
     if cmax >= 1 && (out_ch < cmin.max(1) || out_ch > cmax) {
@@ -279,15 +291,28 @@ pub fn run(o: PlayOpts, kind: BackendKind) -> Result<ExitCode, String> {
     println!();
     println!("  latency     {}", stream.latency_report().summary());
 
-    // The pass/fail line, in the shape the soak and the acceptance runs use.
-    let clean = diag.is_clean() && matches!(rep.state, sparq_kernel::hal::StreamState::Stopped);
+    // The pass/fail line, in the shape the soak and the acceptance runs use. Suspect drift
+    // joins the verdict: past the trust window the number is throughput truth (#76's
+    // derivation), and a stream that ran at half its negotiated rate is not a passing stream
+    // even when every wake was on cadence and every counter is zero.
+    let clean = diag.is_clean()
+        && !diag.drift_suspect
+        && matches!(rep.state, sparq_kernel::hal::StreamState::Stopped);
     if clean {
         println!("\nplay: PASS (0 xruns, 0 allocations, clean stop)");
     } else {
         println!(
-            "\nplay: NOT CLEAN — xruns {}, allocs {}, dev-err {}, state {:?}. \
+            "\nplay: NOT CLEAN — xruns {}, allocs {}, dev-err {}, state {:?}{}. \
              Copy this whole output into a message back.",
-            diag.xruns, diag.allocations, diag.device_errors, rep.state
+            diag.xruns,
+            diag.allocations,
+            diag.device_errors,
+            rep.state,
+            if diag.drift_suspect {
+                ", and the throughput did not match the negotiated rate — the drift line above is the measurement"
+            } else {
+                ""
+            }
         );
     }
 

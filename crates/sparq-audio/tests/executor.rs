@@ -152,6 +152,12 @@ fn audio_port(id: &str, dir: &str, set: &str) -> PortSpec {
         direction: Some(dir.into()),
         port_type: Some("audio".into()),
         channel_set: Some(set.into()),
+        // Test probes declare OPTIONAL inputs (increment 7's enforcement made a bare required
+        // input a build refusal — these probes are built standalone in half the suite, and the
+        // unconnected-signal semantics they exercise live at `required = false` ports, which
+        // is where the shipped vocabulary puts them). The required side has its own gate:
+        // `a_required_input_with_no_wire_is_refused_in_words`.
+        required: Some(false),
         ..PortSpec::default()
     }
 }
@@ -330,7 +336,9 @@ fn a_failed_module_is_silenced_and_flagged_not_unwound() {
 
 #[test]
 fn an_unconnected_input_is_silenced_and_reported() {
-    // A gain with no input edge: the module sees has_input()==false and declares Silenced.
+    // A gain with no input edge — its probe manifest declares the input `required = false`
+    // (audio_port above), which is where the explicit-unconnected-signal vocabulary lives
+    // since increment 7: the module sees has_input()==false and declares Silenced.
     let mut graph = Graph::new();
     let gn = graph.add_node(0);
     let builds = vec![(
@@ -346,6 +354,46 @@ fn an_unconnected_input_is_silenced_and_reported() {
     ex.render_block(gn, &mut out).unwrap();
     assert!(out.iter().all(|&s| s == 0.0));
     assert_eq!(ex.meter(gn).map(|m| m.status), Some(BlockStatus::Silenced));
+}
+
+#[test]
+fn a_required_input_with_no_wire_is_refused_in_words() {
+    // WO-008 increment 7: the manifest's `required` is a contract the HOST keeps — the shape
+    // the six single-input shipped processors declare (`gain`, `svf`, `rms`, `delay`,
+    // `bitcrush`, `panner`). A bare one is refused at build, in ONE sentence naming the node,
+    // the module, the port and both remedies; nothing is half-built.
+    let mut m = gain_manifest("mono");
+    m.ports[0].required = Some(true); // the shipped processors' declaration
+    let vm = validated(m);
+    let mut graph = Graph::new();
+    let gn = graph.add_node(0);
+    let builds = vec![(
+        gn,
+        NodeBuild { module: Box::new(Gain), manifest: vm.clone(), params: params(&[1.0]) },
+    )];
+    let err = Executor::build(graph, builds, cfg(1)).unwrap_err();
+    assert!(matches!(err, ExecError::RequiredUnconnected { .. }), "got {err:?}");
+    let s = err.to_string();
+    for needle in ["sparq/test/gain", "`in`", "required", "connect a source", "required = false"] {
+        assert!(s.contains(needle), "the sentence must name {needle}: {s}");
+    }
+    // The compliant twin builds: the same required input with one wire into it.
+    let mut graph = Graph::new();
+    let dc = graph.add_node(0);
+    let gn = graph.add_node(0);
+    graph.connect(PortRef::new(dc, 0), PortRef::new(gn, 0), EdgeKind::Plain).unwrap();
+    let builds = vec![
+        (
+            dc,
+            NodeBuild {
+                module: Box::new(Dc),
+                manifest: validated(dc_manifest()),
+                params: params(&[0.5]),
+            },
+        ),
+        (gn, NodeBuild { module: Box::new(Gain), manifest: vm, params: params(&[1.0]) }),
+    ];
+    Executor::build(graph, builds, cfg(1)).unwrap();
 }
 
 #[test]

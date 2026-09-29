@@ -73,15 +73,18 @@
 //! * Channel-set `variable` resolution is single-pass with a device-channels fallback; every
 //!   Phase 0 module declares concrete sets, and the cascade rule (module-api §2) is exercised
 //!   properly when a variable-set module exists.
-//! * A `required` input that is unconnected is NOT refused at build: the module sees the explicit
-//!   unconnected signal and answers with the status it chooses (`Silenced` for the reference
-//!   modules). Host-side enforcement is a declared open item — the determinism world's unwired
-//!   spare node relies on the v0 behaviour, and changing refusals mid-stress would move the
-//!   harness's counters, so the change gets its own increment.
+//! * A `required` input that is unconnected IS refused at build (WO-008 increment 7 — the
+//!   declared open item, shipped as its own increment exactly because it moves the stress
+//!   harness's counters and the determinism world's shape, both recorded on purpose): the
+//!   manifest's declaration is a contract the HOST keeps, and a module that said "I need this
+//!   signal" is never built without it. The explicit-unconnected-signal vocabulary lives at
+//!   its declared home — ports whose manifest says `required = false` (the matrices, displays,
+//!   sinks and trigger inputs) — where modules see the unconnected signal and answer with the
+//!   status they choose (`Silenced` for the reference modules), never silence-by-accident.
 //! * Latency compensation aligns PLAIN audio fan-in arms (task 5's declared scope); `cv` and
 //!   `event` edges carry no compensation — control payloads arrive when the block says they do.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 use sparq_kernel::block::BlockContext;
@@ -265,6 +268,17 @@ pub enum ExecError {
         /// Destination channels.
         to: usize,
     },
+    /// A `required` input port with no incoming wire (WO-008 increment 7: the host enforces
+    /// the manifest's declaration). The module never sees a required port unconnected; the
+    /// explicit-unconnected-signal vocabulary lives at ports declared `required = false`.
+    RequiredUnconnected {
+        /// Which node.
+        node: NodeId,
+        /// The manifest id of the module that declared the port.
+        module: String,
+        /// The id of the port with no wire.
+        port: String,
+    },
     /// The render target buffer is the wrong size.
     DeviceBuffer {
         /// Expected length in samples.
@@ -329,6 +343,14 @@ impl std::fmt::Display for ExecError {
                  (mono→multi fans out, multi→mono sums, anything else converts through a \
                  module) — the connect layer should have refused this edge",
                 edge.0
+            ),
+            Self::RequiredUnconnected { node, module, port } => write!(
+                f,
+                "node {}: `{module}` declares input `{port}` required, and nothing is wired \
+                 to it — connect a source, or remove the node; a port that is genuinely \
+                 optional says `required = false` in the module's manifest. sparq refuses to \
+                 build a module that said it needs a signal it will not get",
+                node.0
             ),
             Self::DeviceBuffer { expected, got } => write!(
                 f,
@@ -671,8 +693,9 @@ impl Executor {
     /// fit the contract's port caps → every edge must carry a payload this executor carries
     /// (`audio`/`cv`/`event`), run out→in between ports of the SAME type, and satisfy that
     /// type's matrix rules (channel negotiation, cv range/fan-in/interp, event-kind subsets) →
-    /// buffers allocated and touched → `prepare` and `activate` in execution order (the cascade
-    /// rule of module-api §2).
+    /// every `required` input must have at least one wire (an ILLEGAL wire is a more specific
+    /// defect than a MISSING one, so the edge rules answer first) → buffers allocated and
+    /// touched → `prepare` and `activate` in execution order (the cascade rule of module-api §2).
     ///
     /// # Errors
     /// Any [`ExecError`]; nothing is half-built — on error, no `Executor` exists.
@@ -1000,6 +1023,32 @@ impl Executor {
             let d = in_chs[dst.slot][dst.type_idx];
             if s != d && s != 1 && d != 1 {
                 return Err(ExecError::ChannelNegotiation { edge: e.id, from: s, to: d });
+            }
+        }
+
+        // ---- required inputs must have wires (WO-008 increment 7's enforcement)
+        // A manifest that declares an input `required` is a contract the HOST keeps: the
+        // build refuses the patch in words rather than hand the module a signal-less port it
+        // said it needs. One or more incoming carried edges satisfies a port — audio fan-in is
+        // legal, event multi-source is legal, and a cv fan-in was already refused by the edge
+        // pass above, so this check can never legitimise a wiring the matrix refuses. Outputs
+        // are out of scope by the compiled contract's own words (`Port::required` = whether an
+        // unconnected INPUT is an error): a sinkless output is a legal patch shape (the demo's
+        // undrawn `rms.level` wire is the standing example). Graph order × manifest order:
+        // first violation wins, deterministic like every refusal in this gauntlet.
+        let mut fed: HashSet<(usize, u32)> = HashSet::with_capacity(ends.len());
+        for (_, dst) in &ends {
+            fed.insert((dst.slot, dst.manifest_port));
+        }
+        for (slot, (id, build, _)) in slots.iter().enumerate() {
+            for (pi, p) in build.manifest.ports().iter().enumerate() {
+                if p.direction == Direction::In && p.required && !fed.contains(&(slot, pi as u32)) {
+                    return Err(ExecError::RequiredUnconnected {
+                        node: *id,
+                        module: build.manifest.id().to_string(),
+                        port: p.id.clone(),
+                    });
+                }
             }
         }
 

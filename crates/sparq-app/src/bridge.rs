@@ -47,8 +47,17 @@ pub const RENDER_CHANNELS: usize = 2;
 /// The demo patch the shell starts with, built from the REGISTRY — the same manifests discovery
 /// reads, never a hand-copied port list (the drift class WO-007 exists to prevent).
 ///
-/// sine → gain → rms (analysis tap) plus one unconnected spare Gain, mirroring the reference
-/// modules. Only modules that actually exist (#58).
+/// sine → gain → rms (analysis tap) plus a bare `out/main` waiting to be wired. Only modules
+/// that actually exist (#58).
+///
+/// The fourth node USED to be an unwired spare Gain. WO-008 increment 7's host-side `required`
+/// enforcement made that an illegal patch (a bare processor is exactly what the manifest
+/// vocabulary forbids), so the demo's spare became the one module DESIGNED to sit bare:
+/// `out/main`'s input is `required = false` (an unwired master out is a legal patch shape),
+/// and `resolve_master`'s documented handover rule ignores an unwired out/main — so the master
+/// stays the chain gain and the rendered samples are bit-identical to the old demo's (the
+/// device's canvas-render baseline does not move). The smokes keep their free stereo input to
+/// drag onto, and the wire-level gates keep a node that honestly reads at rest.
 ///
 /// # Errors
 /// A sentence naming the built-in that is missing — which is a build bug, not a runtime state.
@@ -66,15 +75,18 @@ pub fn demo_graph(registry: &Registry) -> Result<CanvasGraph, String> {
     let sine = g.op_add_node(spec("sparq/syn/sine")?, Vec2::new(0.0, 0.0));
     let gain = g.op_add_node(spec("sparq/util/gain")?, Vec2::new(grid * 40.0, 0.0));
     let rms = g.op_add_node(spec("sparq/ana/rms")?, Vec2::new(grid * 80.0, 0.0));
-    let _spare = g.op_add_node(spec("sparq/util/gain")?, Vec2::new(grid * 40.0, grid * 25.0));
+    let _main = g.op_add_node(spec("sparq/out/main")?, Vec2::new(grid * 40.0, grid * 25.0));
     let (sid, gid, rid) = (node_id(&sine), node_id(&gain), node_id(&rms));
     // sine.out (mono) → gain.in (stereo): the documented fan-out.
     let _ = g.op_add_wire(
         sparq_ui::canvas::model::PortRef::new(sid, 0),
         sparq_ui::canvas::model::PortRef::new(gid, 0),
     );
-    // gain.out → rms.in: the analysis tap. rms.level (cv out) stays unconnected — undrawn wires
-    // are fine; drawn cv wires are the executor's refused-with-words case.
+    // gain.out → rms.in: the analysis tap. rms.level (cv out) stays unconnected — undrawn
+    // OUTPUT wires are fine (the enforcement is about required INPUTS); drawn cv wires are the
+    // executor's refused-with-words case. The out/main stays unwired on purpose: it is the
+    // master-handover module waiting for the operator (wire it and the MASTER badge moves to
+    // it, per resolve_master's documented rule).
     let _ = g.op_add_wire(
         sparq_ui::canvas::model::PortRef::new(gid, 1),
         sparq_ui::canvas::model::PortRef::new(rid, 0),
@@ -331,7 +343,9 @@ mod tests {
         for _ in 0..100 {
             ex.render_block(km, &mut out).unwrap();
         }
-        // sine 440 @0.5 → gain (manifest default 1.0): the master carries a 0.5-amplitude sine.
+        // sine 440 @0.5 → gain (manifest default 1.0): the master carries a 0.5-amplitude
+        // sine. (The demo's bare out/main does not count for master resolution — the
+        // documented handover rule ignores an unwired one — and renders Silenced at rest.)
         let peak = out.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
         assert!((peak - 0.5).abs() < 1e-3, "peak {peak}");
         assert!(ex.memory_budget_bytes() > 0);
@@ -388,10 +402,11 @@ mod tests {
         let master = CanvasState::new().resolve_master(&g).unwrap();
         let levels = super::node_levels(&g, master, &reg).unwrap();
 
-        // The demo is sine(0.5) → gain(1.0) → rms, plus an UNWIRED spare gain. The levels must be
-        // the metered signal: sine and the in-chain gain both carry the 0.5 peak, the rms node
-        // reads at rest (it has no audio output to meter), and the spare — which never rendered
-        // because nothing renders it — reads 0.
+        // The demo is sine(0.5) → gain(1.0) → rms, plus a bare out/main. The levels must be
+        // the metered signal: the sine and the in-chain gain carry the 0.5 peak; the rms node
+        // reads at rest (it has no audio output to meter); and the bare out/main reads at rest
+        // too — it renders Silenced (optional input, nothing wired), and a level invented from
+        // canvas data would not know the difference between "unwired" and "silent signal".
         let by_module = |id: &str| -> Vec<CanvasNodeId> {
             g.nodes().iter().filter(|n| n.spec.module_id == id).map(|n| n.id).collect()
         };
@@ -409,10 +424,12 @@ mod tests {
             "an analysis node carries no audio, so its wire is at rest"
         );
         let hot = gains.iter().any(|&gid| levels.get(gid) > 0.4);
-        let cold = gains.iter().any(|&gid| levels.get(gid) == 0.0);
-        assert!(
-            hot && cold,
-            "the in-chain gain is hot and the unwired spare is at rest: {gains:?}"
+        assert!(hot, "the in-chain gain is hot at its metered 0.5 peak: {gains:?}");
+        let main = by_module("sparq/out/main")[0];
+        assert_eq!(
+            levels.get(main),
+            0.0,
+            "the bare out/main rendered Silenced, and its level says so — cold, not faked"
         );
     }
 
@@ -537,7 +554,7 @@ mod tests {
         let before = peak_of(&g);
         assert!((before - 0.5).abs() < 1e-3, "defaults: sine 0.5 × gain 1.0");
 
-        // The gain node IN THE CHAIN (the spare has no wires), edited through the same op the
+        // The gain node IN THE CHAIN (the demo's only gain), edited through the same op the
         // inspector uses — the bridge must render the node's state, not the manifest default.
         let gid = g
             .nodes()

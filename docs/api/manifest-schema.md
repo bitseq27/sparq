@@ -39,7 +39,7 @@ Rules: every field below is either required or has a documented default. Unknown
 | `name` | string | yes | |
 | `direction` | enum | yes | `in out` |
 | `type` | enum | yes | `audio cv event data gpu atom` (closed set, ADR-005) |
-| `required` | bool | no (default true) | optional inputs get an explicit unconnected signal |
+| `required` | bool | no (default true) | optional inputs get an explicit unconnected signal; a required input with no wire is refused at build (host-enforced, WO-008 inc 7) |
 | `channel_set` | string \| [string] \| `"variable"` | if audio | `mono stereo quad 5.1 7.1.4 ambisonics:N objects:K raw:M` |
 | `rate` | enum | if cv | `audio block` |
 | `range` | enum | if cv | `bipolar unipolar` |

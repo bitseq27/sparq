@@ -241,12 +241,21 @@ fn run_hal(o: SoakOpts) -> Result<ExitCode, String> {
         .map_err(|e| format!("capabilities probe failed: {}", e.with_hint()))?;
     let mut rate = o.sample_rate;
     let mut out_ch = o.channels;
-    if !caps.supports_rate(rate) {
+    // The envelope the adjustment consults is the one the OPEN negotiates in (defect #91):
+    // exclusive asks the driver's own probed list, shared/null ask the engine's.
+    let exclusive = o.backend == "wasapi-exclusive";
+    let listed =
+        if exclusive { caps.supports_exclusive_rate(rate) } else { caps.supports_rate(rate) };
+    if !listed {
+        let adjusted =
+            if exclusive { caps.exclusive_rate_for(rate) } else { caps.default_rate.max(1) };
         println!(
-            "  adjusted    rate {} Hz -> {} Hz (not in this device's list;              `sparq devices --caps` shows the truth)",
-            rate, caps.default_rate
+            "  adjusted    rate {} Hz -> {} Hz (not in this device's {} list;              `sparq devices --caps` shows the truth)",
+            rate,
+            adjusted,
+            if exclusive { "exclusive" } else { "shared" }
         );
-        rate = caps.default_rate.max(1);
+        rate = adjusted;
     }
     let (cmin, cmax) = (usize::from(caps.channels_out.0), usize::from(caps.channels_out.1));
     if cmax >= 1 && (out_ch < cmin.max(1) || out_ch > cmax) {
@@ -361,6 +370,16 @@ fn run_hal(o: SoakOpts) -> Result<ExitCode, String> {
                 budget.as_secs_f64() * 1e3,
                 d.late_wakes,
                 d.overruns
+            ));
+            break;
+        }
+        // Throughput truth joins the fail-fast (#76's derivation): past the trust window a
+        // suspect drift means the device is not consuming at the negotiated rate, and a soak
+        // at half its rate is a failed soak even with quiet counters.
+        if d.drift_suspect && o.enforce_realtime {
+            fail = Some(format!(
+                "throughput vs wall off by more than 1% ({}) — the device is not consuming at the negotiated rate",
+                d.drift_text()
             ));
             break;
         }

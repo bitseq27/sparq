@@ -6,10 +6,10 @@
 //! ```text
 //! open()    [control thread]  COM(MTA) → resolve endpoint → negotiate format (probe ladder)
 //!                             → Initialize (exclusive: alignment two-step) → SetEventHandle
-//!                             → GetService(render, clock) → GetBufferSize → allocate+pre-touch
+//!                             → GetService(render) → GetBufferSize → allocate+pre-touch
 //! start()   [control thread]  spawn pump; wait (bounded) for Running/Failed/Removed
 //! pump      [pump thread]     COM(MTA) → MMCSS+priority → prime FIFO → preroll → Start()
-//!                             → loop { wait(event) → clock/padding → write → refill }
+//!                             → loop { wait(event) → padding → write → refill }
 //! stop()    [control thread]  flag + SetEvent → join → client.Stop() happened in the pump
 //! ```
 //!
@@ -39,6 +39,17 @@
 //! then runs the callback until the FIFO is back above its cushion. The callback only ever sees
 //! exactly B frames; the device only ever sees exactly what it asked for. Starvation (FIFO short
 //! at write time) is counted as an xrun and padded with silence — audible truth, counted truth.
+//!
+//! In event-driven EXCLUSIVE the API pins the two numbers together — `hnsPeriodicity` must be
+//! nonzero and **equal to** `hnsBufferDuration` (`IAudioClient::Initialize`'s documented rule,
+//! enforced with `AUDCLNT_E_BUFDURATION_PERIOD_NOT_EQUAL`) — so an exclusive stream can never
+//! bank more than one period: there is no deeper device buffer to hide a driver's event hiccup
+//! behind, and the period itself is the only headroom lever. A driver that ACCEPTED a cadence
+//! and then stalls on it is only observable at runtime, which is why the drift metric counts
+//! frames the device ACCEPTED against the wall (#76's re-derivation — `IAudioClock::GetPosition`
+//! advances in buffer-sized steps per event tick on these endpoints and is not a clock; see
+//! `docs/hal/windows-notes.md` §4b/§4e) and why the play/soak verdicts treat a suspect drift
+//! as a failure, not a curiosity.
 //!
 //! # Formats
 //!
@@ -148,8 +159,6 @@ const IID_IMMDEVICE_ENUMERATOR: GUID = guid(0xA95664D2_9614_4F35_A746_DE8DB63617
 const IID_IAUDIO_CLIENT: GUID = guid(0x1CB9AD4C_DBFA_4C32_B178_C2F568A703B2);
 /// `{F294ACFC-3146-4483-A7BF-ADDCA7C260E2}` (audioclient.h).
 const IID_IAUDIO_RENDER_CLIENT: GUID = guid(0xF294ACFC_3146_4483_A7BF_ADDCA7C260E2);
-/// `{CD63314F-3FBA-4A1B-812C-EF963FB68574}` (audioclient.h).
-const IID_IAUDIO_CLOCK: GUID = guid(0xCD63314F_3FBA_4A1B_812C_EF963FB68574);
 /// `{00000003-0000-0010-8000-00AA00389B71}` (ksmedia.h).
 const SUBTYPE_IEEE_FLOAT: GUID = guid(0x00000003_0000_0010_8000_00AA00389B71);
 /// `{00000001-0000-0010-8000-00AA00389B71}` (ksmedia.h).
@@ -474,32 +483,12 @@ struct AudioRenderClientVtbl {
     ) -> HRESULT,
 }
 
-/// IAudioClock (audioclient.h): slots 3–5.
-#[repr(C)]
-struct AudioClock {
-    lpVtbl: *const AudioClockVtbl,
-}
-#[repr(C)]
-struct AudioClockVtbl {
-    // SAFETY: IUnknown prefix (slots 0-2). `this` is a live, owned interface pointer (the
-    // Com<T> invariant); Release is invoked exactly once, by Com<T>::drop.
-    QueryInterface: unsafe extern "system" fn(
-        this: *mut AudioClock,
-        riid: *const GUID,
-        out: *mut *mut c_void,
-    ) -> HRESULT,
-    AddRef: unsafe extern "system" fn(this: *mut AudioClock) -> u32,
-    Release: unsafe extern "system" fn(this: *mut AudioClock) -> u32,
-    // SAFETY: slots 3–5; out params are caller locals; GetPosition's position is in device
-    // frames since stream start.
-    GetFrequency: unsafe extern "system" fn(this: *mut AudioClock, out: *mut u64) -> HRESULT,
-    GetPosition: unsafe extern "system" fn(
-        this: *mut AudioClock,
-        position: *mut u64,
-        qpc: *mut u64,
-    ) -> HRESULT,
-    GetCharacteristics: unsafe extern "system" fn(this: *mut AudioClock, out: *mut u32) -> HRESULT,
-}
+// NOTE: IAudioClock is deliberately NOT bound. Defect #76 decoded its `GetPosition` on the
+// SATURN endpoints: it advances in buffer-sized steps per event tick — `(buffer_frames ÷
+// event_period) ÷ rate − 1` reproduced the measured +1.2 M ppm "drift" to four digits on BOTH
+// the RDP and the Behringer sessions (docs/hal/windows-notes.md §4b). It is not a clock, and
+// binding it would tempt somebody to trust it again. The drift metric counts frames the device
+// ACCEPTED against the wall instead — the pump knows that number exactly, on every backend.
 
 // --------------------------------------------------------------------------- owned pointers
 
@@ -840,18 +829,8 @@ impl Com<AudioClient> {
         unsafe { com_own(hr, out as *mut AudioRenderClient, "GetService(IAudioRenderClient)") }
     }
 
-    /// Slot 15 — `IAudioClient::GetService` for `IAudioClock` (optional: drivers may refuse).
-    fn clock(&self) -> Option<Com<AudioClock>> {
-        let mut out: *mut c_void = ptr::null_mut();
-        // SAFETY: as `render_client`; failure (rare) degrades to counted-period drift, so the
-        // error is swallowed by design and documented at the call site.
-        let hr =
-            unsafe { ((*(*self.ptr).lpVtbl).GetService)(self.ptr, &IID_IAUDIO_CLOCK, &mut out) };
-        if hr < 0 || out.is_null() {
-            return None;
-        }
-        Some(Com { ptr: out as *mut AudioClock })
-    }
+    // NOTE: no `GetService(IAudioClock)` binding — see the note where its vtable used to be
+    // (defect #76: its GetPosition advances in buffer steps per event tick; it is not a clock).
 }
 
 impl Com<AudioRenderClient> {
@@ -918,17 +897,6 @@ impl Com<AudioRenderClient> {
             return Err(classify("IAudioRenderClient::ReleaseBuffer", hr));
         }
         Ok(got)
-    }
-}
-
-impl Com<AudioClock> {
-    /// Slot 5 — `IAudioClock::GetPosition` (device frames + QPC).
-    fn position(&self) -> Option<u64> {
-        let (mut pos, mut qpc) = (0u64, 0u64);
-        // SAFETY: live owned interface; out params are locals; failure → None (the caller falls
-        // back to counted periods).
-        let hr = unsafe { ((*(*self.ptr).lpVtbl).GetPosition)(self.ptr, &mut pos, &mut qpc) };
-        (hr >= 0).then_some(pos)
     }
 }
 
@@ -1110,7 +1078,6 @@ struct Negotiated {
 struct PumpBundle {
     client: Com<AudioClient>,
     render: Com<AudioRenderClient>,
-    clock: Option<Com<AudioClock>>,
 }
 
 /// Everything the pump thread owns while running, returned intact on exit (no leaks across
@@ -1474,13 +1441,28 @@ impl HalBackend for WasapiBackend {
             (ch_ok.first().copied().unwrap_or(1), ch_ok.last().copied().unwrap_or(mix_ch).max(1));
 
         // Exclusive probes: the open ladder's four rungs (f32 → i24-in-32 → i32 → i16, all
-        // extensible) at each shared-supported rate with the device's own channel count/mask.
-        // A rate counts when ANY rung is accepted — which rung actually opens is decided at
-        // open() time and named in the log line. (Probing other channel counts is increment-2
+        // extensible) at EVERY standard rate, with the device's own channel count/mask. A rate
+        // counts when ANY rung is accepted — which rung actually opens is decided at open()
+        // time and named in the log line. (Probing other channel counts is increment-2
         // territory; the acceptance run is stereo on the UMC204HD.)
+        //
+        // The sweep is deliberately NOT the shared-supported list (defect #91, test004 attempt
+        // 3): the two envelopes answer different questions — shared asks the ENGINE (which on
+        // SATURN's UMC 204HD refused every f32 rate probe except its own 96 kHz mix), exclusive
+        // asks the DRIVER (which speaks i24-in-32 at the rates the hardware clocks at, 44.1 kHz
+        // up). Sieving the exclusive envelope through the shared one printed `exclusive 96000`
+        // as the measured truth while 48 kHz was never even asked — and play's rate adjustment
+        // then bent a 48 kHz request UP into the one rate the exclusive path proved
+        // pathological at. Each envelope is now probed with its own arbiter, the mix rate rides
+        // along when the standard sweep does not name it, and a refusal here stays honest: the
+        // open ladder still probes with Initialize as the final arbiter.
         let mut exclusive_rates: Vec<u32> = Vec::new();
         if self.exclusive_mode() {
-            for &r in supported.iter() {
+            let mut sweep: Vec<u32> = PROBE_RATES.to_vec();
+            if !sweep.contains(&mix_rate) {
+                sweep.push(mix_rate);
+            }
+            for r in sweep {
                 let f32e = wfxe_f32(r, mix_ch, mask);
                 let i24 = wfxe_int(r, mix_ch, mask, 32, 24);
                 let i32f = wfxe_int(r, mix_ch, mask, 32, 32);
@@ -1493,6 +1475,8 @@ impl HalBackend for WasapiBackend {
                     exclusive_rates.push(r);
                 }
             }
+            exclusive_rates.sort_unstable();
+            exclusive_rates.dedup();
         }
         let has_exclusive = !exclusive_rates.is_empty();
 
@@ -2217,9 +2201,10 @@ fn finish_open(
             return Err(e);
         },
     };
-    // The clock is how drift-vs-wall gets measured; a driver without one degrades to counted
-    // periods in the pump rather than failing the open.
-    let clock = client.clock();
+    // The drift metric no longer reads a device clock (defect #76: GetPosition on these
+    // endpoints advances in buffer-sized steps per event tick - see the note where the
+    // IAudioClock binding used to be). The pump counts the frames the device ACCEPTS instead:
+    // every ReleaseBuffer is an exact, local truth, on every driver.
     let period_frames = match client.buffer_size() {
         Ok(f) => f.max(1),
         Err(e) => {
@@ -2232,7 +2217,7 @@ fn finish_open(
         },
     };
     neg.period_frames = period_frames;
-    Ok((PumpBundle { client, render, clock }, neg, event))
+    Ok((PumpBundle { client, render }, neg, event))
 }
 
 // --------------------------------------------------------------------------- the stream
@@ -2498,7 +2483,12 @@ fn wasapi_pump(
         ppqn: 960,
     };
     let budget = Duration::from_secs_f64(block as f64 / f64::from(neg.rate.max(1)));
-    let mut device_frames = 0u64;
+    // Frames the device has ACCEPTED: every frame handed over by a successful ReleaseBuffer,
+    // preroll included. This count — not a clock read — is the drift metric's numerator (#76:
+    // IAudioClock's GetPosition advances in buffer-sized steps per event tick on these
+    // endpoints; the pump's own release count is exact on every driver, and a pump that
+    // under-feeds a running device tells that truth through the xrun counters beside it).
+    let mut delivered_frames = 0u64;
     let start = Instant::now();
 
     // One callback block: audit + budget + ctx advance + FIFO push. Shared by prime and loop.
@@ -2530,11 +2520,15 @@ fn wasapi_pump(
     // Preroll the device buffer, then Start. (Event-driven preroll: fill once; the first event
     // arrives one period later.) The FIFO was just primed above one full period, so the write
     // cannot starve; all raw-pointer discipline lives inside write_from_fifo.
-    let preroll = owned
-        .bundle
-        .render
-        .write_from_fifo(neg.period_frames, ch, neg.fmt, &mut owned.fifo)
-        .map(|_| ());
+    let preroll =
+        owned.bundle.render.write_from_fifo(neg.period_frames, ch, neg.fmt, &mut owned.fifo).map(
+            |_| {
+                // The whole preroll was RELEASED to the device buffer — accepted whether or not
+                // the FIFO could fill it (a shortfall went out as silence). Counting it keeps the
+                // first in-loop drift reading from opening one period short of the truth.
+                delivered_frames += u64::from(neg.period_frames);
+            },
+        );
     if let Err(e) = preroll {
         // Some shared-mode stacks refuse GetBuffer before Start; not fatal — the first event
         // writes a full period anyway (a starvation xrun is counted if it comes to that).
@@ -2580,27 +2574,13 @@ fn wasapi_pump(
             break;
         }
 
-        // Device clock → drift against wall time (the aggregator's future PLL input).
-        match owned.bundle.clock.as_ref().and_then(|c| c.position()) {
-            Some(pos) => {
-                device_frames = pos;
-                diag.record_device_clock(device_frames, start.elapsed());
-            },
-            None => {
-                // No clock service: count periods (exact only while nothing is dropped — the
-                // honest fallback, labelled in the snapshot by drift staying near zero).
-                device_frames += period_frames as u64;
-                diag.record_device_clock(device_frames, start.elapsed());
-            },
-        }
-
         // Write one device period (minus padding) from the FIFO. All raw-pointer discipline
         // lives inside write_from_fifo; the pointer never reaches this scope.
-        let write = (|| -> Result<(), HalError> {
+        let write = (|| -> Result<u64, HalError> {
             let padding = owned.bundle.client.current_padding()? as usize;
             let writable = period_frames.saturating_sub(padding);
             if writable == 0 {
-                return Ok(());
+                return Ok(0);
             }
             let got = owned.bundle.render.write_from_fifo(
                 writable as u32,
@@ -2610,21 +2590,34 @@ fn wasapi_pump(
             )?;
             if got < writable * ch {
                 // FIFO starvation: the remainder was silence (pop_into_* zero-filled) and the
-                // glitch is counted — audible truth, counted truth.
+                // glitch is counted — audible truth, counted truth. The device still ACCEPTED
+                // the full `writable`, and the drift metric says so: two truths, two counters,
+                // neither dressed as the other.
                 diag.record_xrun();
             }
-            Ok(())
+            Ok(writable as u64)
         })();
-        if let Err(e) = write {
-            diag.record_device_error();
-            let hr = extract_hr(&e);
-            shared.last_hr.store(i64::from(hr), Ordering::Relaxed);
-            let removed = hr == AUDCLNT_E_DEVICE_INVALIDATED;
-            shared.state.store(
-                state_to_u8(if removed { StreamState::Removed } else { StreamState::Failed }),
-                Ordering::Release,
-            );
-            break;
+        match write {
+            // Drift against wall time, re-derived per #76: frames the device ACCEPTED vs the
+            // frames the negotiated rate promises. A healthy stream sits near 0 ppm in BOTH
+            // share modes; the old GetPosition derivation read +1.2 M ppm on a soaked-clean
+            // shared stream (§4b) and hid a real half-throughput exclusive inside the same
+            // SUSPECT label (attempt 3, §4e) — one label, two opposite stories, no verdict.
+            Ok(released) => {
+                delivered_frames += released;
+                diag.record_device_clock(delivered_frames, start.elapsed());
+            },
+            Err(e) => {
+                diag.record_device_error();
+                let hr = extract_hr(&e);
+                shared.last_hr.store(i64::from(hr), Ordering::Relaxed);
+                let removed = hr == AUDCLNT_E_DEVICE_INVALIDATED;
+                shared.state.store(
+                    state_to_u8(if removed { StreamState::Removed } else { StreamState::Failed }),
+                    Ordering::Release,
+                );
+                break;
+            },
         }
 
         // Refill: keep the FIFO at one period + one block of cushion. Bounded work per event:
@@ -2816,7 +2809,6 @@ mod tests {
         );
         assert_eq!(IID_IAUDIO_CLIENT.data4[7], 0xB2);
         assert_eq!(IID_IAUDIO_RENDER_CLIENT.data1, 0xF294_ACFC);
-        assert_eq!(IID_IAUDIO_CLOCK.data2, 0x3FBA);
         assert_eq!(SUBTYPE_IEEE_FLOAT.data3, 0x0010);
         assert_eq!(SUBTYPE_PCM.data1, 1);
         assert_eq!(PKEY_DEVICE_FRIENDLY_NAME.pid, 14);

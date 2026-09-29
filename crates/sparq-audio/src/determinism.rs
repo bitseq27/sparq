@@ -98,7 +98,16 @@ pub struct World {
 }
 
 impl World {
-    /// The reference chain the scripts mutate over: sine → gain → rms, plus one unwired spare.
+    /// The reference chain the scripts mutate over: sine → gain → { rms, spare } — the spare
+    /// gain fed from the chain gain's output. The spare USED to sit unwired: legal under v0's
+    /// unenforced `required`, illegal under increment 7's host-side enforcement, so the world
+    /// wires it. Fed from the chain gain (not the sine) on purpose: the spare is the world's
+    /// initial master (highest-id audio-out node), so every retune mutation of the chain gain
+    /// reaches the rendered samples and the script's hash stays sensitive to parameter edits.
+    /// The spare stays a gain — the retune target, a master candidate and a connect
+    /// destination, the reasons it exists. A disconnect mutation can still bare it, and the
+    /// candidate's rebuild is then REFUSED and counted: the enforcement exercising exactly the
+    /// path this harness exists to stress.
     #[must_use]
     pub fn initial() -> Self {
         let mut graph = Graph::new();
@@ -106,10 +115,13 @@ impl World {
         let gain = graph.add_node(0);
         let rms = graph.add_node(0);
         let spare = graph.add_node(0);
-        // sine.out(0) → gain.in(0); gain.out(1) → rms.in(0) — the reference chain, plus one
-        // unwired spare gain so early mutations have somewhere to go.
+        // sine.out(0) → gain.in(0); gain.out(1) → rms.in(0); gain.out(1) → spare.in(0) — the
+        // reference chain plus the fed spare (a plain audio fan-out from the chain gain), so
+        // early mutations have somewhere to go and the initial world is a legal patch under
+        // the required-input enforcement.
         let _ = graph.connect(PortRef::new(sine, 0), PortRef::new(gain, 0), EdgeKind::Plain);
         let _ = graph.connect(PortRef::new(gain, 1), PortRef::new(rms, 0), EdgeKind::Plain);
+        let _ = graph.connect(PortRef::new(gain, 1), PortRef::new(spare, 0), EdgeKind::Plain);
         let mut kinds = HashMap::new();
         kinds.insert(sine, KIND_SINE);
         kinds.insert(gain, KIND_GAIN);
@@ -437,8 +449,8 @@ mod tests {
         assert_eq!(r.blocks, 1);
         assert_eq!(r.swaps, 0);
         assert_eq!(r.refused, 0);
-        assert_eq!(r.final_nodes, 4, "sine → gain → rms + the spare");
-        assert_eq!(r.final_edges, 2);
+        assert_eq!(r.final_nodes, 4, "sine → gain → rms + the spare fed from the chain gain");
+        assert_eq!(r.final_edges, 3, "the world is a legal patch under the required enforcement");
     }
 
     #[test]

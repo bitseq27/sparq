@@ -2,30 +2,36 @@
 REM ===========================================================================
 REM  sparq test004 - WO-006 EXCLUSIVE acceptance: the run that closes the WO.
 REM
-REM  THE CONTRACT: one file from Qwen - this script, plus the increment-1.4
+REM  THE CONTRACT: one file from Qwen - this script, plus the increment-1.5
 REM  sync zip applied first - see below. Run it, answer its prompts, send back
 REM  ONE file: test004-digest.log from the repo root - the compact copy this
 REM  script makes at the end. The full test004.log stays on disk.
 REM
-REM  PREREQUISITE: sync-wo006-inc14.zip must be extracted at the repo root
-REM  BEFORE this run - on top of the chain through sync-wo008-inc6.zip, which
-REM  your 2026-09-28 build line already showed APPLIED. It carries the
-REM  defect-#89 fix: your 09-28 run OPENED exclusive - i24-in-32, the rung we
-REM  wanted - but at the driver's 3 ms reported minimum, and the driver could
-REM  not SUSTAIN it: a ~33 ms stall every ~62.5 ms, 159 late wakes in 10 s,
-REM  half throughput, drift -49 percent, no clean tone. The open now asks the
-REM  driver's DEFAULT period first - the number its engine actually runs; the
-REM  shared 10 ms engine soak-ran 2 h clean on this same machine - and the
-REM  alignment two-step rounds the ask UP to the driver's granularity instead
-REM  of adopting it. The build step verifies the new stamp.
+REM  PREREQUISITE: sync-wo006-inc15.zip must be extracted at the repo root
+REM  BEFORE this run - on top of the chain through sync-wo006-inc14.zip, which
+REM  your 2026-09-28 EVENING build line already showed APPLIED - 151 files
+REM  match sync wo006-inc14. Attempt 3 proved the inc-1.4 period fix works at
+REM  OPEN - the driver granted its default 960 fr / 10.00 ms, the predicted
+REM  pass shape - and then stalled anyway: the same ~16 stalls per second,
+REM  the same half throughput, at a different period. Two findings, two fixes
+REM  in this bundle. ONE: the exclusive rate list was being sieved through
+REM  the SHARED probe results, so your 48 kHz ask was adjusted UP to the one
+REM  rate the exclusive path misbehaves at - the sweep now asks the DRIVER at
+REM  every standard rate, and attempt 4 asks it for 48 kHz exclusive, which
+REM  it has never been asked before. TWO: the drift metric no longer reads
+REM  the device clock - fiction on this endpoint, defect #76 - but the frames
+REM  the device ACCEPTED against the wall, so half throughput now reads
+REM  -49 percent as a measurement, and the play/soak verdicts act on it.
+REM  The build step verifies the new stamp.
 REM
-REM  WHAT PASSES THE WO: [03] caps must now list EXCLUSIVE RATES for the
-REM  Behringer endpoints - [04] the exclusive tone must be audible, and its
-REM  log line names the rung that opened - [05] unplug mid-run in exclusive
-REM  must end in a clean Removed state - [07] the 2 h soak at 96 kHz / 64
-REM  exclusive must finish with ZERO xruns. If [04] still refuses, the error
-REM  now carries the full four-rung probe table with HRESULTs - that table is
-REM  the diagnosis, send the log back either way.
+REM  WHAT PASSES THE WO: [03] caps must list MULTIPLE exclusive rates for the
+REM  Behringer endpoints - 48000 among them - [04] the exclusive tone must be
+REM  CLEAN at 48 kHz, its open line naming rate, rung and period - [05] unplug
+REM  mid-run must end in a clean Removed state - [07] the 2 h soak at the rate
+REM  [04] proved must finish with ZERO xruns; 96 kHz stays on offer at the
+REM  prompt as the stretch the WO text named. If [04] still refuses, the error
+REM  carries the full four-rung probe table with HRESULTs - the table IS the
+REM  diagnosis, send the log back either way.
 REM
 REM  SAFE TO RE-RUN: the log appends with a dated banner per run.
 REM
@@ -35,7 +41,7 @@ REM  defect #69.
 REM ===========================================================================
 setlocal EnableDelayedExpansion
 set "TVER=004"
-set "RATE=96000"
+set "RATE=48000"
 set "BLOCK=64"
 title sparq test%TVER%
 chcp 65001 >nul 2>&1
@@ -60,7 +66,8 @@ del "%TMPF%" >nul 2>&1
 
 call :say ================================================================
 call :say  sparq test%TVER% - WO-006 EXCLUSIVE acceptance run
-call :say  increment 1.4: the exclusive open asks the engine period - defect #89
+call :say  increment 1.5: the exclusive rate envelope is its own probe - defect #91
+call :say  drift reads delivered frames vs wall - defect #76 shipped
 call :say  at the end you send back ONE file: test%TVER%-digest.log - the compact
 call :say  copy this script makes; the full test%TVER%.log stays on disk
 call :say ================================================================
@@ -92,8 +99,8 @@ call :say operator confirmed prep complete
 REM ---- [02] build + stamp ---------------------------------------------------
 call :say " "
 call :say [02] build - the sync must have landed: the stamp changes because
-call :say      period.rs and wasapi.rs moved. If the guard says stale and rebuilds,
-call :say      that is the zip-sync freshness trap - normal.
+call :say      wasapi.rs, hal/mod.rs, diag.rs, play/hal.rs and soak.rs moved. If the
+call :say      guard says stale and rebuilds, that is the freshness trap - normal.
 set "CMD_CLICK_STARTED="
 set "SPARQ_DOUBLE_CLICKED="
 set "CMD=call scripts\build.bat"
@@ -110,9 +117,13 @@ set "RC02B=!RC!"
 REM ---- [03] caps - the first checkpoint ---------------------------------------
 call :say " "
 call :say [03] capabilities - CHECKPOINT: the Behringer endpoints should now list
-call :say      exclusive rates instead of "exclusive none". If they still say none,
-call :say      the four-rung ladder found no format the driver accepts - the [04]
-call :say      probe table will say exactly which HRESULT each rung got.
+call :say      MULTIPLE exclusive rates - 44100, 48000 and up - instead of the lone
+call :say      96000 the shared sieve let through in attempt 3. The exclusive sweep
+call :say      now asks the DRIVER at every standard rate; before, it only asked
+call :say      where the ENGINE had already said yes. If 48000 is still absent, the
+call :say      driver really refuses it - that is a finding, send the caps block
+call :say      back. If they say "exclusive none", no rung fit at ANY rate - the
+call :say      [04] probe table will name the HRESULTs.
 set "CMD=target\release\sparq.exe devices --caps"
 call :run "devices --caps"
 set "RC03=!RC!"
@@ -120,13 +131,18 @@ set "RC03=!RC!"
 REM ---- [04] exclusive tone - the moment of truth ----------------------------------
 call :say " "
 call :say [04] WASAPI EXCLUSIVE playback - a 10 s 220 Hz tone at -12 dB.
-call :say      The open line names the rung: f32, i24-in-32, i32 or i16.
-call :say      For the UMC 204HD the expectation is i24-in-32 with conversion,
-call :say      and a device period of 960 fr - 10.00 ms - or 1152 fr - 12.00 ms -
-call :say      if the driver enforces its 288 fr alignment - with the 64-frame
-call :say      sparq block riding the FIFO beneath it: the defect 79/89 fix.
-call :say      A 288 fr - 3.00 ms - period is the defect-89 signature: it opens,
-call :say      then stalls. Send the log back if you see one.
+call :say      The open line names rate, rung and period. The expectation for the
+call :say      UMC 204HD is now 48000 Hz - the rate play asks and the decoupled
+call :say      probe should list - i24-in-32 with conversion, and a device period
+call :say      of 480 fr - 10.00 ms - with the 64-frame sparq block riding the
+call :say      FIFO beneath it. NO "adjusted" line should print above it: if you
+call :say      see one bending 48000 to 96000 again, the driver refused 48 kHz
+call :say      exclusive at probe time - a finding; send the caps block back.
+call :say      The drift line now reads delivered frames vs wall: a healthy run
+call :say      sits within a few hundred ppm of zero. The attempt-3 signature -
+call :say      late wakes every status line, drift near -50 percent - repeated at
+call :say      48 kHz would mean the stall is rate-independent. Either way the
+call :say      digest is now self-diagnosing; send it back.
 call :say Press any key when ready.
 pause >nul
 set "CMD=target\release\sparq.exe play --backend wasapi-exclusive --seconds 10 --gain -12"
@@ -138,13 +154,16 @@ if "!RC04!"=="0" (
 ) else (
     findstr /c:"wasapi-exclusive]: opened" "%TMPF%" >nul 2>&1 && set "EXCL_OPENED=1"
     call :say HINT: the probe table in the error names each rung's HRESULT.
-    call :say Busy means another app holds the device; Format means no rung fits.
-    call :say A device-period table means no period fit - defect 79, increment 1.3.
-    call :say If it OPENED but ran rough, the opened period line is the diagnosis:
-    call :say late wakes against the period, drift near -50 percent and xruns on
-    call :say every status line were defect 89 - a period the driver accepted at
-    call :say Initialize and could not sustain. Increment 1.4 asks the default.
-    call :say Send the log back either way - the table IS the diagnosis.
+    call :say Busy means another app holds the device; Format means no rung fits
+    call :say at ANY probed rate. A device-period table means no period fit.
+    call :say If it OPENED but ran rough, read the open line's RATE first - 48000
+    call :say is the new expectation, the decoupled probe's doing. Late wakes on
+    call :say every status line plus drift near -50 percent is the defect-92 stall
+    call :say signature - and drift is now delivered frames vs wall, so -50
+    call :say percent is a MEASUREMENT, not a clock artifact: the device consumed
+    call :say half the negotiated rate. If it says that at 48 kHz too, the stall
+    call :say is rate-independent - send the digest back; the next lever is push
+    call :say mode, already named in the notes. The table IS the diagnosis.
 )
 call :askyn "did you hear a clean 10-second tone"
 set "HEARD04=!ANS!"
@@ -177,9 +196,12 @@ set "HEARD06=!ANS!"
 REM ---- [07] THE acceptance soak ------------------------------------------------------
 call :say " "
 if "!EXCL_OK!"=="1" (
-    call :say [07] THE ACCEPTANCE SOAK - 2 h, 96 kHz / 64, WASAPI EXCLUSIVE, zero
-    call :say      xruns required. This is the criterion that closes WO-006 and fires
-    call :say      ADR-008: the cpal bootstrap gets deleted afterwards.
+    call :say [07] THE ACCEPTANCE SOAK - 2 h at the rate [04] just proved, WASAPI
+    call :say      EXCLUSIVE, zero xruns required. This is the criterion that closes
+    call :say      WO-006 and fires ADR-008: the cpal bootstrap gets deleted after.
+    call :say      The WO text named 96 kHz; that wording predates the discovery
+    call :say      that the lone-rate envelope was a probe bug - the run sheet says
+    call :say      what the amended acceptance is and 96 kHz stays on offer below.
 ) else (
     call :say [07] exclusive did not run clean, so this is the SHARED rehearsal
     call :say      again, not the acceptance run. The log says which - honesty over vanity.
@@ -188,12 +210,14 @@ call :say      It MAKES SOUND the whole run; the machine must not sleep.
 if "!EXCL_OK!"=="1" (set "SOAKBE=wasapi-exclusive") else (set "SOAKBE=wasapi-shared")
 set "SOAKMIN=120"
 set /p "SOAKMIN=      minutes [Enter = 120 acceptance, 15 = rehearsal, 0 = skip]: "
+set "SOAKRATE=%RATE%"
+set /p "SOAKRATE=      rate [Enter = %RATE% - the rate [04] proves; 96000 = the WO-text stretch]: "
 if "!SOAKMIN!"=="0" (
     set "RC07=SKIP"
     call :say soak skipped by operator
 ) else (
-    call :say soaking !SOAKMIN! min at %RATE% Hz / %BLOCK% on !SOAKBE! - starting now.
-    powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; & 'target\release\sparq.exe' soak --minutes !SOAKMIN! --report-every 30 --backend !SOAKBE! --rate %RATE% --block %BLOCK% 2>&1 | ForEach-Object { $s = [string]$_; Write-Host $s; Add-Content -LiteralPath '%LOG%' -Value $s -Encoding UTF8 }; exit $LASTEXITCODE"
+    call :say soaking !SOAKMIN! min at !SOAKRATE! Hz / %BLOCK% on !SOAKBE! - starting now.
+    powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; & 'target\release\sparq.exe' soak --minutes !SOAKMIN! --report-every 30 --backend !SOAKBE! --rate !SOAKRATE! --block %BLOCK% 2>&1 | ForEach-Object { $s = [string]$_; Write-Host $s; Add-Content -LiteralPath '%LOG%' -Value $s -Encoding UTF8 }; exit $LASTEXITCODE"
     set "RC07=!ERRORLEVEL!"
 )
 
@@ -217,14 +241,14 @@ if defined RC03 call :verdict "[03] devices --caps" "!RC03!"
 if defined RC04 call :verdict "[04] play EXCLUSIVE" "!RC04!"
 if defined RC05 call :say      [05] unplug rc=!RC05! on !TESTBE! - judged from the TEXT above
 if defined RC06 call :verdict "[06] recovery play" "!RC06!"
-if defined RC07 call :verdict "[07] soak !SOAKMIN! min on !SOAKBE!" "!RC07!"
+if defined RC07 call :verdict "[07] soak !SOAKMIN! min at !SOAKRATE! Hz on !SOAKBE!" "!RC07!"
 if defined RC08 call :verdict "[08] post-soak conformance" "!RC08!"
 call :say tone heard - [04] !HEARD04!  [06] !HEARD06!
 call :say steps failing on rc: !FAILED!
 call :say " "
 if "!EXCL_OK!"=="1" if "!RC07!"=="0" call :say WO-006 ACCEPTANCE: all criteria met on hardware - send the digest!
 if not "!EXCL_OK!"=="1" if not "!EXCL_OPENED!"=="1" call :say exclusive still refused - the [04] probe table in this log is the diagnosis.
-if not "!EXCL_OK!"=="1" if "!EXCL_OPENED!"=="1" call :say exclusive OPENED but did not run clean - the [04] period line, late wakes and drift are the diagnosis.
+if not "!EXCL_OK!"=="1" if "!EXCL_OPENED!"=="1" call :say exclusive OPENED but did not run clean - the [04] open line rate and period, the late wakes and the delivered-vs-wall drift are the diagnosis.
 call :say " "
 REM ---- the compact copy: the full log stays here, the digest travels --------
 set "HAVE_PY=0"

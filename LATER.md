@@ -338,10 +338,20 @@ watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the det
     losing the exactness property, and the safety it buys is already provided by the clamp where
     it matters. If a listening test ever says the momentum overshoot is wrong for a given wire,
     the remedy is a new vocabulary word with its own gate, never a quiet change to this one.
-* **`required`-unconnected inputs are not refused at build** (v0 behaviour kept deliberately: the
+* ~~**`required`-unconnected inputs are not refused at build** (v0 behaviour kept deliberately: the
   determinism world's unwired spare depends on it, and moving refusals mid-stress would move the
   harness counters). Host-side enforcement gets its own increment, with the stress baseline moved
-  on purpose and recorded.
+  on purpose and recorded.~~ **SHIPPED as WO-008 increment 7 (2026-09-29, `WO008-INC7-PLAN.md`):**
+  `Executor::build` refuses a bare required input in words; the world's spare is wired (from the
+  chain gain, so retunes reach the master), the canvas demo's spare became a bare `out/main`, the
+  unconnected-signal semantics live at optional ports (their declared home), and the baseline
+  moved on purpose and is recorded: **`7bb06379bd6845e5` · 2 383 swaps · 7 617 refused** (debug
+  == release), was `b42068ec7b206789` · 7 203 · 2 797.
+* **A canvas badge for the required-unconnected node.** The refusal surfaces verbatim in the
+  shell log when a render is attempted (the bridge passes `ExecError` through), but the node
+  itself draws no warning — the operator learns at RENDER WAV, not at drop time. A red hairline
+  or port-badge for "this node's required input is bare" is a WO-013-side painter increment,
+  parked beside the watchdog→UI hairline it would share machinery with.
 * ~~Cross-thread meter/analysis publication~~ **SHIPPED as WO-008 increment 5 (2026-09-27),
   analysis payloads extended in WO-014 increment 5:**
   `AudioEngine` publishes per-node `MeterUpdate`s (peak/rms/status + the stream's block count)
@@ -378,8 +388,9 @@ watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the det
 * **Digest hooks for the remaining test scripts.** `test004`, `test006` and `gates` now make their `-digest.log` copies at the end of a run (2026-09-28, WO-006 inc 1.4 — the operator's context-window ask). `test001`/`test002`/`test003`/`test005` still rely on `scripts\digest.bat` or a manual `python tools\log_digest.py <log>`; add the same small hook the next time each script is touched for its own reasons — not worth a bundle by itself.
 * **`test005`'s stray-artefact check is one file deep.** Step [00] looks for `decode (2).rs` by name (defect #71). Step [00b] now catches any stray under `crates/*/src` generically — as an `EXTRA` warning plus a fingerprint failure — so the named check can go the next time that script is touched.
 
-## WO-006 increment 1.4+ (parked from the exclusive acceptance, 2026-09-28 — defect #89 fixed on the open path)
+## WO-006 increment 1.5+ (parked from the exclusive acceptance, 2026-09-29 — #91 fixed, #76 shipped, #92 open on the device side)
 
-* **Runtime stall detection in the pump.** #89's open-path fixes ask the engine's own cadence first, but the general hole remains: a driver that ACCEPTS a period and then STALLS on it is only observable at runtime (attempt 2's signature: sustained wake intervals ≈ 2× the period with a healthy FIFO and no `WAIT_TIMEOUT`). A detector could flag it in the diag snapshot — or, more ambitiously, trigger one automatic reopen at the next ladder rung. Parked because the reopen half deserves its own increment: re-activation from the pump thread touches COM apartment ownership, the event handle's lifecycle and the stream state machine, each worth more design than a fix can ride on. The honest open line (`ask N fr`) and the late-wake/jitter/drift triple already make any such case diagnosable from the digest.
+* **Runtime stall REACTION (the reopen half stays parked; the detection half shipped).** Inc 1.5 shipped the instrument: drift is delivered-frames-vs-wall (#76), suspect past ±1 % after a 2 s trust window, and the play/soak verdicts ACT on it — the attempt-2/3 signature (sustained wake intervals ≫ the period, half throughput, healthy FIFO, no `WAIT_TIMEOUT`) now reads as a measurement with a verdict instead of an "implausible clock" excuse. What stays parked is a REACTION beyond the verdict — e.g. one automatic reopen at a coarser cadence or a lower rate from a startup verification window. Attempt 3's evidence narrowed the design space first: the stall is period-independent (identical ~16/s × ~33–40 ms wall at 3 ms and 10 ms periods), so reopening *within the period ladder* buys nothing unless the cadence jumps to ≥ 5× the stall duration — which in event mode means ≥ 50 ms of latency, worse than the shared engine's 22.67 ms. If attempt 4 shows the stall is also rate-independent, the reopen target is not a ladder rung at all: it is push mode (below). The control-side shape (verify ~1 s after start, stop, reopen, print both truths) avoids the pump-thread COM/event/state-machine hazards this entry was originally parked for — but it inherits their design burden the moment the reaction is automatic rather than operator-decided.
+* **Push-mode exclusive — #92's named lever if attempt 4 comes back rate-independent.** Event-driven exclusive cannot legally bank more than one period (`hnsPeriodicity` ≡ `hnsBufferDuration` under `EVENTCALLBACK`; the pump's per-wake write is capped at one buffer — attempts 2–3 measured exactly that identity, windows-notes §4d/§4e). Push mode lifts the law: `Initialize` without `EVENTCALLBACK`, periodicity 0, buffer 2–4 periods, pump self-paces (~period/4) and writes against padding — the shape the audio engine itself runs on this endpoint (2112 fr over ~960 fr ticks, 2 h clean) and the default of mature WASAPI outputs on this driver class. Design before code, its own increment: the pump's self-pacing discipline (timer granularity; the callback-side no-clock rule is untouched — the pump is harness side), ADR-004's "event-driven" wording (an addendum, not a quiet change), late-wake semantics when the expected cadence is a policy number instead of a driver number, and the `BackendKind` display names.
 * **A period probe in caps.** `devices --caps` probes exclusive RATES but not exclusive PERIODS: a ~200 ms `Initialize` probe per ladder candidate would have surfaced #89 at step [03] instead of step [04] — at the cost of touching the device during enumeration and a slower caps command. Parked until a device needs it; the [04] evidence path is sufficient (and the digest keeps it cheap).
-* **Increment 2 backlog unchanged** (`docs/hal/windows-notes.md` §5): ASIO, full duplex, round-trip measurement, the STA retry for #75, clock-drift re-derivation per #76.
+* **Increment 2 backlog** (`docs/hal/windows-notes.md` §5): ASIO, full duplex, round-trip measurement, the STA retry for #75 — and no longer the clock-drift re-derivation (#76 shipped in inc 1.5: delivered-vs-wall, the `IAudioClock` binding deleted, both §4b fixtures pinned as tests).

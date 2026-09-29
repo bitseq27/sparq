@@ -149,3 +149,154 @@ exec: PASS
  claim waits for the physical screen, as always.
  operator opened the window session
  window closed - ui.log saved by ui.bat
+
+===== test006 RUN 28/09/2026 21:17:22.71 on SATURN user bitseq =====
+ ================================================================
+ sparq test006 - WO-013 increments 3+4+5: browser, inspector, levels, rename, scroll, LOD
+ at the end you send back ONE file: test006.log from the repo root
+ ================================================================
+ " "
+ [00] environment
+
+---- [RUN] os version ----
+
+Microsoft Windows [Version 10.0.19045.6216]
+---- [RC 0] os version ----
+ tree clean, no stray artefacts
+ " "
+ [00b] sync stamp - every file that decides the binary, hashed against
+ SYNC-STAMP.txt. A FAIL here names files; it is never a rustc error.
+
+---- [RUN] sync check - tools\sync_check.py ----
+sync_check: OK - sync wo006-inc14 (sent 2026-09-28)
+  151 of 151 stamped files match byte-for-byte
+  src fingerprint 92f/2001521B - matches the stamp
+  no extras, no line-ending drift, nothing soft differing
+---- [RC 0] sync check - tools\sync_check.py ----
+ " "
+ [01] build - the five first-party crates always recompile now, so that a
+ zip-restored mtime can never serve the last increment's rlib.
+
+---- [RUN] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+sync_check: OK - 151 files match sync wo006-inc14, src 92f/2001521B
+ note: tree content unchanged since the last good build - building incrementally.
+ building sparq.exe (release, hal-wasapi + bootstrap-audio + ui-window) ...
+ first build takes a few minutes (wgpu is big); later builds are incremental.
+
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.19s
+ stamp guard: sources 92f/2001521B  -  binary 92f/2001521B
+
+sparq 0.0.0-phase0 · newest source 20724 d since epoch · src 92f/2001521B
+  module api v0 (unfrozen) · kernel 0.0.0-phase0
+
+  If that source stamp is older than your last sync, this binary is stale.
+  Fix: run scripts\build.bat, or delete target\release\sparq.exe.
+
+ built: Q:\morphosis\code\sparq\target\release\sparq.exe
+ size : 9891328 bytes
+
+ next:  scripts\devices.bat   then   scripts\run.bat
+
+ log saved to Q:\morphosis\code\sparq\scripts\..\logs\build.log
+---- [RC 0] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+
+---- [RUN] version stamp ----
+sparq 0.0.0-phase0 · newest source 20724 d since epoch · src 92f/2001521B
+  module api v0 (unfrozen) · kernel 0.0.0-phase0
+
+  If that source stamp is older than your last sync, this binary is stale.
+  Fix: run scripts\build.bat, or delete target\release\sparq.exe.
+---- [RC 0] version stamp ----
+ " "
+ [02] module registry - the seventeen manifests, strict
+
+---- [RUN] modules --strict ----
+sparq modules: scanning `modules` — 17 manifest(s) found
+  loaded 17:
+    sparq/ana/rms                      v0.1.0      2 ports, 1 params
+    sparq/ana/tap                      v0.1.0      4 ports, 1 params
+    sparq/dsp/scope                    v0.1.0      2 ports, 5 params
+    sparq/env/ad                       v0.1.0      2 ports, 4 params
+    sparq/flt/svf                      v0.2.0      3 ports, 4 params
+    sparq/fx/bitcrush                  v0.1.0      2 ports, 4 params
+    sparq/mod/clk-div                  v0.1.0      2 ports, 3 params
+    sparq/mod/lfo                      v0.2.0      2 ports, 5 params
+    sparq/out/main                     v0.1.0      2 ports, 2 params
+    sparq/syn/membrane                 v0.1.0      2 ports, 5 params
+    sparq/syn/noise                    v0.1.0      1 ports, 2 params
+    sparq/syn/polyblep                 v0.1.0      1 ports, 5 params
+    sparq/syn/sine                     v0.1.0      1 ports, 2 params
+    sparq/util/delay                   v0.2.0      2 ports, 6 params
+    sparq/util/gain                    v0.1.0      2 ports, 1 params
+    sparq/util/mixer                   v0.2.0      13 ports, 24 params
+    sparq/util/panner                  v0.1.0      2 ports, 2 params
+---- [RC 0] modules --strict ----
+ " "
+ [03] offline render - the exec demo chain, 5 s, no device
+
+---- [RUN] exec --out exec.wav --seconds 5 ----
+sparq exec · WO-008 executor render · patch `demo`
+  registry    17 built-in module(s) compiled in
+  discovery   17 manifest(s) scanned under `modules` · 17 shadowed by built-ins · 0 without a factory
+  patch       sine(440 Hz, 0.5) → gain(0.5) → master · rms analysis tap · 3 node(s), 2 edge(s)
+  budget      1796 bytes of audio buffers, all pre-allocated
+  meters      rms tap value Some(0.16621882) (0.25 amp sine, 0.59-cycle window → ≈ 0.16..0.19) · master peak Some(0.24996915) rms Some(0.16621882)
+  rendered    3750 blocks · 240000 frames · hash d46736fd9a1c48a1
+  wrote       exec.wav (1920000 bytes of sample data, f32 · 240000 frames × 2 ch)
+exec: PASS
+---- [RC 0] exec --out exec.wav --seconds 5 ----
+ " "
+ [04] canvas bridge - the audit drives synthetic touch through 25 smokes,
+ including the five new ones: rename commit + undo, rename cancel,
+ the cv wire lit from its own port value, the inspector two-finger
+ scroll, the LOD walk. Its RENDER WAV smoke writes canvas-render.wav
+ at MANIFEST DEFAULTS - the baseline for step [07].
+
+---- [RUN] ui --audit - 25 smokes incl. rename, cv levels, scroll, LOD walk ----
+sparq exec · WO-008 executor render · patch `demo`
+  registry    17 built-in module(s) compiled in
+  discovery   17 manifest(s) scanned under `modules` · 17 shadowed by built-ins · 0 without a factory
+  patch       sine(440 Hz, 0.5) → gain(0.5) → master · rms analysis tap · 3 node(s), 2 edge(s)
+  budget      1796 bytes of audio buffers, all pre-allocated
+  meters      rms tap value Some(0.16621882) (0.25 amp sine, 0.59-cycle window → ≈ 0.16..0.19) · master peak Some(0.24996915) rms Some(0.16621882)
+  rendered    3750 blocks · 240000 frames · hash d46736fd9a1c48a1
+  wrote       exec.wav (1920000 bytes of sample data, f32 · 240000 frames × 2 ch)
+exec: PASS
+---- [RC 0] ui --audit - 25 smokes incl. rename, cv levels, scroll, LOD walk ----
+ " "
+ [05] baseline - hash the default-param render and keep a copy to A/B listen
+ canvas-render.wav MISSING - step 04 did not write; step 07 will say CANNOT-CHECK.
+ " "
+ [06] WINDOW SESSION - the window opens when you press a key. In it:
+ A. long-press the EMPTY canvas - tap ADD MODULE - type sine on the
+ keyboard - tap the Sine row. A Sine node appears where you pressed.
+ B. tap the new Sine node - the INSPECTOR shows Frequency and
+ Amplitude - drag the Frequency slider. The value follows your
+ finger; the log band reports Frequency = ... Hz when you lift.
+ C. long-press the empty canvas - tap RENDER WAV. This overwrites
+ canvas-render.wav WITH YOUR EDIT - step [07] hashes it.
+ D. drag the small ring near a wire END onto another port - the wire
+ moves. Three-finger tap - it returns, same wire.
+ E. three-finger tap again - the slider drag undoes, value returns.
+ F. long-press a NODE - tap RENAME - type a name - press ENTER:
+ the header shows it. Three-finger tap: the old name is back.
+ Reopen RENAME, press ESC or tap outside: cancels, name kept.
+ G. add a Mixer via the browser, tap it: 20 rows, the last ones
+ clipped. Two-finger drag UP inside the panel: the rows scroll,
+ the thin thumb at the right edge moves, the CANVAS does not.
+ H. bypass a node from its menu, then pinch two fingers together
+ on the canvas to zoom out: first the boxes lose ALL text -
+ states ride patterns now: hatched body = bypassed, dashed
+ border = muted, double border = locked, header chip = master.
+ Pinch further: dots and HAIRLINE wires; the bypassed dot is a
+ hollow ring. Compare with design\mockups\design-mode.svg and
+ write what differs into the H answer below.
+ I. wire the thesis chain: spawn an SVF via the browser, drag
+ gain OUT to svf IN, drag rms LEVEL to svf CUTOFF-MOD, then
+ long-press empty canvas - RENDER WAV. The cyan cv wire lights
+ from the rms value; the audio wires light as before.
+ Then close the window; the script continues by itself.
+ Over RDP the rasteriser is WARP - slow but functional; the 60 fps
+ claim waits for the physical screen, as always.
+ operator opened the window session
+ window closed - ui.log saved by ui.bat

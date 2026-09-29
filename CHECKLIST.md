@@ -6,69 +6,219 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-09-28, fifth session (handoff. The device moved: **test004 attempt 2 ran
-on SATURN** — both waiting bundles confirmed APPLIED by its build line (`sync_check: OK - 149
-files match sync wo008-inc6`) — and it split like attempt 1 did, only further along: **exclusive
-OPENED for the first time** (`i24-in-32 (converting)` @ 96 kHz on the UMC 204HD; caps, shared
-unplug→`Removed`, recovery, the 2 h shared soak and all three conformance suites PASSED) — and
-then the stream **stalled**: the open landed at **288 fr (3.00 ms)**, the driver's reported
-minimum/alignment granularity, and the driver could not sustain what it had accepted (one ~33 ms
-stall every ~62.5 ms, 159 late wakes / 10 s, HALF throughput, drift −49 %, no clean tone,
-rc 1). **Defect #89** — the third lying-`min` face, and the worst: `Initialize` says yes,
-runtime says no, and no open-path probe can see it. **WO-006 increment 1.4** was built the same
-day and sealed as **`sync-wo006-inc14.zip` (15 entries)** — all three doors the 3 ms ask could
-have come through are closed (default-first ladder for coarse engines; the alignment two-step
-rounds the ask UP to the granularity instead of adopting it; a silent-shrink guard with an
-honest open line), each as pure data in `hal/period.rs`, Linux-pinned on the exact attempt-2
-device shape. The session also shipped the operator's ask: **`tools/log_digest.py`** — the test
-scripts now end by writing a compact `-digest.log` copy (verdict lines byte-identical; only
-periodic status runs, cargo chatter and duplicate runs collapse; attempt 2's 67.6 KB log →
-31.0 KB) and **the digest is what gets sent back**. Sandbox-green: **757 tests**, goldens
-untouched by construction, both MSVC `hal-wasapi` cells clean. **Next step is DEVICE EVIDENCE:
-apply `sync-wo006-inc14.zip`, re-run `test004`, send back `test004-digest.log`.**
-Previous handoff (fourth session): **WO-008 increment 6** built and sealed as
-**`sync-wo008-inc6.zip` (17 entries)** — now APPLIED on the device: the host now PERFORMS the whole G4 vocabulary — `spline`
-is the parabola through the last three block values (equivalently a cubic Hermite with causal
-second-order tangents; one compiled copy in `CvInterp`, the same sentence in the matrix cell /
-§17 / the schema row / the author guide, pinned by the widened drift gate), exact for
-quadratic-in-block-index sweeps, bit-identical to `linear` on collinear knots, `linear`'s arrival
-timing, f64 with one rounding per frame, clamped to the wire's declared range (host-made momentum
-overshoot is bounded there and nowhere else — an out-of-range knot under hold/linear stays a
-visible SOURCE bug). The build refusal retired; `CvPlan` grew the two-slot history + the range;
-still zero audio-path allocations. `tests/cv_spline.rs` (8 gates) + 2 `port.rs` unit pins +
-contract_v1's refusal gate replaced by a behaviour gate. Sandbox-green: **752 tests**, every
-pre-existing golden unchanged, stress hash unmoved (debug AND release), all runnable clippy cells
-clean, selftest 9/9, ui-audit PASS (25 smokes), stamp **`src 92f/1986012B`**.
-**`sync-wo008-inc6.zip` is WAITING for the device, stacked on the still-WAITING
-`sync-wo014-inc6.zip`.** **The next step is still DEVICE EVIDENCE, not code**: apply both waiting
-bundles, then `test004` (the 🔴 exclusive-acceptance blocker), `test006` (steps F–I), and
-`gates.bat` on SATURN, with the logs wanted back.)
+**Last updated:** 2026-09-29, sixth session — SECOND increment of the same session (handoff.
+**The device applied `sync-wo006-inc15.zip`** (operator-confirmed; test004 attempt 4 has NOT
+come back yet — the 🔴 blocker stands, its pass shape in `WO006-INC15-RUN-SHEET.md`). The
+sandbox then built the checklist's named next candidate: **WO-008 increment 7 — host-side
+`required`-unconnected enforcement**, its own increment on purpose because it MOVES the
+declared baselines, exactly as LATER.md conditioned. Plan of record: `WO008-INC7-PLAN.md`
+(eight decisions before the code). `Executor::build` now refuses a bare `required` input in
+words (`ExecError::RequiredUnconnected` — node, module, port, both remedies); the vocabulary
+was already deliberate across the seventeen manifests (six single-input processors required;
+every matrix/display/sink/trigger optional), so NO manifest moved and `modules --strict` stays
+17/17. The two declared dependents moved with it: the determinism world WIRES its spare (from
+the chain gain — the spare is the initial master, so retunes reach the samples), and the canvas
+demo's fourth node became a bare `out/main` (the one module designed to sit bare; the master
+stays the chain gain and `canvas-render.wav` is bit-identical by construction — measured
+1 920 046 bytes, the device baseline's exact size). **The stress baseline moved on purpose and
+is recorded: `7bb06379bd6845e5` · 10 001 blocks · 2 383 swaps · 7 617 refused · 0 audio-path
+allocations, debug == release** (was `b42068ec7b206789` · 7 203 · 2 797); the cross-thread
+ledger moved with it and its status pin TIGHTENED (`Ok` only — `Silenced` would now mean the
+enforcement leaked). Sandbox-green: **762 tests**, every audio golden bit-identical (the three
+pinned exec renders re-verified at their durations), selftest 9/9, `ui --audit` PASS 25 smokes,
+every runnable clippy cell, 7 python gates. Sealed as **`sync-wo008-inc7.zip`** — WAITING for
+the device, stacked on the applied inc15. **Defect #93 found and remedied mid-increment:** the
+sandbox workspace drops any directory named `out` at message boundaries — `modules/out/main/
+sparqmod.toml` (stamp-COVERED) vanished; upstream GitHub 404'd on it too (repo rebuilt/private
+— #86's class again); the operator supplied the exact bytes, restored hash-verified against the
+seal (`725bf07a…`, 2 691 B); a durable recovery copy now lives at the workspace root's
+`sparq-recovery/`, and the environment notes carry the session-start discipline. **Next step:
+DEVICE EVIDENCE — apply `sync-wo008-inc7.zip` on top of inc15, run test004 (attempt 4),
+test006, gates (expected count is now 762), send the digests.**
+**SESSION 6 CLOSE — THE OPERATOR'S UX PIVOT (decisions recorded; NO code written for it yet).**
+The operator's call, verbatim intent: "start fleshing out the interface and start building
+patches and sounds … focus on the user experience now and come back to the backend refinement
+later." Two decisions were made through the question tool and are ratified here: **(1)
+RE-SEQUENCING — live canvas audio no longer waits for WO-006's exclusive acceptance.** The
+recorded gate existed because of the ADR-008 EXIT (deleting the cpal bootstrap, HAL becoming
+`play`'s default), not because of shared-mode live audio: shared is the most device-proven path
+in the project (2 h soak / 0 xruns, unplug→`Removed`, recovery, conformance — all on SATURN).
+The interim live vehicle is `wasapi-shared` at its negotiated ~22.67 ms — fine for building
+patches and sounds, not for stage monitoring. **The ADR-008 exit itself stays gated on attempt 4
+exactly as recorded — do not delete the bootstrap early.** **(2) FIRST UX INCREMENT = live audio
++ continuous meters** (sandbox item 6 below, which carries the research notes): the app-side glue
+over the inc-5 cross-thread halves, per-frame `read_meters` → `CanvasState.levels` (the painter
+path is DONE — "it only swaps the SOURCE"), with per-port meters + ring port ids riding it and
+the scope screen (analysis ring) as the named follow-on. The DEVICE track stays warm in
+parallel, unchanged and cheap: apply `sync-wo008-inc7.zip`, run attempt 4 (~15 min), test006
+F–I, gates (762 / `src 92f/2021628B` / stress `7bb06379bd6845e5`). The pivot cancels no device
+box and unblocks no gated deletion. Next session's FIRST act on the UX track: write the plan of
+record (decisions before code — the `WO008-INC7-PLAN.md` discipline) for the live-audio
+increment, settling the open questions item 6 lists; the environment notes' session-start
+discipline (`sync_check --quiet`, the #93 `modules/out` restore) applies as always.
+Earlier in this session (increment 1.5, sealed `sync-wo006-inc15`, now APPLIED): the device
+moved again — **test004
+attempt 3 ran on SATURN** (2026-09-28 evening) — `sync-wo006-inc14.zip` confirmed APPLIED by
+its own build line (`sync_check: OK - 151 files match sync wo006-inc14, src 92f/2001521B`) —
+and it **confirmed the #89 open-path fix on hardware, then falsified its remaining
+assumption**: the exclusive open landed EXACTLY on the predicted pass shape (`i24-in-32
+(converting) · device period 960 fr (10.00 ms) · sparq block 64 fr` — the default period asked
+first and granted, no shrink note) and the stream STILL stalled with attempt 2's triple at the
+new period: 158 late wakes / 10 s (~16 stalls/s, each ~40 ms swallowing ~3 cadences), half
+throughput (7756 blocks ≈ 49.4k fr/s against a 96 kHz negotiation), jitter avg 19.44 / max
+40.36 ms over 517 wakes, drift −491 161 ppm, no clean tone, rc 1 — with 0 budget overruns and
+0 FIFO starvations AGAIN, and every shared-mode step green AGAIN in the same session (unplug →
+`Removed`, recovery tone, the 3-min rehearsal soak, all three conformance suites incl. the
+exclusive lifecycle/latency/reopen-leak checks on hardware). The arithmetic
+(`docs/hal/windows-notes.md` §4e) joins both attempts into one identity — **delivered frames =
+wakes × buffer**, exact to one block (517 × 960; 1718 × 288) — because event-driven exclusive
+legally cannot bank more than one period (`hnsPeriodicity` ≡ `hnsBufferDuration` under
+`EVENTCALLBACK` — MSDN's rule, `AUDCLNT_E_BUFDURATION_PERIOD_NOT_EQUAL`), so every swallowed
+cadence is lost audio. The stall (~16 Hz, ~33–40 ms wall) did not move between the 3 ms and the
+10 ms period: **period-independent — defect #92, open, device-side.** And attempt 3's own
+`adjusted rate 48000 Hz -> 96000 Hz` line exposed **defect #91**: the exclusive rate envelope
+had been probed through the SHARED sieve (the engine accepted only its 96 kHz mix), so the
+driver was never asked about 48 kHz exclusive and play/soak adjusted inside the same wrong
+envelope — UP into the one rate the exclusive path proved pathological at. **WO-006 increment
+1.5** was built this session and sealed as **`sync-wo006-inc15.zip` (15 entries)**: the
+exclusive sweep is its own probe (every standard rate × the four rungs, asked of the driver);
+adjustment consults the envelope the open negotiates in (`Capabilities::exclusive_rate_for`,
+pure + Linux-pinned); **#76 SHIPPED** — drift is delivered-frames-vs-wall (the pump counts what
+the device ACCEPTED; the `IAudioClock` binding is DELETED, its `GetPosition` was buffer-step
+fiction — §4b), both recorded healthy sessions pinned at ≈0 ppm under the new derivation,
+attempt 3's shape pinned as the −49 % verdict it is, suspect drift (> ±1 % after a 2 s trust
+window) now FAILS play/soak verdicts in its own right; and `test004.bat` is current for
+**attempt 4 at 48 kHz** — with the acceptance-wording amendment (soak at the rate the device
+proves; 96 kHz on offer as the stretch) PROPOSED in the run sheet §2, not smuggled.
+Sandbox-green: **761 tests**, goldens bit-identical (the three pinned exec renders included),
+selftest 9/9, `ui --audit` 25 smokes, every runnable clippy cell clean — superseded this
+session by increment 7's 762; the bundle was applied on the device as reported above.
+Previous handoff (fifth session): **WO-006 increment 1.4** built and sealed after test004
+attempt 2 opened exclusive at the driver's 3 ms minimum and stalled (**defect #89** — the third
+lying-`min` face: `Initialize` says yes, runtime says no): the default-first period ladder for
+coarse engines, the round-UP alignment two-step, the silent-shrink guard with the honest open
+line — all pure data in `hal/period.rs`; plus **defect #90** (test004.bat's summary
+distinguishes refused from opened-but-not-clean) and **`tools/log_digest.py`** (+ `digest.bat` +
+end-of-run hooks): the compact `-digest.log` copies — verdict lines byte-identical, repetition
+collapsed — and the digest is the send-back artefact. 757 tests, both MSVC `hal-wasapi` cells
+clean. Attempt 3 then DEVICE-VERIFIED the open-path half of #89 (the open line landed on the
+predicted 960 fr shape) and reclassified its runtime half into #92.)
 
 ---
 
 ## Current position
 
-- **Device state:** every sealed bundle through **`sync-wo008-inc6.zip` is APPLIED on SATURN** —
-  proven by test004 attempt 2's own build line (2026-09-28): `sync_check: OK - 149 files match
-  sync wo008-inc6, src 92f/1986012B`. **WAITING: `sync-wo006-inc14.zip` (15 entries, this
-  session — the #89 default-first period ladder + the #90 script-honesty fix + the log digest
-  tooling).** Once it lands, the device runs cover eleven increments of baseline — **`test004`
-  attempt 3 (exclusive acceptance — the #89 fix, still the 🔴 blocker; send back
-  `test004-digest.log`)**, `test006`
-  (canvas window session — after RENDER WAV the sine/gain wires light with live levels, **and the
-  steps F–I: the rename sheet under real keys, the inspector two-finger scroll, the LOD walk vs
-  the mockup, the cv wire lighting from its own value**; send back the digests), `gates.bat`
-  (**expected test count is now 757**, stamp = whatever `SYNC-STAMP.txt` says
-  (`src 92f/2001521B`), `sparq modules --strict`
-  lists **17** (the mixer row reads v0.2.0, 13 ports, 24 params), `selftest --golden` prints
-  **PASS (9 gates)**, `ui --audit` **PASS (25 smokes)**; `log_check.py`'s BASELINE moves with
-  every seal since defect #83 — the inc-1.4 bundle carries the moved one), and the
-  WO-008 **loaded soak** (200 modules, 30 min) when the HAL and the machine are both free.
-  WO-009's two device boxes: the **30-minute drift measurement** and a **listened tempo sweep**.
-  Evidence artefacts — **defect #85: run them with their pinned durations or the hashes will not
-  match the goldens** (the CLI default renders 5 s): `sparq exec --patch drum-demo --seconds 2`
-  (transport-driven, hash `f2303f13aa0cf299`), `--patch mod-demo --seconds 1`
-  (`1621e1f65b1b64e1`), `--patch demo --seconds 2.8` (`53de3b1f3f40e3c9`).
+- **Device state:** every sealed bundle through **`sync-wo006-inc15.zip` is APPLIED on SATURN** —
+  inc15 by operator report (2026-09-29; test004 attempt 4 has not come back yet), everything
+  before it proven by attempt 3's own build line (`sync_check: OK - 151 files match sync
+  wo006-inc14`). **WAITING: `sync-wo008-inc7.zip` (17 entries, this session — the required-
+  unconnected enforcement; it does NOT touch the test004 contract, so attempt 4 can run under
+  either bundle, but gates.bat must see the NEW expectations below).** Once it lands, the device runs cover thirteen increments of
+  baseline — **`test004` attempt 4 (exclusive acceptance at 48 kHz — still the 🔴 blocker; send
+  back `test004-digest.log`; pass shape + the PROPOSED acceptance-rate amendment + the
+  failure-reading guide in `WO006-INC15-RUN-SHEET.md`)**, `test006` (canvas window session —
+  the F–I asks stand; NEW with inc7: the demo patch's fourth node is a bare `out/main` instead
+  of the spare Gain, and `canvas-render.wav` is byte-identical to the recorded baseline —
+  1 920 046 B, sha256 `d7ad294ea0b5e6e9…`; step [05]'s A/B is unchanged in shape), `gates.bat`
+  (**expected test count is now 762**, stamp = whatever `SYNC-STAMP.txt` says (`src 92f/
+  2021628B` — the bundle's own line is truth), and the stress evidence line in the test output
+  reads **`7bb06379bd6845e5` · 2 383 swaps · 7 617 refused** — the moved baseline, not a
+  regression), `sparq modules --strict`
+  lists **17**, `selftest --golden` prints **PASS (9 gates)**, `ui --audit` **PASS (25 smokes)**;
+  `log_check.py`'s BASELINE moved with the seal, #83's discipline), and the WO-008 **loaded
+  soak** (200 modules, 30 min) when the HAL and the machine are both free. WO-009's two device
+  boxes: the **30-minute drift measurement** — now riding the NEW delivered-vs-wall metric; read
+  its box against #76's shipping note before comparing with any old log — and a **listened tempo
+  sweep**. Evidence artefacts — **defect #85: run them with their pinned durations or the hashes
+  will not match the goldens** (the CLI default renders 5 s): `sparq exec --patch drum-demo
+  --seconds 2` (transport-driven, hash `f2303f13aa0cf299`), `--patch mod-demo --seconds 1`
+  (`1621e1f65b1b64e1`), `--patch demo --seconds 2.8` (`53de3b1f3f40e3c9`) — all three
+  re-verified bit-identical in the sandbox this session (inc 1.5 touches no render path).
+- **WO-008 increment 7 is BUILT and sandbox-green — host-side `required`-unconnected
+  enforcement, the declared baseline moved ON PURPOSE:** the sandbox track's named next
+  candidate; plan of record `WO008-INC7-PLAN.md` (eight decisions before the code).
+  `Executor::build` refuses a patch with a bare `required` input — `ExecError::RequiredUnconnected`
+  names node, module, port and both remedies (connect a source or remove the node; a genuinely
+  optional port is a manifest `required = false`), placed after the edge-rules pass (an ILLEGAL
+  wire is a more specific defect than a MISSING one) and before buffer allocation, graph order ×
+  manifest order so the first violation is deterministic. The rule's scope is the compiled
+  contract's own words (`Port::required` = whether an unconnected INPUT is an error): outputs
+  stay free, one-or-more incoming edges satisfies a port, and cv fan-in was already refused
+  upstream so the check never legitimises a wiring the matrix refuses. No manifest moved — the
+  seventeen already spoke the vocabulary deliberately (six single-input processors required;
+  matrices/displays/sinks/triggers optional) — so `modules --strict` stays 17/17 and no audio
+  golden moved (enforcement only ADDS refusals; the demo patches were read and are compliant).
+  **The two declared dependents moved with it:** the determinism world WIRES its spare — from
+  the chain gain, not the sine, on purpose: the spare is the initial master, so retune mutations
+  reach the rendered samples (pin: 4 nodes, 3 edges) — and the canvas demo's fourth node became
+  a bare `out/main`, the one module designed to sit bare (optional input; `resolve_master`'s
+  documented rule ignores an unwired out/main, so the master stays the chain gain and
+  `canvas-render.wav` is bit-identical by construction — measured 1 920 046 B, the device
+  baseline's exact size, sha256 `d7ad294ea0b5e6e9…` recorded). The unconnected-signal semantics
+  live at their declared home — OPTIONAL ports: the silenced-report test migrated in place
+  (probe declares `required = false`), the probe manifests' audio inputs all declare optionality
+  (the suite run was the census: 8 tests touched the enforcement, all migrated/reworked in
+  place), and the new gate `a_required_input_with_no_wire_is_refused_in_words` proves the
+  sentence AND its compliant twin. `cross_thread.rs`'s status pin TIGHTENED to `Ok` only —
+  `Silenced` in a meter would now mean the enforcement leaked. **The baseline moved on purpose
+  and is recorded: stress `7bb06379bd6845e5` · 10 001 blocks · 2 383 swaps · 7 617 refused ·
+  0 audio-path allocations · debug == release** (was `b42068ec7b206789` · 7 203 · 2 797) — the
+  mix flipped because add/disconnect mutations that bare a required input are now refusals: the
+  leave-no-trace path is exercised 2.7× harder, the swap floor (>1 000) holds at 2 383, and the
+  cross-thread ledger moved with it (21 509 blocks · 2 299 staged = swaps = reclaimed · 7 701
+  refused · 0 allocs · 0 errors). Docs moved in the same session (#88): module-api-v1's open
+  list loses the item, the field-table + schema rows grow the enforcement clause, the executor
+  header's v0 bullet is replaced, LATER.md struck through + a new parked item (the canvas badge
+  for the bare-required node, WO-013-side, beside the watchdog hairline). **762 tests** (was
+  761; +1 refusal gate), 0 failed, 1 ignored; goldens bit-identical (release re-verified: the
+  three pinned exec renders, wo005, phase-b, every module golden); selftest 9/9; `ui --audit`
+  PASS 25 smokes with the new demo node; fmt + all runnable clippy cells clean; 7 python gates.
+  Sealed as **`sync wo008-inc7`** — WAITING, stacked on the applied inc15. **Defect #93** logged
+  below (the `out`-dir snapshot trap that ate `modules/out/main/sparqmod.toml` mid-increment;
+  recovered byte-exact via the operator, hash-verified against the seal).
+- **WO-006 increment 1.5 is BUILT and sandbox-green — the exclusive rate envelope is its own
+  probe, and drift reads delivered-vs-wall:** attempt 3's two findings, fixed where the sandbox
+  can fix them. **#91:** `capabilities()`' exclusive sweep ran only at rates the SHARED probe
+  accepted — on SATURN that left `exclusive 96000` printed as measured truth (the engine refuses
+  every shared f32 rate but its own mix) while the "UMC 204HD 192k" driver was never asked about
+  44.1–192 kHz exclusive; `play`/`soak` then adjusted inside the same shared envelope, bending
+  the standing 48 kHz ask UP to 96 kHz. Now: the exclusive sweep asks the DRIVER at every
+  `PROBE_RATES` rate plus the mix rate (four rungs each; `Initialize` stays the final arbiter),
+  and a new pure helper `Capabilities::exclusive_rate_for` (`hal/mod.rs`, Linux-pinned: a listed
+  rate survives, nearest otherwise, ties to the LOWER rate, empty envelope → `default_rate` so
+  the open ladder still refuses with its full probe table) routes both CLIs' exclusive
+  adjustments. **#76 SHIPPED (pulled from the increment-2 backlog — attempt 3 made it the
+  missing instrument):** the drift metric counts frames the device ACCEPTED (every successful
+  `ReleaseBuffer`, preroll included) against the wall; the `IAudioClock` binding is DELETED with
+  an epitaph where its vtable was (its `GetPosition` advanced in buffer-sized steps per event
+  tick — +1.2 M ppm on a soaked-clean shared stream, §4b — and hid a real half-throughput
+  exclusive inside the same SUSPECT label). §4b's fixture requirement is honoured in tests: both
+  recorded healthy sessions read ≈0 ppm under the new derivation, attempt 3's shape reads the
+  −49 % half-throughput verdict it is, and the null backend (which always counted delivered
+  blocks) now shares ONE metric meaning across backends. The falsified "implausible clock
+  (virtual/RDP endpoint)" SUSPECT text is replaced by what the number means; `drift_suspect`
+  waits for a 2 s trust window (one period of quantisation at 96 kHz/10 ms = ±5 000 ppm over
+  2 s = half the threshold — `DRIFT_TRUST_NS`'s doc carries the arithmetic); and the verdicts
+  ACT: `play`'s pass line requires `!drift_suspect` (the NOT CLEAN line says so when that is the
+  reason), `soak` fail-fasts on it. **#92 stays OPEN, device-side, and named:** the exclusive
+  event-stall phenomenon itself (~16/s × ~33–40 ms wall, period-independent, delivered = wakes ×
+  buffer exactly — the zero-headroom law of event-exclusive, MSDN's `hnsPeriodicity` ≡
+  `hnsBufferDuration` rule, is in the wasapi.rs header now). Attempt 4 discriminates
+  rate-coupling; if the triple returns at 48 kHz the next lever is **push-mode exclusive**
+  (periodicity 0, no `EVENTCALLBACK`, buffer 2–4 periods, self-paced pump — the shape the audio
+  engine itself runs on this endpoint, 2 h clean), parked in LATER.md with its design burden.
+  `test004.bat` is current for attempt 4 (multi-rate [03] expectation, the 48 kHz [04] open line
+  with NO `adjusted` line, #92 hint vocabulary, the [07] rate prompt defaulting to 48000 with
+  96000 as the WO-text stretch). **761 tests** (was 757; +3 diag fixtures — the trust window,
+  the attempt-3 replay, the #76 regression pair — +1 `exclusive_rate_for` gate; the
+  `implausible_drift` test replaced in place), 0 failed, 1 ignored; goldens bit-identical
+  (release re-verified: wo005, demo, the three pinned exec renders at their durations);
+  selftest 9/9; `ui --audit` PASS 25 smokes; null conformance 9/9; paced-null play/soak smokes
+  read +0.23/−0.62 ppm — the new derivation at ≈0, live; every runnable clippy cell clean
+  (default, bootstrap-audio, ui, native ui-window-gles `-j 1`, MSVC×6 incl. both `hal-wasapi`
+  cells); 5 python gates + `sync_check --self-test` 11/11 + `log_digest --self-test` 16/16 +
+  `log_check --self-test` 25/25 (BASELINE moved: 761 / `src 92f/2015804B`). Sealed as
+  **`sync wo006-inc15`**; device contract = `scripts\test004.bat` + `WO006-INC15-RUN-SHEET.md`.
 - **WO-006 increment 1.4 is BUILT and sandbox-green — the defect-#89 default-first exclusive
   period ladder + the compact log digest:** `hal/period.rs` reorders (a driver whose reported
   minimum sits ABOVE the sparq block gets asked its DEFAULT period first — the number its engine
@@ -88,7 +238,10 @@ bundles, then `test004` (the 🔴 exclusive-acceptance blocker), `test006` (step
   copies of the device logs — every verdict byte-identical, three repetition classes collapsed —
   because a 2 h soak's 240 status lines were drowning the dozen lines that decide the run
   (attempt 2: 67 569 B → 30 994 B, −54 %; `--self-test` 16/16). Sealed as
-  **`sync wo006-inc14`**; device contract = `scripts\test004.bat` + `WO006-INC14-RUN-SHEET.md`.
+  **`sync wo006-inc14`** — APPLIED on the device 2026-09-28 evening; attempt 3 DEVICE-VERIFIED
+  the open-path fix (the open line landed on the predicted `960 fr (10.00 ms)` shape, no shrink
+  note) and reclassified its runtime half into #92 (the stall is period-independent). Device
+  contract was `scripts\test004.bat` + `WO006-INC14-RUN-SHEET.md`.
 - **WO-008 increment 6 is BUILT and sandbox-green — `cv_interp = "spline"`, the G4 vocabulary
   performed in full:** the checklist's sandbox-track item 8, second entry — named there as the
   next candidate; the plan of record is `WO008-INC6-PLAN.md` (eight decisions, recorded before
@@ -450,64 +603,86 @@ bundles, then `test004` (the 🔴 exclusive-acceptance blocker), `test006` (step
 
 ## 🔴 THE BLOCKER (device track — waiting on SATURN, not on code)
 
-**WO-006 exclusive acceptance = the `test004` re-run, attempt 3** (every sealed bundle through
-`sync-wo008-inc6.zip` is APPLIED on the device — proven by attempt 2's own build line,
-2026-09-28; **`sync-wo006-inc14.zip` is WAITING** — it IS the HAL fix). History: **attempt 1**
-(2026-09-24) passed the caps checkpoint (#77 verified on hardware) and was refused at every rung
-with `AUDCLNT_E_INVALID_DEVICE_PERIOD` — the open asked the 64-fr block (666.7 µs @ 96 kHz) as
-the device period against a 10 ms engine (**defect #79**, fixed in inc 1.3). **Attempt 2**
-(2026-09-28) got further and taught more: exclusive OPENED — `i24-in-32 (converting)` @ 96 kHz
-on the UMC 204HD — but at **288 fr (3.00 ms)**, the driver's reported minimum / alignment
-granularity, and the driver could not SUSTAIN what it had ACCEPTED: one ~33 ms stall every
-~62.5 ms (159 late wakes / 10 s), half throughput (7732 blocks ≈ 49.1k fr/s against a 96 kHz
-negotiation), drift −491 656 ppm, no clean tone, rc 1 (**defect #89** — the arithmetic in
-`docs/hal/windows-notes.md` §4d; the pump was innocent: 0 budget overruns, 0 FIFO starvations).
-The control experiment ran in the same session: the shared 10 ms engine on the same endpoint
-soaked **2 h, 719 895 wakes, 0 xruns, max jitter 12.04 ms** — the machine and the pump are fine;
-the 3 ms exclusive period is not. On attempt 3 the [04] open line should read
-`i24-in-32 (converting) · device period 960 fr (10.00 ms) · sparq block 64 fr` **or**
-`… 1152 fr (12.00 ms) …` if the driver enforces its 288 fr alignment at `Initialize` (inc 1.4's
-two-step rounds the ask UP to it — never down to the granularity). **A 288 fr (3.00 ms) period
-must never open silently again**: either the ladder asks the default first, or the shrink guard
-prints the ask in the open line. If [04] still misbehaves, the period probe table + the
-late-wake/jitter/drift triple in the digest IS the diagnosis. When [04]+[05] pass and the
-**2 h zero-xrun soak @ 96 kHz/64 exclusive** finishes clean: WO-006 acceptance closes → ADR-008
-exit fires → **next sandbox increment: delete the cpal bootstrap, HAL becomes `play`'s default**
-(that deletion is gated on this device run — do not do it early).
+**WO-006 exclusive acceptance = the `test004` re-run, attempt 4** (every sealed bundle through
+`sync-wo006-inc15.zip` is APPLIED on the device — operator-reported 2026-09-29; the HAL fix is
+on the machine, attempt 4's digest is the missing piece. `sync-wo008-inc7.zip` rides along —
+it changes no test004 contract, only the gates' numbers). **This blocker keeps the ADR-008
+exit, the stage-path proof and the #92 diagnosis — but since the operator's session-6-close
+pivot it no longer gates the UX track: live canvas audio proceeds in parallel on the proven
+shared backend (header + sandbox item 6), and attempt 4 is a ~15-minute device run whenever the
+machine is free, not a dependency of the sandbox's next build.** History:
+**attempt 1** (2026-09-24) passed the caps checkpoint (#77 verified on hardware) and was refused
+at every rung with `AUDCLNT_E_INVALID_DEVICE_PERIOD` — the open asked the 64-fr block (666.7 µs
+@ 96 kHz) against a 10 ms engine (**defect #79**, fixed in inc 1.3). **Attempt 2** (2026-09-28
+morning) got further: exclusive OPENED — `i24-in-32 (converting)` @ 96 kHz — but at **288 fr
+(3.00 ms)**, the driver's reported minimum/granularity, and stalled: 159 late wakes / 10 s, half
+throughput, drift −49 %, no clean tone (**defect #89** — `Initialize` accepts, runtime refuses;
+fixed in inc 1.4 by the default-first ladder). **Attempt 3** (2026-09-28 evening) proved the
+inc-1.4 fix ON HARDWARE — the open landed exactly on the predicted `device period 960 fr
+(10.00 ms)` shape, no shrink note — and the stall stayed, unchanged in wall shape (~16 stalls/s,
+~40 ms each) at the new period: **the stall is period-independent (defect #92)**, and the exact
+identity delivered = wakes × buffer on both attempts says why it costs half the audio:
+event-driven exclusive cannot legally bank more than one period (`hnsPeriodicity` ≡
+`hnsBufferDuration` under `EVENTCALLBACK`), so every swallowed cadence is lost. Attempt 3 also
+exposed **defect #91**: the `96000 Hz` was never play's ask — the exclusive envelope had been
+sieved through the shared probe (lone `exclusive 96000`) and the adjustment bent the standing
+48 kHz request UP into the one rate the exclusive path misbehaves at. Inc 1.5 decouples the
+probes, ships #76's delivered-vs-wall drift as the instrument, and sends attempt 4 to **48 kHz**.
+On attempt 4: [03] must list a MULTI-rate exclusive envelope including 48000 (a lone 96000 means
+the driver genuinely refuses 48 kHz exclusive — a finding; send the caps block); [04]'s open line
+should read `48000 Hz · 2 ch · i24-in-32 (converting) · device period 480 fr (10.00 ms) · sparq
+block 64 fr` with NO `adjusted` line above it (and no `NEGOTIATED` line — its absence is the
+good case), drift within a few hundred ppm of 0, 0 late wakes, `play: PASS`, clean tone. **If
+the triple returns at 48 kHz, #92 is rate-independent** — the digest now says so in measurements
+(drift is delivered-vs-wall truth; suspect drift fails the verdict) — and the named next lever
+is push-mode exclusive (LATER.md), its own increment. When [04]+[05] pass and the **2 h
+zero-xrun exclusive soak at the rate [04] proves** finishes clean — the PROPOSED amendment of
+the WO's "96 kHz" wording, run sheet §2, ratified or struck by the next session against the
+attempt-4 evidence; the [07] prompt offers 96000 as the stretch — : WO-006 acceptance closes →
+ADR-008 exit fires → **next sandbox increment: delete the cpal bootstrap, HAL becomes `play`'s
+default** (that deletion is gated on this device run — do not do it early).
 
 ## Next session's task list, in order
 
 **Device track (SATURN — one bundle WAITING to apply, then the remaining work is EVIDENCE):**
-1. **APPLY `sync-wo006-inc14.zip` (15 entries)** — everything through `sync-wo008-inc6.zip` is
-   APPLIED (attempt 2's build line proved it, 2026-09-28). Then **run the device gates and send
-   the DIGESTS back** — every test script now ends by making `NAME-digest.log` beside its log
-   (compact copies: verdict lines byte-identical, only the periodic-status / cargo / duplicate
-   repetition collapses; `scripts\digest.bat` does older logs on demand). Run
-   `scripts\test004.bat` (the exclusive acceptance, attempt 3 — pass shape in
-   `WO006-INC14-RUN-SHEET.md`; the 🔴 blocker) and `scripts\test006.bat` (the window session;
+1. ~~APPLY `sync-wo006-inc15.zip`~~ **DONE (operator-reported 2026-09-29). APPLY
+   `sync-wo008-inc7.zip` (17 entries)** — stacked on inc15; it changes no device contract
+   except the gates' numbers. Then **run the device gates
+   and send the DIGESTS back** — every test script ends by making `NAME-digest.log` beside its
+   log (compact copies: verdict lines byte-identical, only the periodic-status / cargo /
+   duplicate repetition collapses; `scripts\digest.bat` does older logs on demand). Run
+   `scripts\test004.bat` (the exclusive acceptance, **attempt 4 at 48 kHz** — pass shape, the
+   PROPOSED acceptance-rate amendment and the failure-reading guide in
+   `WO006-INC15-RUN-SHEET.md`; the 🔴 blocker) and `scripts\test006.bat` (the window session;
    step [07] is the mechanical claim: slider edit must change the canvas-render.wav hash — after
-   RENDER WAV the sine/gain wires light with live levels — **and the new steps F–I: the rename
-   sheet under real keys, the inspector two-finger scroll on a Mixer, the LOD walk vs
+   RENDER WAV the sine/gain wires light with live levels — **and the steps F–I: the rename sheet
+   under real keys, the inspector two-finger scroll on a Mixer, the LOD walk vs
    `design-mode.svg` (write what differs into the H answer), the cv wire lighting from its own
-   value**). `scripts\gates.bat` now expects **757 passed / 0 failed / 1 ignored**, **17**
+   value**). `scripts\gates.bat` now expects **762 passed / 0 failed / 1 ignored**, **17**
    modules (the mixer row reads v0.2.0, 13 ports, 24 params), **selftest PASS (9 gates)** and
    **`ui --audit` PASS (25 smokes)** — with the stamp `log_check.py` in the bundle already knows
-   (`src 92f/2001521B`; defect #83's fix made moving it a seal step). Wanted evidence, **with the pinned durations** (defect #85):
-   `sparq exec --patch mod-demo --seconds 1` (`1621e1f65b1b64e1`), `sparq exec --patch drum-demo
-   --seconds 2` (`f2303f13aa0cf299`), `sparq exec --patch demo --seconds 2.8` (`53de3b1f3f40e3c9`),
-   and — when the HAL is free — the two WO-009 device boxes: a LISTENED tempo sweep and the 30-min
-   drift run. No drift-repair copy step was needed (the pristine clone passes `sync_check --quiet`;
-   defect #86 was repaired in the wo008-inc5 bundle). **Wanted back: `test004-digest.log`,
-   `test006-digest.log` (with the F–I answers), `gates-digest.log`, `logs\ui-digest.log`** — the
-   digests, not the full logs (the full ones stay on the device; if a diagnosis ever needs a
-   collapsed line, the run sheet says which full file to send instead) — those close the
-   device boxes the sandbox cannot.
+   (`src 92f/2021628B`; defect #83's fix made moving it a seal step) — and the stress evidence
+   line inside the test output reads the MOVED baseline (`7bb06379bd6845e5` · 2 383 swaps ·
+   7 617 refused), which is inc 7's recorded intent, not a regression. Wanted evidence, **with
+   the pinned durations** (defect #85): `sparq exec --patch mod-demo --seconds 1`
+   (`1621e1f65b1b64e1`), `sparq exec --patch drum-demo --seconds 2` (`f2303f13aa0cf299`),
+   `sparq exec --patch demo --seconds 2.8` (`53de3b1f3f40e3c9`), and — when the HAL is free —
+   the two WO-009 device boxes: a LISTENED tempo sweep and the 30-min drift run (**now on the
+   new delivered-vs-wall metric — old drift logs are not comparable, #76**). No drift-repair
+   copy step was needed (the pristine clone passes `sync_check --quiet`; defect #86 was repaired
+   in the wo008-inc5 bundle). **Wanted back: `test004-digest.log`, `test006-digest.log` (with
+   the F–I answers), `gates-digest.log`, `logs\ui-digest.log`** — the digests, not the full logs
+   (the full ones stay on the device; if a diagnosis ever needs a collapsed line, the run sheet
+   says which full file to send instead) — those close the device boxes the sandbox cannot.
+   **Also wanted, in the next session's words: a ratify-or-strike decision on the
+   acceptance-rate amendment (run sheet §2) against attempt 4's evidence.**
 2. If test004's 2 h soak passes → **WO-006 acceptance closes** → sandbox increment: ADR-008 exit
-   (delete the cpal bootstrap, HAL becomes `play`'s default) **plus routing the live HAL stream
-   through `SharedEngine`** — the cross-thread halves now exist (inc 5), so `play`'s callback
-   can hold `AudioEngine` and the control side can stage; then WO-006 increment 2 backlog
-   (ASIO, duplex, round-trip measurement, STA retry for the #75 property-store `E_ACCESSDENIED`,
-   clock-drift re-derivation per #76).
+   (delete the cpal bootstrap, HAL becomes `play`'s default) — **still gated here, do not do it
+   early.** The live-HAL-through-`SharedEngine` routing that used to ride this gate was
+   RE-SEQUENCED ahead of it by the operator's session-6-close pivot (header + sandbox item 6):
+   it builds on the proven shared backend while exclusive acceptance stays pending. Then WO-006
+   increment 2 backlog (ASIO, duplex, round-trip measurement, STA retry for the #75 property-store
+   `E_ACCESSDENIED` — the clock-drift re-derivation per #76 SHIPPED in inc 1.5 and leaves this list).
 3. The WO-008 **loaded soak** (200 modules, 30 min, zero xruns) — the WO's hardware acceptance,
    and since inc 5 also the paced-real-time half of allowlist entry 6's stress sentence.
 
@@ -531,24 +706,95 @@ exit fires → **next sandbox increment: delete the cpal bootstrap, HAL becomes 
    `set_tempo_sync` path is now reached (`tests/tempo_sync.rs`, golden `db4013f41d1fa678`).
    **Remaining from inc 5:** only the <15 %-of-a-core benchmark (stage-machine acceptance — a
    sandbox CPU ratio does not transfer, so no sandbox number is recorded as evidence).
-6. **The live HAL stream through `SharedEngine`** — after WO-006's exclusive acceptance: `play`'s
-   callback holds `AudioEngine`, the control side stages, and the canvas's `levels` field fills from
-   `read_meters` per frame instead of a preview render (the continuous live-levels half; the offline
-   half shipped in WO-013 inc 4). Then the WO-006 increment 2 backlog (ASIO, duplex, round-trip
-   measurement, STA retry for #75, clock-drift re-derivation per #76).
+6. **ACTIVE — THE NEXT SANDBOX BUILD (re-sequenced by the operator's session-6-close pivot;
+   was "after WO-006's exclusive acceptance", now rides the proven shared backend — rationale in
+   the header): the live HAL stream through `SharedEngine` — live canvas audio + continuous
+   meters.** `play`-style HAL stream whose callback holds `AudioEngine`; the control side stages
+   from the canvas; `CanvasState.levels` fills from `read_meters` PER FRAME instead of the
+   offline preview render (the continuous live-levels half; the offline half shipped in WO-013
+   inc 4, per-port meters + ring port ids ride this increment, the scope screen — the analysis
+   ring already publishes waveforms with nothing drawing them — is the named follow-on).
+   **Research notes from session 6 (facts verified in the tree; NO code written, NO decisions
+   made beyond the two in the header — the plan of record comes first):**
+   * What already exists: `sparq-audio::engine`'s `SharedEngine::new(executor, master) →
+     (SharedEngine, AudioEngine)` split; `stage(executor, master) -> bool` (boundary hot-swap,
+     refuse-and-count when full), `set_params(node, ParamSet)` / `set_musical_position` / `send`
+     (Copy commands over the `EngineCmd` ring — param edits need NO re-stage), `reclaim()`
+     (control-side retirement hygiene), `read_meters(&mut [MeterUpdate]) -> usize` +
+     `read_analysis` (bounded drains, absent reader counted-not-queued); `AudioEngine::
+     render_block(out)` per block (cmd drain → boundary swap with `inherit_runtime` → render →
+     meter publication); proven by the two-thread 10 000-mutation acceptance (0 failed blocks,
+     0 audio-thread allocations). `bridge::build_with_map` already yields the canvas→kernel node
+     map `node_levels` consumes; `NodeLevels`/`wire_level` (per-port entries since WO-013 inc 5)
+     and the painter's level blend are DONE — the live path swaps the SOURCE, not the drawing.
+   * Sketch (NOT decisions — the plan must settle each): a `LiveSession` owned by the app-side
+     shell { HAL `Box<dyn AudioStream>`, `SharedEngine`, the node map, bounded meter scratch };
+     canvas structural ops → `build_with_map` → `stage`; param edits → `set_params` with the
+     mapped kernel node; per frame → drain `read_meters` into `NodeLevels` via the stored map;
+     periodic `reclaim()`; backend choice: null for headless/audit (hermetic — the audit must
+     not need a device), `wasapi-shared` default on the device (a device picker is later);
+     stream `Removed`/`Failed` → one honest shell-log line + session stops, canvas untouched
+     (every audio-thread fallback stays "keep rendering the live patch", inc 5's design).
+   * Open questions the plan must answer: where the transport (start/stop) lives in the shell
+     chrome and its touch shape (input-model rules); what the chrome shows of the negotiated
+     config/latency/xrun truth (the play path's honesty lines have a house shape); the audit
+     smoke design — paced null (timing on a loaded CI runner?) vs manual-mode null the smoke
+     pumps itself (deterministic; `AudioStream::pump` exists for exactly this); interaction with
+     RENDER WAV (the offline preview path stays as-is — separate concern); whether undo/redo
+     re-stages through the same op→sync door (ops apply to `CanvasState` first, then sync —
+     likely free); levels refresh rate-limiting (once per frame, bounded drain sizes).
+   * Hard constraints: goldens untouched (no render path moves); the bootstrap stays (ADR-008
+     gated — header); stress baseline is now `7bb06379bd6845e5` · 2 383 · 7 617; test-count
+     baseline 762 moves with whatever gates ship; `ui --audit` stays hermetic and its smoke
+     count moves only with new smokes.
 7. Studio-session evidence still open: real-finger canvas touch-test, DPI matrix walk
    (WO-012/WO-013), WO-001 hardware sheets, dispatch-bench C/D numbers for ADR-009.
 8. Small, well-specified, declared in LATER.md: ~~mixer's cv merge side~~ **DONE (WO-014 inc
-   6)**; ~~`cv_interp = "spline"`~~ **DONE (WO-008 inc 6, this session — the host performs the
-   whole G4 vocabulary)**; **host-side `required`-unconnected enforcement** (moves stress refusal
-   counters — its own increment on purpose; **the next candidate in this list**); the compat-matrix review packet (`reviewed = false`, defect #82's ordering question
-   inside it); loop-relative beat phase for unaligned loop regions (WO-009's declared limit);
-   from inc 5: per-port meters (would light cv wires + a scope's per-channel display), a
-   multi-reader epoch (a second reader of the live patch), and narrowing analysis publication to
-   declared analysis sources if a large rig's ring traffic ever wants it.
+   6)**; ~~`cv_interp = "spline"`~~ **DONE (WO-008 inc 6)**; ~~host-side `required`-unconnected
+   enforcement~~ **DONE (WO-008 inc 7, this session — the baseline moved on purpose and is
+   recorded)**; **the canvas badge for the bare-required node** (new from inc 7: the refusal
+   reaches the shell log at RENDER; drawing the warning at DROP time is a WO-013-side painter
+   increment, parked beside the watchdog→UI hairline it would share machinery with — queued
+   behind the re-sequenced item 6 by the operator's pivot, and still the smallest well-specified
+   item after it); the compat-matrix review packet (`reviewed = false`, defect #82's
+   ordering question inside it); loop-relative beat phase for unaligned loop regions (WO-009's
+   declared limit); from inc 5: per-port meters (would light cv wires + a scope's per-channel
+   display), a multi-reader epoch (a second reader of the live patch), and narrowing analysis
+   publication to declared analysis sources if a large rig's ring traffic ever wants it.
 
 ## Done (most recent first)
 
+- [x] **WO-008 inc 7** (2026-09-29, sixth session, second increment) — host-side `required`-
+      unconnected enforcement (the checklist's named next candidate; plan `WO008-INC7-PLAN.md`,
+      eight decisions before the code): `ExecError::RequiredUnconnected` in the build gauntlet
+      (after the edge rules — an illegal wire is a more specific defect than a missing one —
+      before buffers; graph × manifest order), INPUTS only per the compiled `Port::required`
+      doc, ≥1 carried edge satisfies, no bypass exemption (declared). The dependents moved:
+      the determinism world wires its spare from the chain gain (master-cone retune sensitivity,
+      pin 4 nodes / 3 edges), the canvas demo's fourth node became a bare `out/main`
+      (canvas-render.wav byte-identical: 1 920 046 B, sha256 `d7ad294e…` recorded), the
+      unconnected-signal tests migrated to optional ports (their declared home) + the new
+      refusal gate with its compliant twin, cross_thread's status pin tightened to `Ok` only.
+      **Stress baseline moved ON PURPOSE and recorded: `7bb06379bd6845e5` · 2 383 swaps ·
+      7 617 refused · 0 allocs, debug == release** (was `b42068ec7b206789` · 7 203 · 2 797);
+      cross-thread ledger 21 509 blocks · 2 299 = 2 299 = 2 299 · 7 701 refused · 0/0. Docs
+      moved same-session (module-api-v1 open list, field-table + schema rows, LATER.md struck +
+      the canvas-badge park). 762 tests, every audio golden bit-identical, selftest 9/9,
+      ui-audit 25 smokes, all runnable clippy cells. **#93** (the `out`-dir snapshot trap)
+      logged + remedied. Sealed `sync wo008-inc7` — WAITING, stacked on inc15.
+- [x] **WO-006 inc 1.5** (2026-09-29, sixth session) — after test004 attempt 3 granted the
+      default period and stalled anyway: the exclusive rate envelope decoupled from the shared
+      sieve (#91 — the sweep asks the driver at every standard rate; `exclusive_rate_for` keeps
+      play/soak adjustments inside the envelope the open negotiates in), #76 SHIPPED (drift =
+      delivered frames vs wall; the `IAudioClock` binding deleted with its epitaph; both §4b
+      fixtures pinned at ≈0 ppm; attempt 3's shape pinned as the −49 % verdict; the falsified
+      "implausible clock" SUSPECT text replaced; 2 s trust window; play/soak verdicts act on
+      suspect drift), #92 logged OPEN with the wakes×buffer arithmetic and push mode named as
+      the next lever, and `test004.bat` re-contracted for attempt 4 at 48 kHz (the [07] rate
+      prompt; the acceptance amendment PROPOSED in the run sheet §2). 761 tests, goldens
+      bit-identical (release re-verified incl. the three pinned exec renders), selftest 9/9,
+      ui-audit 25 smokes, null conformance 9/9, paced-null drift +0.23/−0.62 ppm live, every
+      runnable clippy cell clean. Sealed `sync wo006-inc15` — WAITING.
 - [x] **WO-006 inc 1.4** (2026-09-28, fifth session) — the defect-#89 fix after test004
       attempt 2 opened exclusive at 3 ms and stalled (~33 ms every ~62.5 ms, half throughput, no
       clean tone — while the shared 10 ms engine soaked 2 h clean in the same session):
@@ -645,6 +891,16 @@ exit fires → **next sandbox increment: delete the cpal bootstrap, HAL becomes 
 
 ## Environment notes (sandbox) — re-read every session
 
+- **Message boundaries drop excluded path components — including PRODUCT files (defect #93,
+  observed 2026-09-29):** the snapshot excludes any directory named `out`, `target`, `build`,
+  `dist`, `node_modules`, `.git` and friends — and this repo legitimately ships
+  `modules/out/main/sparqmod.toml` (stamp-COVERED). It vanished mid-session, upstream GitHub
+  404'd on it (repo rebuilt/private), and only the operator's copy recovered it (byte-exact,
+  hash-verified: `725bf07a…`, 2 691 B). **Session-start discipline: run
+  `python3 tools/sync_check.py --quiet` FIRST; if `modules/out/main/sparqmod.toml` reports
+  MISSING, restore it from `../sparq-recovery/modules-out-main-sparqmod.toml` (workspace root,
+  outside the repo — durable) and verify the sha256 matches the stamp line before building.**
+  The `/opt` toolchain and `.git` vanish at the same boundaries (both documented below).
 - **`.git` is NOT durable in this workspace** (observed three times: 2026-09-25 twice,
   2026-09-26 the clone arrived without history and was re-inited; the 2026-09-27 clone DID
   arrive with the rebuilt history intact and commits held all session — treat that as luck, not
@@ -654,9 +910,10 @@ exit fires → **next sandbox increment: delete the cpal bootstrap, HAL becomes 
   the sealed one** (defect #86, found 2026-09-27): run `sync_check.py --quiet` against the
   PRISTINE clone at session start — if it fails, the drift list IS the repair list, and the
   bundle must carry the repairs plus the device-side forensics step.
-- Toolchain wipes **between and mid-sessions** (again 2026-09-26 and 2026-09-27: `/opt` arrived
-  empty — rustup, cargo, gcc and the apt packages all reinstalled from scratch, ~84 s with warm
-  apt; within one conversation the install persists across turns). Lives in
+- Toolchain wipes **between and mid-sessions** (again 2026-09-26, 2026-09-27 and 2026-09-29 —
+  this session's clone arrived with `/opt` empty; the recipe below restored rustup/cargo/gcc in
+  ~150 s and everything ran, cargo 1.98.1; within one conversation the install persists across
+  turns). Lives in
   `/opt`, deliberately outside the snapshot. Restore:
   ```bash
   apt-get update && apt-get install -y curl ca-certificates gcc libasound2-dev pkg-config
@@ -697,10 +954,10 @@ exit fires → **next sandbox increment: delete the cpal bootstrap, HAL becomes 
 
 ## Open defects / debt (tracked in PHASE0-WORKORDERS.md build-log tables)
 
-- **#79 — LOGGED + fixed in sandbox (inc 1.3), device-verified: HALF** — attempt 2 (2026-09-28)
-  proved the asking works (exclusive opened for the first time) and then exposed #89: the period
-  it landed on (the driver's min/granularity, 3 ms) is accepted by `Initialize` and unsustainable
-  at runtime. Superseded by #89's fix (inc 1.4); acceptance is still the test004 re-run.
+- **#79 — FIXED (inc 1.3), DEVICE-VERIFIED (attempts 2–3)** — the asking works: exclusive opened
+  on attempt 2, and attempt 3's open line landed exactly on the predicted default-first shape
+  (`960 fr (10.00 ms)`, no shrink note). What attempt 3 also proved: the unsustainability beside
+  it is NOT period-specific — reclassified as #92. Acceptance remains the test004 re-run.
 - **#80 — FIXED (contract v1):** the compiled HOA adapter offer named `spa/objects`; split into
   `HoaEncode`/`HoaDecode` with the matrix's ids, direction-aware, and objects↔non-spatial now
   refuses (no named converter). Caught by the new drift gate on its first run.
@@ -748,7 +1005,12 @@ exit fires → **next sandbox increment: delete the cpal bootstrap, HAL becomes 
   both halves now tell the truth; no code, no device exposure. The lesson, turned on docs: a
   bundle that changes a contract sentence should grep the author guide for that sentence in the
   SAME session — the guide is the copy module authors actually read.
-- **#89 — FIXED in sandbox (WO-006 inc 1.4), device-verified: pending (test004 attempt 3).**
+- **#89 — FIXED (WO-006 inc 1.4), open-path DEVICE-VERIFIED (attempt 3, 2026-09-28 evening):
+  the open line landed on the predicted `960 fr (10.00 ms)` default-first shape, granted, no
+  shrink note. The runtime reading — "the 3 ms period is what the driver cannot sustain" — was
+  FALSIFIED by the same attempt: the stall returned, wall-identical, at the 10 ms default. The
+  open-path hygiene stands (default-first is still the right ask); the runtime phenomenon is
+  #92.** Original finding, kept for the record:
   The exclusive stream opened at 288 fr (3.00 ms) — the driver's reported minimum / alignment
   granularity — and stalled: one ~33 ms stall every ~62.5 ms (159 late wakes / 10 s), half
   throughput (49.1k fr/s vs 96 kHz), drift −491 656 ppm, no clean tone; 0 budget overruns and 0
@@ -760,10 +1022,11 @@ exit fires → **next sandbox increment: delete the cpal bootstrap, HAL becomes 
   granularity against a 10 ms ask) is not pinnable from the evidence — the fix closes all three
   doors: default-first ladder when min > block, round-UP two-step, silent-shrink guard (< ¾) with
   the ask printed in the open line. Pure data in `hal/period.rs`, Linux-pinned on the attempt-2
-  device shape; arithmetic + fix story in `docs/hal/windows-notes.md` §4d. Parked in LATER.md:
-  runtime stall detection (a sustained wake-interval ≫ period could trigger an auto-reopen at
-  the default) — the open-path fixes above make it unnecessary for this device, and it deserves
-  its own increment if ever wanted.
+  device shape; arithmetic + fix story in `docs/hal/windows-notes.md` §4d. Parked in LATER.md
+  (updated by inc 1.5): runtime stall DETECTION's instrument half shipped — delivered-vs-wall
+  drift with a verdict (§4e) — and the reopen half stays parked with attempt 3's evidence
+  attached: reopening within the period ladder buys nothing while the stall is
+  period-independent.
 - **#90 — FIXED (WO-006 inc 1.4): `test004.bat` misdiagnosed attempt 2 inside the log it asked
   the operator to send back.** The summary's `EXCL_OK` keyed off rc alone, so an exclusive stream
   that OPENED and ran rough printed "exclusive still refused — the [04] probe table is the
@@ -773,6 +1036,55 @@ exit fires → **next sandbox increment: delete the cpal bootstrap, HAL becomes 
   expectation text naming both legal periods (960 fr / 1152 fr) and the 288-fr signature. The
   lesson: an acceptance script's verdict text is part of the acceptance — a wrong diagnosis in
   the send-back log costs a round-trip just like a wrong fix would.
+- **#91 — FIXED (WO-006 inc 1.5): the exclusive rate envelope was probed through the shared
+  sieve, and the CLIs adjusted inside the wrong envelope.** `capabilities()` asked the exclusive
+  rungs only at rates the SHARED f32 probes had accepted — on SATURN's UMC 204HD the engine
+  refuses every shared rate but its own 96 kHz mix, so caps printed `exclusive 96000` as
+  measured truth while the "192k" driver was never asked about 44.1–192 kHz exclusive; `play`
+  and `soak` then consulted `supports_rate` (the shared list) even for exclusive streams and
+  bent the standing 48 kHz ask UP to 96 kHz — the one rate the exclusive path had proven
+  pathological at (attempt 3's own `adjusted` line is the evidence). Fixed: the exclusive sweep
+  asks the DRIVER at every `PROBE_RATES` rate plus the mix rate (four rungs each; the field doc
+  carries the rule — each envelope has its own arbiter, `Initialize` remains the final one), and
+  `Capabilities::exclusive_rate_for` (pure, Linux-pinned) keeps exclusive adjustments inside the
+  exclusive envelope (nearest verified rate, ties to the lower; empty envelope → `default_rate`
+  so the open ladder still refuses honestly with its probe table). Found by reading attempt 3's
+  log against the probe code — recorded in `docs/hal/windows-notes.md` §4e.
+- **#92 — OPEN (device-side; logged by attempt 3, 2026-09-28 evening): the exclusive event-stall
+  phenomenon is period-independent.** ~16 stalls/s, ~33–40 ms wall each, identical at a 3 ms and
+  a 10 ms period at 96 kHz; 158 late wakes / 10 s, half throughput (7756 blocks ≈ 49.4k fr/s),
+  no clean tone — with 0 budget overruns and 0 FIFO starvations (the pump kept every promise it
+  could see, twice) and the same session's shared runs all green (the engine's 2112-fr buffer
+  over ~960-fr ticks has 2.2× headroom; event-exclusive legally has NONE — `hnsPeriodicity` ≡
+  `hnsBufferDuration` under `EVENTCALLBACK`, MSDN's rule). The damage arithmetic is exact on
+  both attempts: **delivered = wakes × buffer** (517 × 960; 1718 × 288) — every swallowed
+  cadence is audio the device never receives. Root cause is NOT resolvable from the sandbox
+  (candidates: the USB class driver's exclusive URB/event scheduling; the RDP session — no
+  exclusive run has ever happened on this machine without RDP; driver power states). Inc 1.5
+  removes the forced 96 kHz (#91's fix — attempt 4 discriminates rate-coupling) and ships the
+  instrument (#76) that makes the digest self-diagnosing. If attempt 4 shows the triple at
+  48 kHz: rate-independent, and the named lever is **push-mode exclusive** (LATER.md — periodicity
+  0, no `EVENTCALLBACK`, buffer 2–4 periods, self-paced pump; the shape the audio engine itself
+  runs on this endpoint), its own increment with its design burden (pump pacing discipline,
+  ADR-004's "event-driven" wording, late-wake semantics under a policy cadence). Evidence:
+  `test004-digest.txt` [04] of both 2026-09-28 runs; arithmetic in `docs/hal/windows-notes.md`
+  §4d/§4e.
+- **#93 — REMEDIED (WO-008 inc 7, environment/delivery class): the sandbox workspace silently
+  drops any directory named `out` at message boundaries — and `modules/out/main/sparqmod.toml`
+  is stamp-COVERED.** Mid-increment, `sync_check --quiet` reported the file MISSING (the
+  snapshot exclusion list treats `out/` as a build artefact directory; `.git`, `target/` and the
+  `/opt` toolchain drop at the same boundaries — documented, expected — but this is a PRODUCT
+  FILE). Upstream recovery failed: GitHub 404s on the path (the repo was rebuilt — head `daeda8c`
+  is not this clone's lineage — or went private mid-session; the same class as defect #86,
+  "the pushed tree can drift from the sealed one", quite possibly the same trap on the packaging
+  side — worth checking whether the pushed tree still carries `modules/out/`). The operator
+  supplied the file; it was restored BYTE-EXACT and hash-verified against the sealed stamp
+  (`725bf07a1fb532d32ebf04043715e680ef1e67eafa22f85dfebc75a6b1f54dd0`, 2 691 B) before use.
+  Remedies in place: a durable recovery copy at the workspace root's
+  `sparq-recovery/modules-out-main-sparqmod.toml` (outside the repo, no excluded path
+  component), the session-start discipline in the environment notes below, and this row. The
+  device tree is unaffected — bundles never removed it, and SATURN's own `synccheck.bat` would
+  name it if it ever went missing there.
 - #69 — `build.bat` cmd-parser death: probe ships, culprit statement not yet named (stays open)
 - compat-matrix mirror in `port.rs` vs `docs/api/compat-matrix.toml` — **re-worded (contract
   v1):** the drift gate pins the two together; full deletion waits on restructuring the table's
@@ -792,13 +1104,18 @@ exit fires → **next sandbox increment: delete the cpal bootstrap, HAL becomes 
   fold a node's outputs (per-port later), `play` still pumps the static WO-005 graph (HAL
   integration waits on WO-006's acceptance)
 - MSVC × `ui-window` clippy cell: never run anywhere (sandbox OOM, no CI cell)
-- Device-side baselines that MOVE with the waiting increment (wo006-inc14; wo008-inc6's are on
-  the device): gates.log test count **757** (log_check already moved — #83's discipline), stamp
-  **`src 92f/2001521B`**, `sparq modules` count **17** (unchanged), `selftest --golden` prints
-  **PASS (9 gates)** (unchanged), `ui --audit` **PASS (25 smokes)** (unchanged),
-  exec's three pinned evidence hashes are UNCHANGED (`demo` 2.8 s `53de3b1f3f40e3c9`, `mod-demo`
-  1 s `1621e1f65b1b64e1`, `drum-demo` 2 s `f2303f13aa0cf299` — inc 1.4 touches only the
-  `cfg(windows)` exclusive open and its pure-data ladder; no render path moved), no new audio
-  goldens, and test006's steps F–I (wo013-inc5) are the standing window-session asks. NEW with
-  this bundle: every device log gets a `-digest.log` sibling at the end of its run, and the
-  digest is the send-back artefact (the full logs stay on the device).
+- Device-side baselines that MOVE with the waiting increment (wo008-inc7; wo006-inc15's are on
+  the device): gates.log test count **762** (log_check already moved — #83's discipline), stamp
+  **`src 92f/2021628B`**, `sparq modules` count **17** (unchanged — no manifest moved),
+  `selftest --golden` prints **PASS (9 gates)** (unchanged), `ui --audit` **PASS (25 smokes)**
+  (unchanged count; the demo patch's fourth node is now a bare `out/main`), exec's three pinned
+  evidence hashes are UNCHANGED (`demo` 2.8 s `53de3b1f3f40e3c9`, `mod-demo` 1 s
+  `1621e1f65b1b64e1`, `drum-demo` 2 s `f2303f13aa0cf299` — enforcement only ADDS build
+  refusals; no render path moved), no new audio goldens. **MOVED ON PURPOSE (inc 7's recorded
+  intent, not a regression):** the stress evidence line — `7bb06379bd6845e5` · 10 001 blocks ·
+  2 383 swaps · 7 617 refused (was `b42068ec7b206789` · 7 203 · 2 797) — and the cross-thread
+  ledger's numbers. **UNCHANGED and verified:** `canvas-render.wav` — 1 920 046 bytes, sha256
+  `d7ad294ea0b5e6e960f8dbc7f231dcbd84edec327e6352e80dc2f6ed786ec0b7` (the demo's master and
+  samples did not move; test006's [05] A/B keeps its shape). Inc15's drift expectations stand
+  (healthy runs read `accepted frames vs wall` within a few hundred ppm of 0 in BOTH share
+  modes); the digest remains the send-back artefact (the full logs stay on the device).

@@ -24,7 +24,7 @@ friendly-name registry fallback (#75), drift-without-GetPosition (#76).
 | Piece | Where | Note |
 |---|---|---|
 | Trait, capabilities, errors | `sparq-kernel/src/hal/mod.rs` | ADR-009's sketch, with `actual_config()` added so negotiated ≠ requested is always visible |
-| Diagnostics | `sparq-kernel/src/hal/diag.rs` | xruns, log2-bucket histogram (p50/p99/max), wake jitter, device-clock drift vs wall, allocation counts — all relaxed atomics, snapshot from any thread |
+| Diagnostics | `sparq-kernel/src/hal/diag.rs` | xruns, log2-bucket histogram (p50/p99/max), wake jitter, throughput drift (frames the device ACCEPTED vs wall — #76's derivation; `GetPosition` was removed, §4b/§4e), allocation counts — all relaxed atomics, snapshot from any thread |
 | Null backend | `sparq-kernel/src/hal/null.rs` | paced (hybrid sleep+spin pump) and manual (deterministic stepping) modes; fault injection: unplug, xrun, pump stall |
 | Conformance suite | `sparq-kernel/src/hal/conformance.rs` | the executable form of the trait review; every backend runs it (`sparq devices --conformance`) |
 | WASAPI | `sparq-kernel/src/hal/wasapi.rs` | exclusive + shared, event-driven, allowlist entry 1 |
@@ -52,6 +52,15 @@ friendly-name registry fallback (#75), drift-without-GetPosition (#76).
   shared: the engine's, typically 10 ms) and the sparq block B are decoupled by a pre-allocated
   FIFO in the pump. The callback always sees exactly B frames; the device always gets exactly
   what it asked for. FIFO starvation at write time = counted xrun + silence.
+* **Buffer ≡ periodicity (event-driven exclusive).** `IAudioClient::Initialize` requires
+  `hnsPeriodicity` nonzero and **equal to** `hnsBufferDuration` when `AUDCLNT_STREAMFLAGS_
+  EVENTCALLBACK` is set (enforced with `AUDCLNT_E_BUFDURATION_PERIOD_NOT_EQUAL`) — so an
+  exclusive stream can never bank more than ONE period, and a swallowed event cadence is lost
+  audio no pump can backfill (`writable = buffer − padding` caps every wake at one period;
+  test004 attempts 2–3 are that identity measured, §4d/§4e). Shared mode is the opposite shape:
+  the engine's buffer (2112 fr here) exceeds its delivery cadence (~960 fr) — 2.2× headroom —
+  which is why the same endpoint soaks clean shared and stalls exclusive. In exclusive, the
+  period itself is the only headroom lever (§5's push-mode entry is the other door).
 * **Shared-mode formats.** Probe ladder: f32@requested-rate → f32@mix-rate → mix-as-is. A 16-bit
   mix (the common Windows default — the Phase A lesson) is converted in the pump (clamp to
   ±32767, symmetric). Anything neither f32 nor i16 is refused at `open` with the format tag in
@@ -122,6 +131,7 @@ Template: one row per (machine, interface, backend, config) actually run.
 | 2026-09-24 | SATURN physical | same 8 endpoints | wasapi-exclusive | f32 @ 96000 / 2 ch on the default | **REFUSED everywhere, honestly**: caps show `exclusive none` + a single rate on ALL 8 endpoints; open → `AUDCLNT_E_UNSUPPORTED_FORMAT (0x88890008)`, classified `Format`, no silent reroute; conformance verified the refusal | exclusive-dependent acceptance (2 h soak 96k/64, unplug, recovery) is **BLOCKED until the target endpoint is identified and offers exclusive**. Two live theories: **(A)** the listed endpoints are Remote-Audio-class/virtual (name denial + #45 clock + 10 ms-cadence/22 ms-buffer shape) and the physical interface is not enumerated or not default; **(B)** `<endpoint 5>` *is* the reinstalled interface with the exclusive-control checkbox reset to OFF by the driver reinstall — a real device with exclusive disabled presents exactly this shape (single mix rate, `exclusive none`), which would also reclassify #40 from "RDP quirk" to a general sparq COM property-store bug. `test002` captures Windows-side ground truth (PnP AudioEndpoint names+states, `Win32_SoundDevice`, `qwinsta`, and the MMDevices registry `FriendlyName` — which bypasses the denied COM path and maps GUID-for-GUID onto sparq's endpoint list) and adds `--device N` targeting |
 | 2026-09-24 | SATURN physical, `test002.log`, no remote session (`qwinsta`: console active, rdp-tcp Listen only), High-performance scheme confirmed | **RESOLVED: the endpoints ARE the real hardware.** PnP + MMDevices-registry names: `{d8db3e5b…}` = **OUT 1-2 (BEHRINGER UMC 204HD 192k)** and is the default; `{1e9f6bf9…}` = OUT 1-4 (4 ch); `{593c4844…}` = OUT 3-4; IN 1-2 present (capture, increment 2); BenQ EL2870U ×3 (NVIDIA), Steam Streaming pair. `Win32_SoundDevice`: BEHRINGER UMC 204HD 192k status=OK | wasapi-shared | OUT 1-4 via `--device 1`: requested 96k/4ch plain-shape refused → **negotiated rung 2 extensible f32 96000 Hz / 4 ch** (the #38/#46 two-shapes fix, working as designed on real hardware); period 2112 fr (22 ms), block 64 | play 10 s **PASS** (15112 blocks, 0 xruns, 0 allocs, p99 2.0 µs, tone AUDIBLE); **UNPLUG TEST PASSED THE ACCEPTANCE CRITERION**: at ~8 s into a 30 s run the stream logged `entered Removed: the endpoint was invalidated … re-enumerate and open again`, final state `Removed`, dev-err 1, **0 xruns, 0 allocs, clean stop, no crash/hang**; re-plug recovery play **PASS** (15127 blocks, 0 xruns, tone audible); 5-min shared soak @96k/64 **PASS**: 450 307 blocks, **0 xruns / 0 late / 0 allocs**, p50 1.0 µs p99 2.0 µs max 108 µs (3 outliers >65 µs), jitter avg 10.00 ms; reopen-leak 0 outstanding on hardware | **Multichannel criterion resolved honestly**: UMC204HD maxes at 4 out — caps report `4..4` correctly, 4 ch f32 @96k negotiated and audible, and the ≥8-out path stays proven by the null backend (64 ch). test002's UTF-8 soak tee verified the #74 harness fix |
 | 2026-09-24 | SATURN physical (same session) | OUT 1-2 / OUT 1-4 (UMC 204HD) | wasapi-exclusive | f32 @ 96000, 2 ch and 4 ch, operator confirmed BOTH exclusive-control checkboxes ticked | **REFUSED by the driver**: `AUDCLNT_E_UNSUPPORTED_FORMAT (0x88890008)` — not `Busy`, not policy: the driver does not accept IEEE-float in exclusive. wasapi.rs header says it plainly: *"Exclusive: f32 extensible … no conversion on the hot path"* — the ladder has no integer rungs | **Defect #77 — the acceptance blocker**: USB DAC drivers (Behringer/Thesycon class) speak integer (24-in-32) in exclusive; sparq only asks for f32, so a fully exclusive-capable interface reports `exclusive none`. Increment 1.2: integer rungs (i32 / 24-in-32 / i16, both format shapes) + pump conversion generalising the existing shared-mode i16 path, then the 2 h exclusive acceptance soak via test004 |
+| 2026-09-28 evening | SATURN over RDP (`test004` attempt 3, inc-1.4 build — its build line proves `sync wo006-inc14` applied: `151 files match`, `src 92f/2001521B`) | OUT 1-2 (UMC 204HD), default | wasapi-exclusive | **the default period ASKED and GRANTED**: `i24-in-32 (converting)` @ 96 kHz, **960 fr (10.00 ms)**, no shrink note — inc 1.4's ladder exactly as designed | **the stall stayed, period-independent**: 158 late wakes / 10 s ≈ one ~40 ms stall every ~63 ms, HALF throughput — delivered = wakes × buffer to within one block (517 × 960 ≈ 496 384 fr ≈ 49.4k fr/s against a 96 kHz negotiation), jitter avg 19.44 / max 40.36 ms, no clean tone, rc 1; 0 budget overruns, 0 FIFO starvations again; the same session's shared rehearsal (3 min, 0 xruns), unplug→`Removed`, recovery and all three conformance suites stayed green | **#89's period-specific reading falsified → #92**: the stall lives in the driver's exclusive EVENT path (~16/s, ~33–40 ms wall, identical at 3 ms and 10 ms periods) and zero bankable headroom (buffer ≡ periodicity, API-mandated) turns each stall into lost audio. **#91 found in the same log**: `adjusted rate 48000 → 96000` — the exclusive envelope had been sieved through the shared list, so the driver was never asked about 48 kHz exclusive. §4e carries the arithmetic; inc 1.5 decouples the probes, ships #76's delivered-frames drift, and sends attempt 4 to 48 kHz |
 
 ## 4b. Findings from the first physical session (2026-09-24, test001/test002)
 
@@ -224,6 +234,98 @@ Template: one row per (machine, interface, backend, config) actually run.
   `E_ACCESSDENIED` (#75) and the `SUSPECT` drift labels (#45/#76: the shared clock's +1 199 624 ppm
   is exactly the 2112-fr-buffer-per-10-ms-tick signature #76 decoded) behaved as documented.
 
+## 4e. test004 attempt 3 — the default period was GRANTED and the stall stayed (2026-09-28 evening, increment 1.4 build)
+
+* **Inc 1.4's ladder did exactly its job — and proved the period was not the whole lie.**
+  Attempt 3 opened `i24-in-32 (converting) · device period 960 fr (10.00 ms) · sparq block 64 fr`
+  — the run sheet's predicted pass shape, verbatim: default-first ask granted, no shrink note, no
+  alignment re-ask. And the 10 s tone came back `NOT CLEAN` with the SAME triple as attempt 2:
+  **158 late wakes, half throughput (7756 blocks ≈ 49.4k fr/s against a 96 kHz negotiation),
+  jitter min 700 ns / avg 19.44 ms / max 40.36 ms over 517 wakes, drift −491 161 ppm, tone not
+  heard, rc 1** — again with **0 budget overruns and 0 FIFO-starvation writes**. The pump kept
+  every promise it could see, twice, at two different periods.
+* **The arithmetic, in the style of #76.** 517 wakes in ~10.05 s split bimodally: ~359 at ~10 ms
+  (ON cadence — the driver *can* tick its own default period) plus ~158 at ~40.4 ms — **one stall
+  every ~63 ms, each swallowing ~3 cadences**, the same ~16/s stall rate attempt 2 showed against
+  a 3 ms period (there: ~1559 at ~3.0 ms + ~159 at ~33.2 ms). The stall WALL-duration is
+  period-independent (33–40 ms both times); only its period-multiple changed (11× → 4×). And the
+  throughput identity is now exact, on both attempts: **delivered frames = wakes × buffer** —
+  517 × 960 = 496 320 vs the measured 496 384, and 1718 × 288 = 494 784 vs 494 848 (both one
+  block off, the preroll accounting). That identity is the whole failure in one line: in
+  event-driven exclusive the API forbids banking more than one period (`hnsPeriodicity` must
+  equal `hnsBufferDuration` — `AUDCLNT_E_BUFDURATION_PERIOD_NOT_EQUAL` otherwise), the pump's
+  per-wake write is capped at `buffer − padding` ≤ one period, so **every swallowed cadence is
+  audio the device can never receive** — half the wakes' worth here, hence half throughput and a
+  tone that is content-missing, not merely late. The shared engine on the same endpoint runs the
+  opposite shape — 2112 fr buffer against a ~960 fr delivery cadence, 2.2× headroom — and soaked
+  2 h clean with max jitter 12.04 ms.
+* **The rate was never asked (defect #91).** The `96000 Hz` in attempt 3's open line was not a
+  request: `play` asked its standing **48000 Hz** and the HAL adjusted it UP — `adjusted rate
+  48000 Hz -> 96000 Hz (this device does not list 48000 Hz)` — because caps printed
+  `exclusive 96000`. That single rate was a probe-design artefact, not a driver verdict:
+  `capabilities()` sieved the exclusive sweep through the SHARED-supported list, and this
+  endpoint's engine refused every shared f32 probe except at its own 96 kHz mix rate. The
+  driver — a "UMC 204HD **192k**", which by name and silicon speaks 44.1–192 kHz — was never
+  asked whether it does 48 kHz i24-in-32 exclusive. A stream told 96 kHz that consumes ≈49k fr/s
+  (§above), on hardware the shared engine happily serves at 96 kHz mix (resampling to whatever
+  the DAC clocks at), is a stream whose driver should be asked its lower native rates BEFORE the
+  stall is declared universal.
+* **Defect #92 (open, device-side): the exclusive event-stall phenomenon itself.** ~16 stalls/s,
+  ~33–40 ms wall each, identical across a 3 ms and a 10 ms period at 96 kHz, on a machine whose
+  shared engine is rock-solid in the same sessions. Candidates the sandbox cannot discriminate:
+  the USB class driver's exclusive URB scheduling; the RDP session's interaction with the
+  exclusive path (no exclusive run has EVER happened on this machine without RDP — test001/002
+  were physical but pre-#77, so exclusive was refused before it could stall); driver power
+  states. What the sandbox CAN do, inc 1.5 did: stop forcing the stream into the one rate the
+  phenomenon was observed at, and make the digest self-diagnosing so attempt 4 discriminates —
+  clean at 48 kHz ⇒ the phenomenon is rate-coupled and the acceptance shape is 48 kHz (with this
+  table's row for it); the same triple at 48 kHz ⇒ it is period- AND rate-independent, and the
+  remaining levers are named in §5 (push mode — legal headroom — or coarser cadence, whose cost
+  is latency: in event mode the period IS the latency).
+* **Increment 1.5's changes (all sandbox-verified):**
+  1. **The exclusive rate sweep is its own probe** (`wasapi.rs::capabilities`): the full
+     `PROBE_RATES` list plus the mix rate, four rungs each, asked of the DRIVER — never sieved
+     through the engine's shared envelope again (#91's fix; the `exclusive_rates` field doc
+     carries the rule).
+  2. **Adjustment consults the envelope the open negotiates in** (`Capabilities::
+     exclusive_rate_for`, pure + Linux-pinned): `play`/`soak` on `wasapi-exclusive` adjust within
+     the exclusive list (nearest verified rate, ties to the lower — the conservative clock;
+     an empty envelope falls back to `default_rate` so the open ladder still refuses with its
+     full probe table rather than a manufactured rate). Attempt 4's [04] asks 48000 and — if the
+     driver lists it — KEEPS it.
+  3. **#76 shipped: drift is delivered frames vs wall.** The WASAPI pump counts the frames the
+     device ACCEPTED (every successful `ReleaseBuffer`, preroll included) — the `IAudioClock`
+     binding is REMOVED, with a note where its vtable was, so nobody re-adds it trusting the old
+     story. §4b's fixture requirement is honoured in the tests: both recorded healthy sessions
+     read ≈ 0 ppm under the new derivation
+     (`the_defect_76_shared_session_reads_zero_under_the_new_derivation`), and attempt 3's shape
+     reads the −49 % half-throughput verdict it is
+     (`the_attempt_3_exclusive_shape_reads_as_half_throughput`). The SUSPECT label's falsified
+     "implausible clock (virtual/RDP endpoint)" text is gone — the number now MEANS something:
+     "the device is not consuming at the negotiated rate, or sustained starvation fed it
+     silence — the late-wake and xrun counts say which". `drift_suspect` waits for a 2 s trust
+     window: one period of counting quantisation at 96 kHz/10 ms is ±5 000 ppm over 2 s — half
+     the threshold — so short runs print the ratio and never the label (`DRIFT_TRUST_NS`'s doc
+     carries the arithmetic).
+  4. **The verdicts act on it.** `play`'s pass line and `soak`'s fail-fast now treat a suspect
+     drift past the trust window as a failure in its own right: a stream at half its negotiated
+     rate is not a passing stream even with quiet cadence counters. The null backend already
+     counted delivered blocks — the metric finally means the same thing on every backend.
+  5. **`test004.bat` is current for attempt 4**: [03] expects a MULTI-rate exclusive list; [04]
+     expects `48000 Hz · … · 480 fr (10.00 ms)` and says what a returning `adjusted` line would
+     mean (the driver genuinely refuses 48 kHz exclusive — send the caps block back); [07]
+     prompts for the soak rate (default 48000 — the rate [04] proves — with 96000 offered as the
+     explicit stretch); the hints speak #92's signature words.
+* **What stayed green in attempt 3** (recorded so the next run reads against it): build + stamp
+  guard ✓, caps rc ✓ (its CONTENT is #91's subject), shared unplug → `Removed` + dev-err 1 +
+  clean stop ✓, re-plug recovery ✓ (tone heard), the shared rehearsal soak ✓ (3 min — shortened
+  by the script because exclusive failed, labelled as such: 270 307 blocks, 0 xruns, 0 allocs),
+  post-soak conformance on all three backends ✓ — including the exclusive suite's lifecycle,
+  latency-report and reopen-leak checks on hardware (8 checks, 0 outstanding). The short exclusive
+  conformance fallback showed the same triple in miniature (2 late wakes over 121 blocks, jitter
+  max 40.00 ms): the phenomenon starts within the first second, which is why a startup-window
+  detector can ever work. The friendly-name `E_ACCESSDENIED` (#75) behaved as documented.
+
 ## 5. Increment 2 backlog (declared, not hidden)
 
 * **Increment 1.2 (pulls ahead of ASIO — it blocks the acceptance soak): integer exclusive
@@ -238,8 +340,23 @@ Template: one row per (machine, interface, backend, config) actually run.
   96 kHz/64 exclusive soak.
 * **Friendly-name fix (#75)**: registry fallback and/or STA retry — the COM denial now has a
   proven non-COM read path (test002 [02e]).
-* **Drift without `GetPosition` (#76)**: frames-delivered vs QPC, with the arithmetic from §4b as
-  the regression fixture (both recorded sessions must come out ≈ 0 ppm under the new derivation).
+* ~~**Drift without `GetPosition` (#76)**: frames-delivered vs QPC, with the arithmetic from §4b
+  as the regression fixture (both recorded sessions must come out ≈ 0 ppm under the new
+  derivation)~~ — **SHIPPED (increment 1.5, 2026-09-29)**: delivered-vs-wall is the metric, the
+  `IAudioClock` binding is deleted, both §4b fixtures are pinned as tests, and attempt 3's shape
+  is pinned as the half-throughput verdict it is (§4e).
+* **Push-mode exclusive — the named #92 lever.** Event-driven exclusive cannot legally bank more
+  than one period (buffer ≡ periodicity, §1/§4e), so a driver whose exclusive event path stalls
+  (~16/s × ~40 ms on the UMC 204HD at 96 kHz, period-independent) starves no matter what the
+  ladder asks. If attempt 4 shows the phenomenon is rate-independent, the remaining low-latency
+  shape is PUSH mode: `Initialize` without `AUDCLNT_STREAMFLAGS_EVENTCALLBACK`, periodicity 0,
+  buffer 2–4 periods, and a pump that paces itself (~period/4) and writes against padding — the
+  shape the audio engine itself runs on this very endpoint (22 ms buffer / ~10 ms cadence, 2 h
+  clean) and the default of mature WASAPI outputs on this driver class. Design before code: the
+  pump thread's self-pacing discipline (timer granularity; the callback-side no-clock rule is
+  untouched — the pump is harness side), ADR-004's "event-driven" wording, and the diagnostics
+  story (the expected cadence becomes a policy number instead of a driver number, so late-wake
+  semantics move). Its own increment, on purpose.
 * **ASIO backend** (`hal/asio.rs`, allowlist entry 2 reserved): registry enumeration, COM
   instantiation of driver CLSIDs, `IASIO` vtable, double-buffered `createBuffers`, driver-thread
   callback discipline. Sequenced after WASAPI *on hardware* so there is a proven reference to

@@ -167,7 +167,7 @@ path = "ports[].required"
 type = "bool"
 required = false
 default = true
-note = "optional inputs get an explicit unconnected signal, never silence-by-accident"
+note = "optional inputs get an explicit unconnected signal, never silence-by-accident; a REQUIRED input with no wire is refused at build - host-enforced since WO-008 inc 7 (ExecError::RequiredUnconnected names node, module, port and both remedies)"
 
 [[field]]
 path = "ports[].channel_set"
