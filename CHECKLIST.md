@@ -17,6 +17,25 @@ rest of the test006 digests (F–K, the mouse paragraph, the H diff list against
 the stage screen), and the gates digest at 777 / `src 94f/2188595B` / 37 smokes. **No bundle is
 waiting**; the next seal comes with the next build.
 
+**Mid-session update — ninth session (2026-09-30, sandbox), IN FLIGHT.** Session-start
+discipline run clean: `sync_check --quiet` OK (153 files match `wo012-inc4`, `src 94f/2188595B`
+— the count rose 152→153 because the fresh clone's build regenerated the gitignored
+`Cargo.lock` the manifest expects, clearing the only warning; `modules/out/main/sparqmod.toml`
+present, sha `725bf07a…` verified, no restore needed). `/opt` toolchain restored from the
+environment-notes recipe (cargo/rustc 1.98.1, rustfmt+clippy, MSVC cross-lint target). Baseline
+re-verified GREEN before any change: **777 tests passed / 0 failed / 1 ignored**. **Step (2)'s
+plan of record is WRITTEN: [`WO012-INC5-PLAN.md`](WO012-INC5-PLAN.md)** (docs-only, NOT
+stamp-covered, tree still green at `src 94f/2188595B`) — convergence slice B declared before
+code per the WO008-INC7 discipline: D1 the node-inset well registry (meters go live on EVERY
+audio-output node — the ring already carries them; envelope/sparkline/svf-curve wells ship their
+param-derived rest shapes, the live cv-history overlay declared the next half), D2 the per-module
+curve contract svf-first (single-source `SvfFilter::magnitude_at` in sparq-audio, the exact
+z-domain response, pinned to the sine-sweep so the display cannot drift from the DSP), D3 the
+inspector response plot + its draggable marker (a read-only probe, NOT a second cutoff door;
+display state, not undoable), D4 the model split + shape-of-the-diff proof (every golden
+bit-identical). **The BUILD is the next step and has NOT started** — no product code has changed
+this session, so no re-seal is due yet.
+
 **Next session, in order:** (1) session-start discipline — `python3 tools/sync_check.py
 --quiet` FIRST; if `modules/out/main/sparqmod.toml` reports MISSING restore it from
 `../sparq-recovery/modules-out-main-sparqmod.toml` and verify sha `725bf07a…`; the `/opt`
@@ -26,7 +45,9 @@ plot** (LATER §WO-012 increment 5+; the scope well from WO-013 inc 6 is the pat
 mockup's per-module wells — envelope triangles, meter bars, sparklines — draw from LIVE ring
 values where the rings carry them and sit at rest otherwise; the response plot needs a
 per-module curve contract, svf first, declared before drawn). Plan of record first, the
-WO008-INC7 discipline. (3) Then the bare-required-node badge (item 8). (4) When the digests
+WO008-INC7 discipline — **DONE this session: build to [`WO012-INC5-PLAN.md`](WO012-INC5-PLAN.md)**
+(D1 well registry · D2 svf curve contract · D3 response plot + probe marker · D4 model split);
+seal only when the increment is COMPLETE and green (a partial increment is not sealed). (3) Then the bare-required-node badge (item 8). (4) When the digests
 land: move the device boxes; and if test004 attempt 4 passes — WO-006 acceptance closes and
 the ADR-008 exit fires (bootstrap deleted, HAL becomes `play`'s default): do NOT do it early.
 
