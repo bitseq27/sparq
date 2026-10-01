@@ -142,18 +142,23 @@ fn an_absent_analysis_reader_is_counted_not_queued() {
     let mut buf: Vec<AnalysisUpdate> = vec![AnalysisUpdate::default(); 64];
     let read = control.read_analysis(&mut buf);
     // The tap publishes THREE waveforms per block — its audio-rate `wave` plus its block-rate
-    // `peak` and `rms` (a block-rate cv travels as a one-sample waveform, WO-012 increment 2):
-    // 60 offered, 8 kept (the OLDEST — a ring drops the newest when full), 52 refused-and-counted.
+    // `peak` and `rms` (a block-rate cv travels as a one-sample waveform, WO-012 increment 2) —
+    // and since the scope accepts ANY source (operator ruling 2026-10-01 r3) the sine's audio
+    // output publishes its first channel too: 4 per block, 80 offered, 8 kept (the OLDEST — a
+    // ring drops the newest when full), 72 refused-and-counted.
     assert_eq!(read, 8, "the ring kept exactly its capacity");
-    assert!(buf[..read].iter().all(|u| u.node == tap.0), "every kept update is the tap's");
+    assert!(
+        buf[..read].iter().all(|u| u.node == tap.0 || u.node == sine.0),
+        "every kept update is the tap's or the sine's"
+    );
     let stats = control.stats();
     assert_eq!(
         stats.analysis_refusals,
-        3 * 20 - 8,
+        4 * 20 - 8,
         "every publication the ring could not hold is counted"
     );
     println!(
-        "  analysis ring overflow: 60 published, 8 kept, {} refusals counted",
+        "  analysis ring overflow: 80 published, 8 kept, {} refusals counted",
         stats.analysis_refusals
     );
 }

@@ -1,0 +1,72 @@
+# sparq module manifest — util/vca (operator round 2026-10-01 r3).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The voltage-controlled amplifier the operator asked for: an audio path whose gain is the
+# SUM of a knob and a control voltage — the classic modulation junction (envelope or LFO
+# in, shaped audio out).
+#
+# SEMANTICS, stated exactly:
+# * `out = in * (level + cv)`, where `cv` is the bipolar control input read at block rate
+#   (the cv-in discipline of `util/gain`'s family): the knob is the bias, the wire is the
+#   motion, and with no wire the VCA is exactly the knob's amplifier.
+# * The product rides the same one-pole glide discipline as the other gain-like coefficients
+#   (defect #85): a fast cv or a fast knob chase instead of stepping, and a settled signal is
+#   the exact constant multiply the goldens pin.
+# * The cv input is OPTIONAL (required = false): an unwired cv reads 0, so a bare VCA is a
+#   legal patch shape (the out/main input's precedent), not a flagged one.
+
+[identity]
+id = "sparq/util/vca"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "VCA"
+summary = "Voltage-controlled amplifier: audio gain = knob + bipolar control voltage"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "utility/vca"
+top = "util"
+kind = "processor"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "in"
+name = "Audio In"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+
+[[ports]]
+id = "cv"
+name = "Control In"
+direction = "in"
+type = "cv"
+rate = "audio"
+range = "bipolar"
+required = false
+
+[[ports]]
+id = "out"
+name = "Audio Out"
+direction = "out"
+type = "audio"
+channel_set = "stereo"
+
+[[params]]
+id = "level"
+name = "Level"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 2.0
+default = 1.0
+
+[state]
+schema_id = "sparq/util/vca/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "trivial"

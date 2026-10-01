@@ -271,15 +271,22 @@ impl Node {
     }
 }
 
-/// A directed connection from an output port to an input port.
+/// A directed connection from an output port to an input port — or, with `param` set, a
+/// CONTROL connection from a cv output to a float PARAMETER (operator ruling 2026-10-01 r3:
+/// every float parameter is a controllable input).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Wire {
     /// Stable identity.
     pub id: WireId,
     /// The source (an `Out` port).
     pub from: PortRef,
-    /// The destination (an `In` port).
+    /// The destination (an `In` port) — ignored when `param` is `Some`.
     pub to: PortRef,
+    /// Control connection (r3): `Some(i)` means this wire lands on the destination NODE's
+    /// float parameter `i`, not on a port: the cv source modulates the knob value per block
+    /// (additive around it, ±1 cv sweeping half the range, clamped — declared in
+    /// `docs/ui/gestures.md` §4c). Port wires carry `None`.
+    pub param: Option<usize>,
 }
 
 /// One graph mutation, as data. Every variant has an [`Op::inverse`].
@@ -458,7 +465,44 @@ impl Graph {
     /// replacement rule in [`super::connect`].
     #[must_use]
     pub fn incoming(&self, input: PortRef) -> Option<&Wire> {
-        self.wires.iter().find(|w| w.to == input)
+        // Control wires (r3) land on parameters, never on ports: their dummy port ref must
+        // not answer for a port's feed.
+        self.wires.iter().find(|w| w.param.is_none() && w.to == input)
+    }
+
+    /// The role a `util/mult` dot currently carries (operator ruling 2026-10-01 r3): `In`
+    /// when a wire feeds it, `Out` when a wire leaves it, `None` while it is uncommitted —
+    /// the first connection sets the role, derived from the wires so no second state can
+    /// drift from the first.
+    #[must_use]
+    pub fn mult_port_role(
+        &self,
+        node: NodeId,
+        index: usize,
+    ) -> Option<sparq_module_api::port::Direction> {
+        let pref = PortRef::new(node, index);
+        use sparq_module_api::port::Direction;
+        if self.wires.iter().any(|w| w.param.is_none() && w.to == pref) {
+            Some(Direction::In)
+        } else if self.wires.iter().any(|w| w.param.is_none() && w.from == pref) {
+            Some(Direction::Out)
+        } else {
+            None
+        }
+    }
+
+    /// The port on the far end of a `util/mult` dot's defining (first) wire — the port whose
+    /// class the dot carries (r3). `None` for an uncommitted dot.
+    #[must_use]
+    pub fn mult_defining_port(&self, node: NodeId, index: usize) -> Option<PortRef> {
+        let pref = PortRef::new(node, index);
+        self.wires.iter().find(|w| w.param.is_none() && (w.to == pref || w.from == pref)).map(|w| {
+            if w.to == pref {
+                w.from
+            } else {
+                w.to
+            }
+        })
     }
 
     /// Every wire touching `node` (either end).
@@ -479,7 +523,12 @@ impl Graph {
         for n in &self.nodes {
             for (pi, p) in n.spec.ports.iter().enumerate() {
                 let incoming = p.direction == sparq_module_api::port::Direction::In && p.required;
-                if incoming && !self.wires.iter().any(|w| w.to.node == n.id && w.to.index == pi) {
+                if incoming
+                    && !self
+                        .wires
+                        .iter()
+                        .any(|w| w.param.is_none() && w.to.node == n.id && w.to.index == pi)
+                {
                     out.push((n.id, pi));
                 }
             }
@@ -564,7 +613,17 @@ impl Graph {
     /// verdict; this only assigns the id and inserts.
     pub fn op_add_wire(&mut self, from: PortRef, to: PortRef) -> Op {
         let id = self.alloc_wire();
-        let wire = Wire { id, from, to };
+        let wire = Wire { id, from, to, param: None };
+        self.apply(&Op::AddWire(wire));
+        Op::AddWire(wire)
+    }
+
+    /// Build and apply a CONTROL wire (operator ruling 2026-10-01 r3): a cv output onto a
+    /// float parameter of `dst`. The `to` port ref carries the node only; the parameter index
+    /// is the wire's `param`, and every consumer of wires as SIGNAL paths filters on it.
+    pub fn op_add_param_wire(&mut self, from: PortRef, dst: NodeId, param: usize) -> Op {
+        let id = self.alloc_wire();
+        let wire = Wire { id, from, to: PortRef::new(dst, 0), param: Some(param) };
         self.apply(&Op::AddWire(wire));
         Op::AddWire(wire)
     }

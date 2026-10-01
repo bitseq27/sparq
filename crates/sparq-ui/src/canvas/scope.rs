@@ -258,6 +258,83 @@ pub fn rest_line(rect: Rect) -> [Vec2; 2] {
     [Vec2::new(rect.min.x, cy), Vec2::new(rect.max.x, cy)]
 }
 
+/// The measurements the scope displays (operator ruling 2026-10-01: "a scope display with
+/// measurements and grid"). Computed from the trigger-selected window — the SAME samples the
+/// trace draws, so the numbers and the picture can never disagree.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ScopeMeasure {
+    /// Peak-to-peak amplitude of the window (max − min).
+    pub vpp: f32,
+    /// RMS amplitude of the window.
+    pub rms: f32,
+    /// Maximum |sample| of the window.
+    pub peak: f32,
+    /// Window minimum.
+    pub min: f32,
+    /// Window maximum.
+    pub max: f32,
+    /// Samples in the window.
+    pub n: usize,
+}
+
+/// Measure the trigger-selected window of a trace buffer. `None` when the window is empty —
+/// an unbound or at-rest scope has nothing to measure and says so in words rather than
+/// printing confident zeros about a signal that does not exist.
+#[must_use]
+pub fn measure(buf: &TraceBuf, view: &ScopeView) -> Option<ScopeMeasure> {
+    let w = window(buf, view.trigger);
+    if w.is_empty() {
+        return None;
+    }
+    let (mut mn, mut mx, mut sq) = (f32::MAX, f32::MIN, 0.0f64);
+    for &s in w {
+        let s = sanitise(s);
+        mn = mn.min(s);
+        mx = mx.max(s);
+        sq += f64::from(s) * f64::from(s);
+    }
+    let n = w.len();
+    Some(ScopeMeasure {
+        vpp: mx - mn,
+        rms: (sq / n as f64).sqrt() as f32,
+        peak: mn.abs().max(mx.abs()),
+        min: mn,
+        max: mx,
+        n,
+    })
+}
+
+/// One graticule line: its two endpoints, screen px.
+pub type GridLine = (Vec2, Vec2);
+
+/// The graticule: `cols × rows` divisions across `rect`, as (vertical, horizontal) line lists
+/// in screen px — the classic 10×8 oscilloscope grid, computed here so the painter invents no
+/// geometry. The centre lines are INCLUDED (the painter draws them at signal weight).
+#[must_use]
+pub fn graticule(rect: Rect, cols: usize, rows: usize) -> (Vec<GridLine>, Vec<GridLine>) {
+    let cols = cols.max(1);
+    let rows = rows.max(1);
+    let mut v = Vec::with_capacity(cols + 1);
+    for i in 0..=cols {
+        let x = rect.min.x + rect.width() * i as f32 / cols as f32;
+        v.push((Vec2::new(x, rect.min.y), Vec2::new(x, rect.max.y)));
+    }
+    let mut h = Vec::with_capacity(rows + 1);
+    for j in 0..=rows {
+        let y = rect.min.y + rect.height() * j as f32 / rows as f32;
+        h.push((Vec2::new(rect.min.x, y), Vec2::new(rect.max.x, y)));
+    }
+    (v, h)
+}
+
+/// The ms-per-division word for the measurement line: the timebase spans the graticule's
+/// columns, so one division is `timebase / cols` ms — formatted with its unit, the numeric
+/// discipline (every number with a unit).
+#[must_use]
+pub fn ms_per_div(view: &ScopeView, cols: usize) -> f32 {
+    view.timebase_ms / cols.max(1) as f32
+}
+
 /// One scope node's two axis traces.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ScopeTrace {
@@ -488,5 +565,44 @@ mod tests {
         assert!((a.y - 150.0).abs() < 1e-3);
         assert_eq!(a.x, 100.0);
         assert_eq!(b.x, 300.0);
+    }
+
+    // ------------------------------------------------ measurements + graticule (2026-10-01)
+
+    #[test]
+    fn measure_reads_the_same_window_the_trace_draws() {
+        let mut buf = TraceBuf::with_capacity(8);
+        buf.push(&[0.5, -0.5, 0.25, -0.25]);
+        let view = ScopeView::default();
+        let m = measure(&buf, &view).unwrap();
+        assert_eq!(m.n, 4);
+        assert!((m.vpp - 1.0).abs() < 1e-6, "max − min");
+        assert!((m.peak - 0.5).abs() < 1e-6);
+        assert!((m.rms - (0.15625f32).sqrt()).abs() < 1e-6, "{}", m.rms);
+        assert!((m.min + 0.5).abs() < 1e-6 && (m.max - 0.5).abs() < 1e-6);
+        // an empty window measures NOTHING — never confident zeros
+        assert!(measure(&TraceBuf::new(), &view).is_none());
+        // a NaN sample sanitises to zero, not NaN pixels
+        let mut nan_buf = TraceBuf::with_capacity(4);
+        nan_buf.push(&[f32::NAN, 0.4]);
+        let m = measure(&nan_buf, &view).unwrap();
+        assert!((m.peak - 0.4).abs() < 1e-6 && m.vpp.is_finite());
+    }
+
+    #[test]
+    fn the_graticule_divides_the_rect_into_the_classic_grid() {
+        let r = rect(); // 200 × 100 at (100, 100)
+        let (vs, hs) = graticule(r, 10, 8);
+        assert_eq!(vs.len(), 11, "10 columns → 11 verticals, edges included");
+        assert_eq!(hs.len(), 9, "8 rows → 9 horizontals");
+        assert!((vs[0].0.x - 100.0).abs() < 1e-3 && (vs[10].0.x - 300.0).abs() < 1e-3);
+        assert!((hs[0].0.y - 100.0).abs() < 1e-3 && (hs[8].0.y - 200.0).abs() < 1e-3);
+        // every vertical spans the full height; the middle one is the centre line
+        assert!((vs[5].0.x - 200.0).abs() < 1e-3);
+        assert_eq!(vs[5].0.y, r.min.y);
+        assert_eq!(vs[5].1.y, r.max.y);
+        // ms/div is the timebase over the SAME column count the painter grids by
+        let view = ScopeView::default(); // 20 ms
+        assert!((ms_per_div(&view, 10) - 2.0).abs() < 1e-6);
     }
 }

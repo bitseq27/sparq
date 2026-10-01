@@ -9,11 +9,14 @@
 # `sparq-audio::modules` (unity-bit-exact wire, trim, hard mute, the metering hook). Only the
 # prose comments are new; the sha therefore moves, and the move is declared in SYNC.md and
 # CHECKLIST.md rather than hidden — the stamp's cross-machine contract stays honest.
+# RE-RESTORED 2026-10-01 (round 3): the same exclude-list wipe took the directory again in the
+# sandbox; restored byte-identical to the round-2 state (stereo input, see below).
 #
 # The master output: a unity-BIT-EXACT pass-through with a trim and a hard mute that writes
 # EXACT zeros. Because the executor meters every node, this node's peak/rms ARE the master
-# meters — the "metering hook". The input is `variable` (it accepts the mix bus at whatever
-# width arrives); the output is stereo, the v0 device target.
+# meters — the "metering hook". The input is STEREO (operator ruling 2026-10-01 round 2: the
+# master is a stereo device door in both directions; a mono source still lands through the
+# documented mono→stereo conversion); the output is stereo, the v0 device target.
 
 [identity]
 id = "sparq/out/main"
@@ -36,7 +39,9 @@ id = "in"
 name = "Main In"
 direction = "in"
 type = "audio"
-channel_set = "variable"
+# Operator ruling 2026-10-01 (round 2): the master is a STEREO device door in both directions
+# (was `variable`); a mono source still lands through the documented mono→stereo conversion.
+channel_set = "stereo"
 required = false
 
 [[ports]]

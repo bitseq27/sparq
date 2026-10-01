@@ -35,8 +35,9 @@ id = "freq"
 name = "Frequency"
 type = "float"
 unit = "Hz"
-min = 0.0
-max = 24000.0
+# Operator ruling 2026-10-01 (round 2): same audible musical range as syn/sine, log-mapped.
+min = 10.0
+max = 10000.0
 default = 220.0
 
 [[params]]

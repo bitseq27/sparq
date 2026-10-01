@@ -77,10 +77,12 @@ label       = "S"
 
 # ---------------------------------------------------------------- states (structural, not decorative)
 # Pattern first, colour redundant: every state has a non-colour encoding (look-board.md §4).
-# The chrome accent (selection frames, active-tab underline, the probe marker): the operator's
-# orange primary from the Persistent-Nodes reference — structure wears orange, signal wears class.
+# The chrome accent (selection frames, active-tab underline, the probe marker).
+# OPERATOR RULING 2026-10-01: the selection highlight is WHITE — the one documented pure-white
+# exemption in the token set (see [forbidden] pure_white_allowlist); structure wears white,
+# signal wears class.
 [state.selected]
-colour = "#F08C1E"
+colour = "#FFFFFF"
 width = 1
 encoding = "corner-ticks"          # neutral frame; never an accent
 
@@ -160,7 +162,8 @@ accent_lightness_lift = 0.08
 
 # ---------------------------------------------------------------- forbidden
 [forbidden]
-pure_white      = true            # no #FFFFFF anywhere
+pure_white      = true            # no #FFFFFF anywhere EXCEPT the allowlist below
+pure_white_allowlist = ["colors.state.selected.colour"]   # operator ruling 2026-10-01: selection reads white
 pure_black_ui   = "canvas only"   # #000000 permitted only in the high-contrast theme and full-bleed visuals
 drop_shadow     = true
 gradient_decoration = true        # gradients allowed only in colormaps and meter fills

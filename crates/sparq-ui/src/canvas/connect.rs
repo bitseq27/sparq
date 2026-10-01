@@ -132,6 +132,16 @@ pub fn resolve(
     to: PortRef,
     ctx: &ConnectContext<'_>,
 ) -> ConnectOutcome {
+    // The junction bus (operator ruling 2026-10-01 r3): a mult dot's direction and type are
+    // set by its first connection, so the matrix — which judges static ports — never sees
+    // these pairs; the bus rules below are the mult's own contract, in words either way.
+    let from_mult =
+        graph.node(from.node).is_some_and(|n| n.spec.module_id == crate::canvas::MULT_ID);
+    let to_mult = graph.node(to.node).is_some_and(|n| n.spec.module_id == crate::canvas::MULT_ID);
+    if from_mult || to_mult {
+        return resolve_mult(graph, from, to);
+    }
+
     let (Some(src), Some(dst)) = (graph.port(from), graph.port(to)) else {
         return ConnectOutcome::Refused(Rejection::new("no such port — the node may have changed"));
     };
@@ -170,6 +180,22 @@ pub fn resolve(
         ));
     }
 
+    // The scope's display binding (operator ruling 2026-10-01 r3): its x/y inputs accept ANY
+    // travelling class — audio, cv, event, data — because the scope consumes NOTHING: the wire
+    // names the source whose publication the display reads (the audio thread never sees it;
+    // the bridge keeps these edges out of the kernel graph). The matrix governs signal paths;
+    // a display binding is not one, so it is decided here, in words either way.
+    if graph.node(to.node).is_some_and(|n| n.spec.module_id == crate::canvas::SCOPE_ID) {
+        return match src.port_type {
+            PortType::Audio | PortType::Cv | PortType::Event | PortType::Data => {
+                finish_connect(graph, from, to, dst.multiplicity, false, None)
+            },
+            other => ConnectOutcome::Refused(Rejection::new(format!(
+                "{other} carries no signal a scope can read — gpu/atom payloads never travel"
+            ))),
+        };
+    }
+
     // The matrix verdict, through the contract's own functions (one copy of the truth).
     let verdict = type_verdict(&src, &dst, ctx.phase);
     match verdict {
@@ -193,6 +219,141 @@ pub fn resolve(
             src.port_type, dst.port_type
         ))),
     }
+}
+
+/// Resolve a CONTROL connection (operator ruling 2026-10-01 r3): a cv output onto a float
+/// parameter of `dst` — the small blue dot beside a setting, dragged to from a control source.
+/// The verdicts are the matrix's discipline applied to modulation: only a `cv` output carries
+/// control (audio would modulate at a rate the block snapshot cannot honour, events are not
+/// numbers), only a `float` parameter receives it (a toggle or a menu is a decision, not a
+/// voltage), cycles are refused as for any wire, and a parameter already modulated gets its
+/// wire REPLACED atomically (one undo restores the old modulation — the single-input rule's
+/// sibling, because a knob can only wear one wire the way a `single` port can).
+pub fn resolve_param(
+    graph: &mut Graph,
+    from: PortRef,
+    dst: crate::canvas::model::NodeId,
+    param: usize,
+) -> ConnectOutcome {
+    use sparq_module_api::manifest::ParamKind;
+    let Some(src) = graph.port(from).cloned() else {
+        return ConnectOutcome::Refused(Rejection::new("no such source port"));
+    };
+    if src.direction != Direction::Out {
+        return ConnectOutcome::Refused(Rejection::new(
+            "a control wire starts at an OUTPUT — drag from the cv source to the setting",
+        ));
+    }
+    if src.port_type != PortType::Cv {
+        return ConnectOutcome::Refused(Rejection::new(format!(
+            "{} cannot drive a parameter — only a control (cv) output carries modulation",
+            src.port_type
+        )));
+    }
+    let Some(desc) = graph.node(dst).and_then(|n| n.spec.params.get(param)).cloned() else {
+        return ConnectOutcome::Refused(Rejection::new("that setting does not exist"));
+    };
+    if desc.kind != ParamKind::Float {
+        return ConnectOutcome::Refused(Rejection::new(format!(
+            "`{}` is not a float parameter — a toggle or a menu is a decision, not a voltage",
+            desc.name
+        )));
+    }
+    if from.node == dst || graph.reaches(dst, from.node) {
+        return ConnectOutcome::Refused(Rejection::new(
+            "that would create a cycle — a parameter cannot modulate its own source",
+        ));
+    }
+    if graph.wires().iter().any(|w| w.from == from && w.to.node == dst && w.param == Some(param)) {
+        return ConnectOutcome::Refused(Rejection::new("already modulated by that source"));
+    }
+    let existing =
+        graph.wires().iter().find(|w| w.to.node == dst && w.param == Some(param)).map(|w| w.id);
+    if let Some(old_id) = existing {
+        let mut ops = Vec::new();
+        if let Some(rm) = graph.op_remove_wire(old_id) {
+            ops.push(rm);
+        }
+        ops.push(graph.op_add_param_wire(from, dst, param));
+        return ConnectOutcome::Connected {
+            op: Op::Batch(ops),
+            conversion: false,
+            replaced: true,
+            adapter: None,
+        };
+    }
+    let add = graph.op_add_param_wire(from, dst, param);
+    ConnectOutcome::Connected { op: add, conversion: false, replaced: false, adapter: None }
+}
+
+/// The junction bus verdict (operator ruling 2026-10-01 r3): role set by the first connection
+/// and never reinterpreted while a wire touches the dot; type set by the same wire and never
+/// changed mid-stream; ONE source per mult (the other dots copy it — sums are the mixer's
+/// job); cycles refused like any wire. Every refusal is a sentence naming the rule, because
+/// a dot that silently ignores a drag is a dot the operator stops trusting.
+fn resolve_mult(graph: &mut Graph, from: PortRef, to: PortRef) -> ConnectOutcome {
+    use crate::canvas::layout::signal_class;
+    let (mnode, midx, other, other_is_src) =
+        if graph.node(from.node).is_some_and(|n| n.spec.module_id == crate::canvas::MULT_ID) {
+            (from.node, from.index, to, false)
+        } else {
+            (to.node, to.index, from, true)
+        };
+    if graph.node(other.node).is_some_and(|n| n.spec.module_id == crate::canvas::MULT_ID) {
+        return ConnectOutcome::Refused(Rejection::new(
+            "two mult dots cannot face each other — connect a dot to a real port",
+        ));
+    }
+    let Some(oport) = graph.port(other).cloned() else {
+        return ConnectOutcome::Refused(Rejection::new("no such port — the node may have changed"));
+    };
+    // The dot's intended role: a wire FROM a real port lands ON the dot (input); a wire TO a
+    // real port leaves the dot (output).
+    let intended = if other_is_src { Direction::In } else { Direction::Out };
+    if let Some(role) = graph.mult_port_role(mnode, midx) {
+        if role != intended {
+            return ConnectOutcome::Refused(Rejection::new(format!(
+                "that dot already carries an {} — a mult dot is one or the other while a wire touches it",
+                if role == Direction::In { "input" } else { "output" },
+            )));
+        }
+    }
+    // The bus's type is the first connection's type — node-wide, not per-dot (a dot that
+    // has never carried a wire inherits the bus, it does not start a second one).
+    let oclass = signal_class(&oport);
+    let dots = graph.node(mnode).map(|n| n.spec.ports.len()).unwrap_or(0);
+    let bus_class = (0..dots)
+        .filter(|&k| k != midx)
+        .filter_map(|k| graph.mult_defining_port(mnode, k))
+        .find_map(|pref| graph.port(pref).map(signal_class));
+    if let Some(dclass) = bus_class {
+        if dclass != oclass {
+            return ConnectOutcome::Refused(Rejection::new(format!(
+                "that bus already carries a {dclass:?} signal — a mult bus is one type; the first connection set it",
+            )));
+        }
+    }
+    if intended == Direction::In {
+        if (0..dots).any(|k| k != midx && graph.mult_port_role(mnode, k) == Some(Direction::In)) {
+            return ConnectOutcome::Refused(Rejection::new(
+                "this mult already has a source — every other dot copies it; sums are the mixer's job",
+            ));
+        }
+        if graph.reaches(mnode, other.node) {
+            return ConnectOutcome::Refused(Rejection::new(
+                "that would create a cycle — only a delay module may close a loop",
+            ));
+        }
+    } else if graph.reaches(other.node, mnode) {
+        return ConnectOutcome::Refused(Rejection::new(
+            "that would create a cycle — only a delay module may close a loop",
+        ));
+    }
+    if graph.wires().iter().any(|w| w.from == from && w.to == to) {
+        return ConnectOutcome::Refused(Rejection::new("already connected"));
+    }
+    let add = graph.op_add_wire(from, to);
+    ConnectOutcome::Connected { op: add, conversion: false, replaced: false, adapter: None }
 }
 
 /// The matrix verdict for a source→destination port pair, dispatching to the right `connect_*`.

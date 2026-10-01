@@ -74,6 +74,14 @@ pub const MIXER_MANIFEST: &str = include_str!("../../../modules/util/mixer/sparq
 pub const LFO_MANIFEST: &str = include_str!("../../../modules/mod/lfo/sparqmod.toml");
 /// The `mod/clk-div` manifest — the on-disk file, compiled in.
 pub const CLK_DIV_MANIFEST: &str = include_str!("../../../modules/mod/clk-div/sparqmod.toml");
+/// The `mod/clk` manifest — the free-running tempo clock (operator round 2026-10-01).
+pub const CLK_MANIFEST: &str = include_str!("../../../modules/mod/clk/sparqmod.toml");
+/// The `mod/seq` manifest — the 3-16 step trigger sequencer (operator round 2026-10-01).
+pub const SEQ_MANIFEST: &str = include_str!("../../../modules/mod/seq/sparqmod.toml");
+/// The `util/vca` manifest — the voltage-controlled amplifier (operator round 2026-10-01 r3).
+pub const VCA_MANIFEST: &str = include_str!("../../../modules/util/vca/sparqmod.toml");
+/// The `util/mult` manifest — the six-dot junction bus (operator round 2026-10-01 r3).
+pub const MULT_MANIFEST: &str = include_str!("../../../modules/util/mult/sparqmod.toml");
 /// The `ana/tap` manifest — the on-disk file, compiled in.
 pub const TAP_MANIFEST: &str = include_str!("../../../modules/ana/tap/sparqmod.toml");
 /// The `dsp/scope` manifest — the on-disk file, compiled in.
@@ -747,6 +755,149 @@ fn stereo_tick<F: FnMut(usize, f32) -> f32>(ctx: &mut AudioCtx<'_>, mut tick: F)
         }
     }
     BlockStatus::Ok
+}
+
+// --------------------------------------------------------------------------- util/mult
+
+/// The six-dot junction bus (operator round 2026-10-01 r3): a PATCHING convenience, not a
+/// processor. The canvas owns the dots' dynamic roles (in/out, type-by-first-connection) and
+/// the bridge COLLAPSES the node at build time — every output dot's wires become direct
+/// kernel edges from the one source — so this module's `process` is a no-op by design: the
+/// signal never passes through it, because there is nothing to pass through. It exists so
+/// the registry can validate the manifest and the executor can host the (edge-less) node
+/// the canvas draws.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Mult;
+
+impl Mult {
+    /// A fresh junction.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Module for Mult {
+    fn id(&self) -> &str {
+        "sparq/util/mult"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        if !state.is_empty() {
+            return Err(ModuleError::State("sparq/util/mult state is empty"));
+        }
+        Ok(())
+    }
+
+    fn prepare(&mut self, _resources: &Resources) -> Result<(), ModuleError> {
+        Ok(())
+    }
+
+    fn process(&mut self, _ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        // The junction carries nothing: the bridge collapsed it into direct edges between
+        // the real endpoints. A block here is a block nowhere — the honest no-op.
+        BlockStatus::Ok
+    }
+
+    fn message(&mut self, _payload: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("sparq/util/mult understands no messages"))
+    }
+}
+
+/// Factory for [`Mult`].
+#[must_use]
+pub fn create_mult() -> Box<dyn Module> {
+    Box::new(Mult::new())
+}
+
+// --------------------------------------------------------------------------- util/vca
+
+/// The voltage-controlled amplifier (operator round 2026-10-01 r3): `out = in × (level + cv)`.
+/// The knob is the bias, the bipolar control wire is the motion — with no wire the VCA is
+/// exactly the knob's amplifier. The coefficient rides the same one-pole glide as the other
+/// gain-like coefficients (defect #85): a fast cv or knob chase instead of stepping, and a
+/// settled signal is the exact constant multiply the goldens pin.
+#[derive(Clone, Debug)]
+pub struct Vca {
+    /// The coefficient the last block ended at (NaN until primed — the glide's start point).
+    applied: f32,
+    rate: u32,
+}
+
+impl Vca {
+    /// A fresh VCA, coefficient un-primed (the gain module's prime rule).
+    #[must_use]
+    pub fn new() -> Self {
+        Self { applied: f32::NAN, rate: 48_000 }
+    }
+}
+
+impl Default for Vca {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Module for Vca {
+    fn id(&self) -> &str {
+        "sparq/util/vca"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        let bytes: [u8; 4] = state
+            .try_into()
+            .map_err(|_| ModuleError::State("sparq/util/vca state is exactly 4 bytes"))?;
+        self.applied = f32::from_le_bytes(bytes);
+        Ok(())
+    }
+
+    fn prepare(&mut self, resources: &Resources) -> Result<(), ModuleError> {
+        if resources.block_frames == 0 {
+            return Err(ModuleError::Resources("block_frames must be at least 1"));
+        }
+        self.rate = resources.sample_rate;
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        // The control voltage at block rate: an audio-rate cv reads its LAST sample (the
+        // block's settled word), a block-rate cv its single value, an unconnected port 0 —
+        // the optionality is the manifest's, never silence-by-accident.
+        let cv = ctx.cv_in(0).map_or(0.0, |v| {
+            v.audio().and_then(|sl| sl.last().copied()).or_else(|| v.block()).unwrap_or(0.0)
+        });
+        let target = ctx.param(0) + cv;
+        if !ctx.has_input() {
+            for s in ctx.output().iter_mut() {
+                *s = 0.0;
+            }
+            self.applied = target;
+            return BlockStatus::Silenced;
+        }
+        let input = ctx.input();
+        let k = crate::dsp::core::glide_k(self.rate, 1);
+        let mut g = crate::dsp::core::primed(self.applied, target);
+        for (o, i) in ctx.output().iter_mut().zip(input.iter()) {
+            g = crate::dsp::core::glide(g, target, k);
+            *o = *i * g;
+        }
+        self.applied = g;
+        BlockStatus::Ok
+    }
+
+    fn message(&mut self, payload: &[u8]) -> Result<(), ModuleError> {
+        if payload == b"reset" {
+            self.applied = f32::NAN;
+            return Ok(());
+        }
+        Err(ModuleError::Message("sparq/util/vca understands only `reset`"))
+    }
+}
+
+/// Factory for [`Vca`].
+#[must_use]
+pub fn create_vca() -> Box<dyn Module> {
+    Box::new(Vca::new())
 }
 
 // --------------------------------------------------------------------------- util/delay
@@ -1928,6 +2079,188 @@ pub fn create_clk_div() -> Box<dyn Module> {
     Box::new(ClkDiv::new())
 }
 
+// --------------------------------------------------------------------------- mod/clk
+
+/// The clock's divisions, in manifest port order: 4ths, 8ths, 16ths, 32nds — one trigger
+/// output each (operator round 2026-10-01: "a clock module, bpm, 4th, 8th, 16th, 32nds").
+const CLK_DIVISIONS: [u32; 4] = [1, 2, 4, 8];
+
+/// The free-running tempo clock (operator round 2026-10-01): four sample-accurate trigger
+/// grids at the classic divisions of one tempo. Each division keeps its own next-tick sample
+/// counter, so the grids are exact (no accumulated rounding) and coincide on the downbeat;
+/// a tempo edit re-spaces ticks FROM THE NEXT ONE — the grid never jumps backwards and never
+/// double-fires. The state blob is the four counters (32 bytes): a restore lands the clock
+/// mid-grid, phase-continuous — the sine's phase promise applied to tempo.
+#[derive(Clone, Copy, Debug)]
+pub struct Clock {
+    rate: u32,
+    /// Absolute sample of each division's next tick; `0` = not primed yet.
+    next: [u64; 4],
+}
+
+impl Clock {
+    /// A fresh clock, unprimed: the first block primes every grid at its own start.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { rate: 48_000, next: [0; 4] }
+    }
+
+    /// One division's interval in samples, rounded to the nearest sample and never zero —
+    /// the grid's only arithmetic, done per block from the negotiated rate and the tempo.
+    fn interval(rate: u32, bpm: f64, div: u32) -> u64 {
+        let quarter_s = 60.0 / bpm;
+        (quarter_s * f64::from(rate) / f64::from(div)).round().max(1.0) as u64
+    }
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Module for Clock {
+    fn id(&self) -> &str {
+        "sparq/mod/clk"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        if state.len() != 32 {
+            return Err(ModuleError::State(
+                "sparq/mod/clk state is exactly 32 bytes (four next-tick counters)",
+            ));
+        }
+        for (k, chunk) in state.chunks_exact(8).enumerate() {
+            self.next[k] = u64::from_le_bytes(chunk.try_into().unwrap_or([0; 8]));
+        }
+        Ok(())
+    }
+
+    fn prepare(&mut self, resources: &Resources) -> Result<(), ModuleError> {
+        if resources.sample_rate == 0 {
+            return Err(ModuleError::Resources("sample_rate must be non-zero"));
+        }
+        self.rate = resources.sample_rate;
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        let bpm = f64::from(ctx.param(0).clamp(20.0, 300.0));
+        let frames = ctx.frames() as u64;
+        let base = ctx.block.sample_offset;
+        // One sink at a time: each take hands out the port's buffer, the division fills it
+        // in ascending sample order (the host's sorted-delivery contract), then the borrow
+        // ends before the next take.
+        for (k, &div) in CLK_DIVISIONS.iter().enumerate() {
+            let Some(mut sink) = ctx.take_event_out(k) else {
+                continue; // no such port presented: publish nowhere, count nothing
+            };
+            let interval = Self::interval(self.rate, bpm, div);
+            if self.next[k] < base {
+                self.next[k] = base; // fresh, restored-past, or tempo-widened: prime at now
+            }
+            while self.next[k] < base + frames {
+                let off = (self.next[k] - base) as u32;
+                sink.push(sparq_module_api::event::Event::trigger(off, 1.0));
+                self.next[k] += interval;
+            }
+        }
+        BlockStatus::Ok
+    }
+
+    fn message(&mut self, payload: &[u8]) -> Result<(), ModuleError> {
+        if payload == b"reset" {
+            self.next = [0; 4];
+            return Ok(());
+        }
+        Err(ModuleError::Message("sparq/mod/clk understands only `reset`"))
+    }
+}
+
+/// Factory for [`Clock`].
+#[must_use]
+pub fn create_clock() -> Box<dyn Module> {
+    Box::new(Clock::new())
+}
+
+// --------------------------------------------------------------------------- mod/seq
+
+/// The 3-16 step trigger sequencer (operator round 2026-10-01): a clock walks a step ring,
+/// the `pattern` bitmask decides which steps fire. Every qualifying input trigger (value > 0,
+/// the clk-div counting rule) advances the ring by one; a set bit emits a trigger at the
+/// INPUT event's sample — the sequencer adds pattern, not time. The state blob is the 8-byte
+/// step counter, so a restore resumes mid-walk.
+#[derive(Clone, Copy, Debug)]
+pub struct TrigSeq {
+    count: u64,
+}
+
+impl TrigSeq {
+    /// A fresh sequencer at step 0.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { count: 0 }
+    }
+}
+
+impl Default for TrigSeq {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Module for TrigSeq {
+    fn id(&self) -> &str {
+        "sparq/mod/seq"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        let bytes: [u8; 8] = state
+            .try_into()
+            .map_err(|_| ModuleError::State("sparq/mod/seq state is exactly 8 bytes (step)"))?;
+        self.count = u64::from_le_bytes(bytes);
+        Ok(())
+    }
+
+    fn prepare(&mut self, _resources: &Resources) -> Result<(), ModuleError> {
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        let events = ctx.events_in(0).unwrap_or(&[]);
+        let steps = (f64::from(ctx.param(0)).round() as i64).clamp(3, 16) as u64;
+        let pattern = (f64::from(ctx.param(1)).round() as i64).clamp(0, 65535) as u64;
+        let Some(mut sink) = ctx.take_event_out(0) else {
+            return BlockStatus::Ok; // no event-out presented: publish nowhere
+        };
+        for ev in events {
+            if ev.value <= 0.0 {
+                continue; // gate-offs are not clock pulses
+            }
+            let step = self.count % steps;
+            self.count += 1;
+            if (pattern >> step) & 1 == 1 {
+                sink.push(sparq_module_api::event::Event::trigger(ev.sample, 1.0));
+            }
+        }
+        BlockStatus::Ok
+    }
+
+    fn message(&mut self, payload: &[u8]) -> Result<(), ModuleError> {
+        if payload == b"reset" {
+            self.count = 0;
+            return Ok(());
+        }
+        Err(ModuleError::Message("sparq/mod/seq understands only `reset`"))
+    }
+}
+
+/// Factory for [`TrigSeq`].
+#[must_use]
+pub fn create_trig_seq() -> Box<dyn Module> {
+    Box::new(TrigSeq::new())
+}
+
 // --------------------------------------------------------------------------- ana/tap
 
 /// The generic signal tap for displays (WO-014 increment 5) — the analysis source the display
@@ -2201,7 +2534,7 @@ pub fn create_out_main() -> Box<dyn Module> {
 
 /// Every built-in: id → (manifest text, factory). The single place that knows the first-party
 /// set; discovery pairs these with on-disk manifests by id (§11 precedence: built-in wins).
-pub const BUILTINS: [(&str, &str, Factory); 17] = [
+pub const BUILTINS: [(&str, &str, Factory); 21] = [
     ("sparq/syn/sine", SINE_MANIFEST, create_sine),
     ("sparq/syn/noise", NOISE_MANIFEST, create_noise),
     ("sparq/syn/polyblep", POLYBLEP_MANIFEST, create_polyblep),
@@ -2212,8 +2545,12 @@ pub const BUILTINS: [(&str, &str, Factory); 17] = [
     ("sparq/util/delay", DELAY_MANIFEST, create_delay),
     ("sparq/util/panner", PANNER_MANIFEST, create_panner),
     ("sparq/util/mixer", MIXER_MANIFEST, create_mixer),
+    ("sparq/util/vca", VCA_MANIFEST, create_vca),
+    ("sparq/util/mult", MULT_MANIFEST, create_mult),
     ("sparq/mod/lfo", LFO_MANIFEST, create_lfo),
     ("sparq/mod/clk-div", CLK_DIV_MANIFEST, create_clk_div),
+    ("sparq/mod/clk", CLK_MANIFEST, create_clock),
+    ("sparq/mod/seq", SEQ_MANIFEST, create_trig_seq),
     ("sparq/fx/bitcrush", BITCRUSH_MANIFEST, create_bitcrush),
     ("sparq/ana/rms", RMS_MANIFEST, create_rms),
     ("sparq/ana/tap", TAP_MANIFEST, create_tap),

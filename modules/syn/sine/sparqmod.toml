@@ -31,8 +31,10 @@ id = "freq"
 name = "Frequency"
 type = "float"
 unit = "Hz"
-min = 0.0
-max = 24000.0
+# Operator ruling 2026-10-01 (round 2): the audible musical range 10 Hz – 10 kHz, mapped
+# LOGARITHMICALLY by the UI so the slider tracks the mouse where the ear lives.
+min = 10.0
+max = 10000.0
 default = 440.0
 
 [[params]]

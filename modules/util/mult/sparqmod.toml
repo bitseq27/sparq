@@ -1,0 +1,96 @@
+# sparq module manifest — util/mult (operator round 2026-10-01 r3).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The multiple / junction bus the operator asked for: six vertical connection dots, each of
+# which can be an input OR an output, the type set by the FIRST connection to that dot. The
+# module is a PATCHING junction, not a processor: its `process` is a no-op, and the bridge
+# COLLAPSES it at build time — every output dot's wires become direct kernel edges from the
+# one source feeding the input dot (the fan-in/fan-out the kernel already speaks). What the
+# canvas shows is what the executor runs, one copy of the truth.
+#
+# SEMANTICS, stated exactly (the canvas enforces them in words at connect time):
+# * a dot's ROLE (input or output) is set by its first wire and never changes while any wire
+#   touches it; a drag against the grain is refused, not reinterpreted;
+# * a dot's TYPE (audio / cv / event / data) is set by the same first wire; later wires at
+#   that dot must carry the same class — a bus does not change colour mid-stream;
+# * one mult carries ONE source: the first dot wired as an input is the bus's source; a
+#   second input dot is refused in words ("the other dots copy it") — sums are the mixer's
+#   job, copying is the mult's;
+# * every output dot copies the source to all of its own wires (fan-out is free, as ever).
+#
+# The manifest declares the six dots as audio inputs because the contract's ports are
+# statically directed; the mult's dynamic roles live in the canvas's connect rules (the one
+# module the canvas knows by name beside the permanent Main Out), and the kernel never sees
+# the node's ports at all — only the collapsed source→destination edges.
+
+[identity]
+id = "sparq/util/mult"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Mult"
+summary = "Six-dot junction bus: each dot in or out, type set by its first connection"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "utility/multiple"
+top = "util"
+kind = "utility"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "d1"
+name = "Dot 1"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+required = false
+
+[[ports]]
+id = "d2"
+name = "Dot 2"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+required = false
+
+[[ports]]
+id = "d3"
+name = "Dot 3"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+required = false
+
+[[ports]]
+id = "d4"
+name = "Dot 4"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+required = false
+
+[[ports]]
+id = "d5"
+name = "Dot 5"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+required = false
+
+[[ports]]
+id = "d6"
+name = "Dot 6"
+direction = "in"
+type = "audio"
+channel_set = "stereo"
+required = false
+
+[state]
+schema_id = "sparq/util/mult/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "trivial"

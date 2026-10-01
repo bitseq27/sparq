@@ -387,6 +387,11 @@ pub struct LiveSession {
     /// The param-ring refusal was already said this episode (reset by a clean sync).
     param_refusal_said: bool,
     kind: BackendKind,
+    /// The probe's device name — the Main Out card reads it (operator ruling 2026-10-01: the
+    /// master output shows WHICH driver is under it, in words, while it plays).
+    device_name: String,
+    /// The probe's backend display name (same ruling).
+    backend_name: String,
     /// Set once STOP has run, so `Drop` never double-stops.
     stopped: bool,
 }
@@ -551,6 +556,8 @@ impl LiveSession {
             last_refusal: None,
             param_refusal_said: false,
             kind,
+            device_name: device,
+            backend_name: backend,
             stopped: false,
         })
     }
@@ -596,6 +603,31 @@ impl LiveSession {
             snap.xruns,
             self.control.stats().swap.swaps,
         )
+    }
+
+    /// The Main Out card's driver readout (operator ruling 2026-10-01): WHICH driver is under
+    /// the master, and the negotiated truth it opened with — backend · device on the first
+    /// line, rate · channels · block · sample format on the second. Every value is the
+    /// session's own (the probe's names, the negotiated config, the mirror's counters);
+    /// nothing is invented, and the format is the HAL contract's interleaved f32 — the one
+    /// format `ProcessFn` carries.
+    #[must_use]
+    pub fn driver_lines(&self) -> [String; 2] {
+        let snap = self.health.lock().map(|g| g.clone()).unwrap_or_default();
+        let rate = if snap.rate > 0 { snap.rate } else { self.exec_cfg.sample_rate };
+        let block = if snap.block > 0 { snap.block } else { self.exec_cfg.block_frames };
+        // Line two is composed to FIT the card's info band at zoom 1 (28 xs chars): kHz not
+        // Hz, `f32` not `32-bit float` — the band clips with an ellipsis if a device name or
+        // a negotiated oddity outruns it, but the negotiated truth never loses its units.
+        let khz = if rate % 1000 == 0 {
+            format!("{} kHz", rate / 1000)
+        } else {
+            format!("{:.1} kHz", f64::from(rate) / 1000.0)
+        };
+        [
+            format!("{} · {}", self.backend_name, self.device_name),
+            format!("{khz} · {} ch · {} fr · f32", self.exec_cfg.device_channels, block),
+        ]
     }
 
     /// The cross-thread counters — what the evidence line reads, and what the smokes assert

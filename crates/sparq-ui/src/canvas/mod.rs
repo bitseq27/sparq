@@ -59,6 +59,16 @@ pub const OUT_MAIN_ID: &str = "sparq/out/main";
 /// the id and its two consumers cannot drift apart (the `OUT_MAIN_ID` discipline).
 pub const SCOPE_ID: &str = "sparq/dsp/scope";
 
+/// The stable id of the trigger sequencer (operator round 2026-10-01 r3): its pattern row is
+/// the 16 step buttons the layout reserves and the painters draw — one named constant, so the
+/// id and its consumers cannot drift apart (the `OUT_MAIN_ID` discipline).
+pub const SEQ_ID: &str = "sparq/mod/seq";
+
+/// The stable id of the junction bus (operator round 2026-10-01 r3): `util/mult`'s six dots
+/// carry dynamic roles the canvas owns and the bridge collapses — one named constant, the
+/// `OUT_MAIN_ID` discipline.
+pub const MULT_ID: &str = "sparq/util/mult";
+
 pub use browser::{fuzzy_score, rank, BrowserHit, BrowserItem, BrowserState};
 pub use camera::{Camera, Lod};
 pub use connect::{ConnectContext, ConnectOutcome, Rejection};

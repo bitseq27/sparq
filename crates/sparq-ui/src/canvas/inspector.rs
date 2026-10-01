@@ -40,7 +40,7 @@ use crate::tokens::{
 pub const PLOT_HEIGHT: f32 = LAYOUT_SPACE_9 as f32;
 
 /// One parameter's row, laid out inside the panel.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ParamRow {
     /// Index into the node's [`crate::canvas::model::NodeSpec::params`].
     pub index: usize,
@@ -52,6 +52,17 @@ pub struct ParamRow {
     pub value: Rect,
     /// Whether a drag on `track` changes the value (see [`ParamDesc::editable`]).
     pub editable: bool,
+    /// Whether this row is a BINARY setting (operator ruling 2026-10-01): the painter draws a
+    /// toggle switch instead of a slider, and the gesture path FLIPS the value on tap instead
+    /// of mapping x (see [`is_binary`]).
+    pub toggle: bool,
+    /// Whether this row is a MULTI-CHOICE setting (operator ruling 2026-10-01): the painter
+    /// draws one button per choice instead of a slider (see [`is_choice`]).
+    pub choice: bool,
+    /// The 16 step buttons of the sequencer's pattern row (operator ruling 2026-10-01 r3),
+    /// laid out 2×8 inside the track so a finger can hit them here (the card's strip is one
+    /// row of 16 — the inspector is the touch-sized door). Empty for every other row.
+    pub steps: Vec<Rect>,
 }
 
 /// The whole panel for one node.
@@ -126,8 +137,29 @@ pub fn compute_at(node: &Node, rect: Rect, scroll: f32) -> InspectorLayout {
     for (i, desc) in node.spec.params.iter().enumerate() {
         let y = rows_top + i as f32 * row_h - scroll;
         let row = Rect::from_min_size(Vec2::new(content_x, y), Vec2::new(content_w, row_h));
+        // The sequencer's program is buttons, not a mask slider: 2×8 cells inside the track
+        // (operator ruling 2026-10-01 r3) — touch-sized halves of the card's 16-strip.
+        let steps = if node.spec.module_id == crate::canvas::SEQ_ID && desc.id == "pattern" {
+            let tx = row.min.x + content_w * LABEL_FRAC;
+            let tw = content_w * TRACK_FRAC;
+            let gap = LAYOUT_SPACE_1 as f32 * 0.5;
+            let cw = (tw - gap * 7.0) / 8.0;
+            let ch = (row_h - gap) / 2.0;
+            (0..16)
+                .map(|k| {
+                    let (cx, cy) = (k % 8, k / 8);
+                    Rect::from_min_size(
+                        Vec2::new(tx + cx as f32 * (cw + gap), y + cy as f32 * (ch + gap)),
+                        Vec2::new(cw, ch),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         rows.push(ParamRow {
             index: i,
+            steps,
             label: Rect::from_min_size(row.min, Vec2::new(content_w * LABEL_FRAC, row_h)),
             track: Rect::from_min_size(
                 Vec2::new(row.min.x + content_w * LABEL_FRAC, y),
@@ -138,6 +170,8 @@ pub fn compute_at(node: &Node, rect: Rect, scroll: f32) -> InspectorLayout {
                 Vec2::new(content_w * (1.0 - LABEL_FRAC - TRACK_FRAC), row_h),
             ),
             editable: desc.editable(),
+            toggle: is_binary(desc),
+            choice: is_choice(desc),
         });
     }
     InspectorLayout { node: node.id, rect, title, plot, rows, scroll, max_scroll }
@@ -217,17 +251,77 @@ impl InspectorLayout {
     }
 }
 
+/// Whether a parameter's slider maps LOGARITHMICALLY (operator ruling 2026-10-01): frequency
+/// params (`unit == "Hz"`) with a strictly positive minimum. The ear is logarithmic, so a linear
+/// 0.1 Hz – 10 kHz track spends 99 % of its pixels above 100 Hz and the slider "does not follow
+/// the mouse" for every musical value — the log map makes equal mouse distances equal pitch
+/// distances. Params that include 0 stay linear (log(0) is not a mapping).
+#[must_use]
+pub fn is_log_scale(desc: &ParamDesc) -> bool {
+    desc.unit.as_deref() == Some("Hz") && desc.min > 0.0 && desc.max > desc.min
+}
+
+/// Whether a parameter is BINARY (operator ruling 2026-10-01): a `Bool`, or an integer whose
+/// whole domain is `[0, 1]` (the manifests' `Mute`, `Mode` shape). Binary settings get a TOGGLE
+/// button, never a slider — a slider that can only rest in two places is a switch wearing a
+/// slider's clothes.
+#[must_use]
+pub fn is_binary(desc: &ParamDesc) -> bool {
+    use sparq_module_api::manifest::ParamKind;
+    match desc.kind {
+        ParamKind::Bool => true,
+        ParamKind::Int => desc.min == 0.0 && desc.max == 1.0,
+        _ => false,
+    }
+}
+
+/// Whether a parameter is a MULTI-CHOICE setting (operator ruling 2026-10-01): an `int` whose
+/// domain is 3…8 discrete choices (the manifests' Mode / Shape / Colour-Map shapes). Those rows
+/// draw a BUTTON PER CHOICE, never a slider — a slider over a menu is a menu pretending to be a
+/// scale. Two choices are a toggle ([`is_binary`]); a wider int (bits, steps) is a number and
+/// keeps its slider.
+#[must_use]
+pub fn is_choice(desc: &ParamDesc) -> bool {
+    use sparq_module_api::manifest::ParamKind;
+    let span = desc.max - desc.min;
+    desc.kind == ParamKind::Int && (2.0..=7.0).contains(&span)
+}
+
+/// How many choices a multi-choice row offers (≥ 2 when [`is_choice`]).
+#[must_use]
+pub fn choice_count(desc: &ParamDesc) -> usize {
+    (desc.max - desc.min + 1.0).round().max(1.0) as usize
+}
+
 /// Map a screen x inside `track` to a parameter value: normalise, clamp, scale into
-/// `[min, max]`. Snapping (`Int` steps, `Bool` poles) is the MODEL's job ([`crate::canvas::model::
-/// Graph::op_set_param`]) so every edit path obeys one rule — this returns the continuous value
-/// the finger is over.
+/// `[min, max]` — logarithmically for [`is_log_scale`] params (the mapping and its inverse
+/// [`knob_x`] are the ONE pair both surfaces read, so the knob you see is the value the finger
+/// is over), and quantised to the button under the finger for [`is_choice`] rows (operator
+/// ruling 2026-10-01: multi-choice settings are buttons). Snapping (`Int` steps, `Bool` poles)
+/// is the MODEL's job ([`crate::canvas::model::Graph::op_set_param`]) so every edit path obeys
+/// one rule — this returns the continuous value the finger is over. Binary params ignore x
+/// entirely: they toggle ([`is_binary`]).
 #[must_use]
 pub fn value_from_x(desc: &ParamDesc, track: Rect, x: f32) -> f32 {
     let w = track.width().max(f32::EPSILON);
     let t = ((x - track.min.x) / w).clamp(0.0, 1.0);
     let lo = desc.min as f32;
     let hi = desc.max as f32;
-    lo + t * (hi - lo)
+    if is_binary(desc) {
+        // x is irrelevant to a toggle; the caller flips instead. The midpoint is the honest
+        // answer for a direct map (the model snaps to a pole either way).
+        return if t >= 0.5 { hi } else { lo };
+    }
+    if is_choice(desc) {
+        let n = choice_count(desc);
+        let i = (t * n as f32).floor().clamp(0.0, n as f32 - 1.0);
+        return lo + i;
+    }
+    if is_log_scale(desc) {
+        lo * (hi / lo).powf(t)
+    } else {
+        lo + t * (hi - lo)
+    }
 }
 
 /// The screen x of a value's knob inside `track` — the painter's side of the same mapping, so the
@@ -237,7 +331,19 @@ pub fn knob_x(desc: &ParamDesc, track: Rect, value: f32) -> f32 {
     let lo = desc.min as f32;
     let hi = desc.max as f32;
     let span = hi - lo;
-    let t = if span.abs() <= f32::EPSILON { 0.0 } else { ((value - lo) / span).clamp(0.0, 1.0) };
+    let t = if is_choice(desc) {
+        // the centre of the active button — the painter draws buttons, not a knob, but the
+        // round-trip with [`value_from_x`] stays exact for drivers and smokes
+        let n = choice_count(desc) as f32;
+        ((value - lo).round().clamp(0.0, n - 1.0) + 0.5) / n
+    } else if is_log_scale(desc) {
+        let v = value.clamp(lo, hi).max(f32::EPSILON);
+        ((v / lo).ln() / (hi / lo).ln()).clamp(0.0, 1.0)
+    } else if span.abs() <= f32::EPSILON {
+        0.0
+    } else {
+        ((value - lo) / span).clamp(0.0, 1.0)
+    };
     track.min.x + t * track.width()
 }
 
@@ -246,6 +352,9 @@ pub fn knob_x(desc: &ParamDesc, track: Rect, value: f32) -> f32 {
 #[must_use]
 pub fn value_text(desc: &ParamDesc, value: f32) -> String {
     use sparq_module_api::manifest::ParamKind;
+    if is_binary(desc) {
+        return if value >= 0.5 { "ON".to_string() } else { "OFF".to_string() };
+    }
     match desc.kind {
         ParamKind::Bool => {
             if value >= 0.5 {
@@ -546,5 +655,84 @@ mod tests {
             (LAYOUT_SPACE_1 as f32, LAYOUT_SPACE_1 as f32, LAYOUT_SPACE_1 as f32),
             "the thumb width is the token, at every offset"
         );
+    }
+
+    // ------------------------------------------------ the log map + binary toggles (2026-10-01)
+
+    #[test]
+    fn hz_params_map_logarithmically_and_round_trip() {
+        // Operator ruling 2026-10-01: the sine's 0.1 Hz – 10 kHz frequency rides the log map —
+        // equal mouse distances are equal pitch distances, which is what "the slider follows
+        // the mouse" means for the ear.
+        let d = ParamDesc {
+            id: "freq".into(),
+            name: "Frequency".into(),
+            kind: ParamKind::Float,
+            unit: Some("Hz".into()),
+            min: 0.1,
+            max: 10_000.0,
+            default: 440.0,
+        };
+        assert!(is_log_scale(&d));
+        let track = Rect::from_min_size(Vec2::new(100.0, 0.0), Vec2::new(200.0, 44.0));
+        // the ends are the ends
+        assert!((value_from_x(&d, track, 100.0) - 0.1).abs() < 1e-3);
+        assert!((value_from_x(&d, track, 300.0) - 10_000.0).abs() < 1.0);
+        // the MIDDLE is the geometric mean — the whole point of the fix
+        let mid = value_from_x(&d, track, 200.0);
+        assert!((mid - (0.1f32 * 10_000.0).sqrt()).abs() < 0.05, "{mid}");
+        // round-trip: the knob you see is the value you have
+        for t in [0.0f32, 0.13, 0.5, 0.77, 1.0] {
+            let x = track.min.x + track.width() * t;
+            let v = value_from_x(&d, track, x);
+            assert!((knob_x(&d, track, v) - x).abs() < 0.01, "t={t}: {v}");
+        }
+        // a range that includes zero stays linear (log(0) is not a mapping)
+        let lin = ParamDesc { min: 0.0, ..d.clone() };
+        assert!(!is_log_scale(&lin));
+        assert!((value_from_x(&lin, track, 200.0) - 5_000.0).abs() < 1.0);
+        // a non-Hz param stays linear even with min > 0
+        let ratio = ParamDesc { unit: Some("ratio".into()), min: 0.1, ..d.clone() };
+        assert!(!is_log_scale(&ratio));
+    }
+
+    #[test]
+    fn binary_params_are_toggles_and_read_on_off() {
+        let b = ParamDesc {
+            id: "mute".into(),
+            name: "Mute".into(),
+            kind: ParamKind::Bool,
+            unit: None,
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+        };
+        assert!(is_binary(&b));
+        // the manifests' Mute/Mode shape: an int whose whole domain is [0, 1]
+        let i01 = ParamDesc { kind: ParamKind::Int, unit: Some("x".into()), ..b.clone() };
+        assert!(is_binary(&i01));
+        // a wider int is a slider
+        let wide = ParamDesc { kind: ParamKind::Int, max: 2.0, ..b.clone() };
+        assert!(!is_binary(&wide));
+        // a float is never a toggle, even on [0, 1] (it has values in between)
+        let f01 = ParamDesc { kind: ParamKind::Float, ..b.clone() };
+        assert!(!is_binary(&f01));
+        // the word is ON/OFF for every binary, whatever the kind
+        assert_eq!(value_text(&i01, 1.0), "ON");
+        assert_eq!(value_text(&i01, 0.0), "OFF");
+        assert_eq!(value_text(&b, 1.0), "ON");
+        // the row carries the flag the painters and the gesture path both read
+        let spec = NodeSpec::new("sparq/util/mutey", "Mutey", vec![]).with_params(vec![i01]);
+        let node = Node {
+            id: 0,
+            spec,
+            pos: Vec2::ZERO,
+            flags: Default::default(),
+            custom_name: None,
+            param_values: Vec::new(),
+        };
+        let il = compute(&node, panel());
+        assert!(il.rows[0].toggle);
+        assert!(il.rows[0].editable);
     }
 }

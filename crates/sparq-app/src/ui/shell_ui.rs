@@ -52,8 +52,11 @@ pub enum Action {
     ToggleDock,
     /// Collapse/expand the NODE LIBRARY sidebar (increment 6).
     ToggleLibrary,
-    /// Cycle the library's category filter (ALL → each manifest top category present).
-    CycleLibraryCat,
+    /// Toggle one module GROUP's switch in the library (operator ruling 2026-10-01: the big
+    /// category-cycle button became one toggle switch per group). The index addresses
+    /// `library_categories()` — the deterministic sorted list of the top categories the
+    /// registry actually contains.
+    ToggleLibraryGroup(usize),
     /// Focus the library's search field.
     FocusLibrarySearch,
     /// Toolbar (increment 6): zoom to fit / camera home / arrange / zoom steps / wire style.
@@ -153,11 +156,12 @@ pub struct ShellUi {
     pub modules: Registry,
     /// Canvas camera, selection, in-flight interaction, context menu and undo history (WO-013).
     pub canvas: CanvasState,
-    /// NODE LIBRARY view state (increment 6): scroll offset px, the category filter's index
-    /// (0 = ALL), the search buffer and its focus. View state like the camera — not undoable,
+    /// NODE LIBRARY view state (increment 6): scroll offset px, the group switches' OFF set
+    /// (operator ruling 2026-10-01: one toggle switch per module group — a group named here is
+    /// hidden), the search buffer and its focus. View state like the camera — not undoable,
     /// not project state.
     pub library_scroll: f32,
-    pub library_cat: usize,
+    pub library_groups_off: std::collections::BTreeSet<String>,
     pub library_entry: sparq_ui::canvas::entry::TextEntry,
     pub library_focus: bool,
     /// The live audio session (WO-012 increment 2): `Some` while PLAY is running. The PLAY /
@@ -170,6 +174,11 @@ pub struct ShellUi {
     /// Last frame's computed canvas layout — hit-testing an activation uses the frame the user
     /// actually saw, exactly like the shell's `registry`.
     canvas_layout: CanvasLayout,
+    /// Last frame's library card-list region (the exact clipped body `draw_library` painted
+    /// into) — the scroll clamp reads the region the cards actually live in, so "it fits, so
+    /// it does not scroll" is measured, not guessed (the same stale-by-one-frame convention
+    /// the registry and the canvas hit-test use).
+    library_list_rect: Option<Rect>,
     /// This frame's response curves (WO-012 increment 5, D2/D3), keyed by canvas node id: one
     /// entry per node whose module declares a curve (`inset::declares_curve` — svf first),
     /// computed by [`crate::bridge::response_curve`] at the session's negotiated rate. The
@@ -265,12 +274,13 @@ impl ShellUi {
             modules,
             canvas,
             library_scroll: 0.0,
-            library_cat: 0,
+            library_groups_off: std::collections::BTreeSet::new(),
             library_entry: sparq_ui::canvas::entry::TextEntry::new(""),
             library_focus: false,
             live: None,
             live_master_lost: false,
             canvas_layout: CanvasLayout::default(),
+            library_list_rect: None,
             curves: Curves::new(),
             curve_keys: std::collections::BTreeMap::new(),
         }
@@ -339,7 +349,9 @@ impl ShellUi {
         let ctx = ConnectContext::no_adapters(Phase::Zero);
         for intent in &intents {
             // The library owns pans over it (the inspector's rule: a gesture OVER a surface
-            // belongs to that surface) — the wheel scrolls the card list, not the camera.
+            // belongs to that surface) — the wheel scrolls the card list, not the camera. (The
+            // window adapter sends the wheel over a scrollable panel as exactly this Pan; over
+            // the canvas it sends a Zoom — operator ruling 2026-10-01.)
             if let GestureIntent::Pan { delta, center } = intent {
                 if layout.library.is_some_and(|lib| lib.contains(*center)) {
                     self.scroll_library(delta.y);
@@ -740,8 +752,10 @@ impl ShellUi {
 
     /// The manifest top categories present in the registry, sorted, with "ALL" at index 0 —
     /// the library filter's vocabulary, derived from what is installed (defect #58's rule: the
-    /// library cannot offer, or filter by, what does not exist).
-    fn library_categories(&self) -> Vec<String> {
+    /// library cannot offer, or filter by, what does not exist). Operator ruling 2026-10-01:
+    /// one toggle switch per group — the list is the sorted top categories, no synthetic ALL
+    /// (every switch ON *is* ALL).
+    pub fn library_categories(&self) -> Vec<String> {
         let mut cats: Vec<String> = self
             .canvas
             .catalog()
@@ -750,28 +764,24 @@ impl ShellUi {
             .collect();
         cats.sort();
         cats.dedup();
-        cats.insert(0, "ALL".into());
         cats
     }
 
-    #[must_use]
-    pub fn library_cat_word(&self) -> String {
-        self.library_categories().get(self.library_cat).cloned().unwrap_or_else(|| "ALL".into())
-    }
-
-    /// The catalogue indices the library shows: the category filter first, then the browser's
-    /// own fuzzy ranking over the search buffer — ONE ranking, two surfaces (the sheet and the
-    /// sidebar), so the row you see is the row a spawn touches.
+    /// The catalogue indices the library shows: the group switches first (a group in the OFF
+    /// set is hidden), then the browser's own fuzzy ranking over the search buffer — ONE
+    /// ranking, two surfaces (the sheet and the sidebar), so the row you see is the row a
+    /// spawn touches.
     #[must_use]
     pub fn library_items(&self) -> Vec<usize> {
-        let cat = self.library_cat_word();
         let base: Vec<usize> = self
             .canvas
             .catalog()
             .iter()
             .enumerate()
             .filter(|(_, it)| {
-                cat == "ALL" || it.spec.module_id.split('/').nth(1).unwrap_or("?") == cat
+                !self
+                    .library_groups_off
+                    .contains(it.spec.module_id.split('/').nth(1).unwrap_or("?"))
             })
             .map(|(i, _)| i)
             .collect();
@@ -785,15 +795,25 @@ impl ShellUi {
     }
 
     /// Scroll the library card list (content follows the fingers, the inspector's rule),
-    /// clamped to what hangs below the panel.
+    /// clamped to what hangs below the panel — measured against the list region the painter
+    /// actually used, so a list that fits honestly refuses to scroll.
     fn scroll_library(&mut self, delta_y: f32) {
-        let Some(lib) = self.last_layout.as_ref().and_then(|l| l.library) else { return };
-        let card_h = LAYOUT_SHELL_LIBRARY_CARD_H as f32 + LAYOUT_SPACE_2 as f32;
+        let Some(list) = self.library_list_rect.or_else(|| {
+            self.last_layout.as_ref().and_then(|l| l.library).map(|lib| {
+                Rect::new(
+                    Vec2::new(
+                        lib.min.x,
+                        lib.min.y + LAYOUT_SHELL_PANEL_HEADER_HEIGHT as f32 + LAYOUT_SPACE_5 as f32,
+                    ),
+                    Vec2::new(lib.max.x, lib.max.y - LAYOUT_SPACE_5 as f32),
+                )
+            })
+        }) else {
+            return;
+        };
+        let step_h = LAYOUT_SHELL_LIBRARY_CARD_H as f32 + LAYOUT_SPACE_2 as f32;
         let n = self.library_items().len() as f32;
-        let region =
-            (lib.height() - LAYOUT_SHELL_PANEL_HEADER_HEIGHT as f32 - LAYOUT_SPACE_5 as f32 * 2.0)
-                .max(1.0);
-        let max_scroll = (n * card_h - region).max(0.0);
+        let max_scroll = (n * step_h - list.height()).max(0.0);
         self.library_scroll = (self.library_scroll - delta_y).clamp(0.0, max_scroll);
     }
 
@@ -852,6 +872,9 @@ impl ShellUi {
                 !matches!(self.canvas.interaction, Interaction::Idle)
             },
             GestureIntent::Pan { .. } | GestureIntent::Zoom { .. } | GestureIntent::Undo => true,
+            // DELETE belongs to the canvas: it deletes the selection (operator ruling
+            // 2026-10-01), and the canvas owns the selection and its protections.
+            GestureIntent::Delete => true,
             _ => false,
         }
     }
@@ -915,6 +938,11 @@ impl ShellUi {
                 self.push_log(format!("t={now_ms}ms rotate {delta_rad:.3} rad"));
             },
             GestureIntent::Undo => self.push_log(format!("t={now_ms}ms UNDO (3-finger tap)")),
+            GestureIntent::Delete => {
+                // Routed to the canvas (route_to_canvas) — this arm is the log-only fallback
+                // for a Delete that arrives with no canvas surface focused.
+                self.push_log(format!("t={now_ms}ms DELETE (nothing to delete off-canvas)"));
+            },
             GestureIntent::AllSoundOff => {
                 self.push_log(format!("t={now_ms}ms ALL SOUND OFF (3-finger swipe down)"));
                 self.run(Action::Panic);
@@ -959,11 +987,24 @@ impl ShellUi {
                     if self.state.library_collapsed { "collapsed" } else { "expanded" }
                 ));
             },
-            Action::CycleLibraryCat => {
-                let n = self.library_categories().len();
-                self.library_cat = (self.library_cat + 1) % n.max(1);
-                self.library_scroll = 0.0;
-                self.push_log(format!("library filter: {}", self.library_cat_word()));
+            Action::ToggleLibraryGroup(i) => {
+                // The group switches (operator ruling 2026-10-01): one switch per module
+                // group; OFF hides the group's tiles. The vocabulary is the registry's own —
+                // a switch for a group nothing belongs to cannot exist.
+                if let Some(name) = self.library_categories().get(i).cloned() {
+                    let off = if self.library_groups_off.contains(&name) {
+                        self.library_groups_off.remove(&name);
+                        false
+                    } else {
+                        self.library_groups_off.insert(name.clone());
+                        true
+                    };
+                    self.library_scroll = 0.0;
+                    self.push_log(format!(
+                        "library group {name}: {}",
+                        if off { "hidden" } else { "shown" }
+                    ));
+                }
             },
             Action::FocusLibrarySearch => {
                 self.library_focus = true;
@@ -1475,6 +1516,9 @@ impl ShellUi {
             let traces = self.live.as_ref().map(|s| s.traces()).unwrap_or(&no_traces);
             let no_meters = sparq_ui::canvas::levels::LiveMeters::new();
             let meters = self.live.as_ref().map(|s| s.meters()).unwrap_or(&no_meters);
+            // The Main Out card's driver readout (operator ruling 2026-10-01): the session's
+            // negotiated truth, owned here so the borrow of `live` ends before the toolbar.
+            let main_info = self.live.as_ref().map(|s| s.driver_lines());
             canvas_ui::draw(
                 p,
                 pal,
@@ -1486,6 +1530,7 @@ impl ShellUi {
                 traces,
                 meters,
                 &self.curves,
+                main_info.as_ref(),
                 &mut self.audit_elements,
             );
             // The wire-encoding legend (increment 3, the mockup's floating box): top-right of
@@ -1494,11 +1539,9 @@ impl ShellUi {
             if self.canvas_layout.lod != Lod::Dot {
                 let lw = LAYOUT_SPACE_9 as f32 + LAYOUT_SPACE_7 as f32;
                 let lh = LAYOUT_SPACE_4 as f32 * 5.0 + LAYOUT_SPACE_2 as f32 * 2.0;
-                // Left of the master strip (increment 6): the strip owns the right edge.
-                let lx = layout.canvas.max.x
-                    - lw
-                    - LAYOUT_SPACE_4 as f32
-                    - (LAYOUT_SPACE_5 as f32 + LAYOUT_SPACE_2 as f32 * 2.0 + LAYOUT_SPACE_4 as f32);
+                // The right edge is the legend's own again (operator ruling 2026-10-01: the
+                // master IN/OUT strip is gone — the master's meters live on its node).
+                let lx = layout.canvas.max.x - lw - LAYOUT_SPACE_4 as f32;
                 let ly = layout.canvas.min.y + LAYOUT_SPACE_4 as f32;
                 canvas_ui::draw_wire_legend(
                     p,
@@ -1506,10 +1549,9 @@ impl ShellUi {
                     Rect::new(Vec2::new(lx, ly), Vec2::new(lx + lw, ly + lh)),
                 );
             }
-            // The master meters and the toolbar ride ABOVE the canvas paint (chrome over the
-            // patch, the reference's stacking); the toolbar band is excluded from canvas
-            // routing, so nothing under it is touchable-but-invisible.
-            self.draw_master_strip(p, pal, layout.canvas, meters);
+            // The toolbar rides ABOVE the canvas paint (chrome over the patch, the reference's
+            // stacking); the toolbar band is excluded from canvas routing, so nothing under it
+            // is touchable-but-invisible.
             self.draw_toolbar(p, layout.canvas, pal);
             // A one-line affordance hint above the intent log band (the two never collide).
             p.text(
@@ -1519,7 +1561,7 @@ impl ShellUi {
                         -(LAYOUT_SPACE_9 as f32 + LAYOUT_SPACE_6 as f32),
                     ),
                 Align2::LEFT_BOTTOM,
-                "drag port to patch - long-press empty canvas: ADD MODULE - long-press a node: menu - drag a wire end: re-patch - double-tap fits",
+                "drag port to patch - wheel: zoom - right-drag: pan - DEL: delete selection - long-press: menu - double-tap fits",
                 font_xs(),
                 pal.text_disabled,
             );
@@ -1661,21 +1703,64 @@ impl ShellUi {
                     if row.editable { pal.text_secondary } else { pal.text_disabled },
                 );
                 if row.editable {
-                    // The mockup's slider language (increment 3): a CONTROL-class track —
-                    // cyan, because a slider is a control, §4 — with the value's fill at signal
-                    // weight and a vertical BLOCK thumb (the mockup's), not a circle: a bar
-                    // reads as a position on a scale at a glance, a dot reads as a datapoint.
-                    let mid_y = row.track.center().y;
-                    let (a, b) =
-                        (egui::pos2(row.track.min.x, mid_y), egui::pos2(row.track.max.x, mid_y));
-                    p.line_segment([a, b], Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, pal.cv));
-                    let kx = sparq_ui::canvas::inspector::knob_x(desc, row.track, value);
-                    let knob = egui::pos2(kx, mid_y);
-                    p.line_segment([a, knob], Stroke::new(LAYOUT_STROKE_SIGNAL as f32, pal.cv));
-                    // The round knob (increment 6): the node card and the inspector share ONE
-                    // slider vocabulary now — PN's round thumb everywhere, the mockup's block
-                    // thumb retired (finding 26).
-                    p.circle_filled(knob, LAYOUT_SPACE_1 as f32, pal.cv);
+                    if !row.steps.is_empty() {
+                        // The sequencer's program: 16 step buttons, 2×8 at touch-usable size
+                        // (operator ruling 2026-10-01 r3); the card carries the same 16 as a
+                        // single strip. Set steps filled, unset steps empty wells.
+                        let mask = value as i64;
+                        for (k, cell) in row.steps.iter().enumerate() {
+                            let r = egui_rect(*cell);
+                            if mask & (1 << k.min(15)) != 0 {
+                                p.rect_filled(r, LAYOUT_CORNER_MICRO as u8, pal.cv);
+                            } else {
+                                p.rect_filled(r, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+                                p.rect_stroke(
+                                    r,
+                                    LAYOUT_CORNER_MICRO as u8,
+                                    pal.hairline(
+                                        pal.hairline_regular,
+                                        LAYOUT_STROKE_HAIRLINE as f32,
+                                    ),
+                                    egui::StrokeKind::Middle,
+                                );
+                            }
+                        }
+                    } else if row.choice {
+                        // Multi-choice settings are BUTTONS, never sliders (operator ruling
+                        // 2026-10-01): one segment per choice, the active one filled.
+                        let bh = LAYOUT_SPACE_4 as f32;
+                        let band = egui::Rect::from_min_max(
+                            egui::pos2(row.track.min.x, row.track.center().y - bh / 2.0),
+                            egui::pos2(row.track.max.x, row.track.center().y + bh / 2.0),
+                        );
+                        canvas_ui::draw_choices(p, pal, band, desc, value, pal.cv, 1.0);
+                    } else if row.toggle {
+                        // Binary settings are TOGGLES, never sliders (operator ruling
+                        // 2026-10-01) — the switch sits right-aligned on the track span, and
+                        // the ON/OFF word in the value column is its redundant encoding.
+                        canvas_ui::draw_toggle(
+                            p,
+                            pal,
+                            egui::pos2(row.track.max.x, row.track.center().y),
+                            value >= 0.5,
+                            pal.cv,
+                            1.0,
+                        );
+                    } else {
+                        // The mockup's slider language (increment 3): a CONTROL-class track —
+                        // cyan, because a slider is a control, §4 — with the value's fill at
+                        // signal weight and the round knob (increment 6's shared vocabulary).
+                        let mid_y = row.track.center().y;
+                        let (a, b) = (
+                            egui::pos2(row.track.min.x, mid_y),
+                            egui::pos2(row.track.max.x, mid_y),
+                        );
+                        p.line_segment([a, b], Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, pal.cv));
+                        let kx = sparq_ui::canvas::inspector::knob_x(desc, row.track, value);
+                        let knob = egui::pos2(kx, mid_y);
+                        p.line_segment([a, knob], Stroke::new(LAYOUT_STROKE_SIGNAL as f32, pal.cv));
+                        p.circle_filled(knob, LAYOUT_SPACE_1 as f32, pal.cv);
+                    }
                 }
                 p.text(
                     egui::pos2(row.value.max.x, row.value.center().y),
@@ -2047,47 +2132,96 @@ impl ShellUi {
             dense_allowed: true,
         });
 
-        // The category filter: one cycling control, ALL first — the vocabulary is what the
+        // The group switches (operator ruling 2026-10-01): the big cycling category button is
+        // GONE — every module group carries its own toggle switch chip instead, ON shown and
+        // OFF hidden, so the whole filter state is visible at once. The vocabulary is what the
         // registry contains, never a hard-coded list.
-        let cat_word = self.library_cat_word();
-        let cat = Rect::new(
-            Vec2::new(lib.min.x + pad, search.max.y + gap),
-            Vec2::new(lib.max.x - pad, search.max.y + gap + sh),
-        );
-        // A dynamic word cannot ride `Button` (its labels are 'static): the category control
-        // is drawn and registered by hand, exactly like the dock tabs.
-        p.rect_filled(egui_rect(cat), LAYOUT_CORNER_MICRO as u8, pal.ground_panel_alt);
-        p.rect_stroke(
-            egui_rect(cat),
-            LAYOUT_CORNER_MICRO as u8,
-            pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32),
-            egui::StrokeKind::Middle,
-        );
-        p.text(
-            egui::pos2(cat.center().x, cat.center().y),
-            Align2::CENTER_CENTER,
-            cat_word.clone(),
-            font_xs(),
-            pal.text_secondary,
-        );
-        self.registry.push(Registered {
-            id: "library/cat".to_string(),
-            rect: cat,
-            class: TouchClass::S,
-            action: Action::CycleLibraryCat,
-        });
-        self.audit_elements.push(InteractiveElement {
-            id: "library/cat".to_string(),
-            class: TouchClass::S,
-            rect: cat,
-            dense_allowed: true,
-        });
+        let groups = self.library_categories();
+        let chip_h = LAYOUT_TOUCH_MIN_TARGET_DENSE as f32;
+        let char_w = LAYOUT_SPACE_2 as f32;
+        let sw_w = LAYOUT_SPACE_4 as f32;
+        let sw_h = LAYOUT_SPACE_2 as f32;
+        let mut cx = lib.min.x + pad;
+        let mut cy = search.max.y + gap;
+        let mut chips_bottom = cy;
+        for (gi, name) in groups.iter().enumerate() {
+            let on = !self.library_groups_off.contains(name);
+            let w = gap + name.len() as f32 * char_w + gap + sw_w + gap;
+            if cx + w > lib.max.x - pad && cx > lib.min.x + pad {
+                cx = lib.min.x + pad;
+                cy = chips_bottom + gap;
+            }
+            let chip = Rect::new(Vec2::new(cx, cy), Vec2::new(cx + w, cy + chip_h));
+            p.rect_filled(
+                egui_rect(chip),
+                LAYOUT_CORNER_MICRO as u8,
+                if on { pal.ground_panel_alt } else { pal.ground_inset },
+            );
+            p.rect_stroke(
+                egui_rect(chip),
+                LAYOUT_CORNER_MICRO as u8,
+                pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32),
+                egui::StrokeKind::Middle,
+            );
+            p.text(
+                egui::pos2(chip.min.x + gap, chip.center().y),
+                Align2::LEFT_CENTER,
+                name.to_uppercase(),
+                font_xs(),
+                if on { pal.text_secondary } else { pal.text_disabled },
+            );
+            // The mini switch: pill + knob, ON in the control accent with the knob right, OFF
+            // an empty well with the knob left — position and fill both carry the state.
+            let sw = egui::Rect::from_min_max(
+                egui::pos2(chip.max.x - gap - sw_w, chip.center().y - sw_h / 2.0),
+                egui::pos2(chip.max.x - gap, chip.center().y + sw_h / 2.0),
+            );
+            let kr = sw_h / 2.0 - LAYOUT_STROKE_HAIRLINE as f32;
+            if on {
+                p.rect_filled(sw, sw_h / 2.0, pal.cv);
+                p.circle_filled(
+                    egui::pos2(sw.max.x - sw_h / 2.0, sw.center().y),
+                    kr,
+                    pal.ground_panel,
+                );
+            } else {
+                p.rect_filled(sw, sw_h / 2.0, pal.ground_base);
+                p.rect_stroke(
+                    sw,
+                    sw_h / 2.0,
+                    pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32),
+                    egui::StrokeKind::Middle,
+                );
+                p.circle_filled(
+                    egui::pos2(sw.min.x + sw_h / 2.0, sw.center().y),
+                    kr,
+                    pal.text_disabled,
+                );
+            }
+            let id = format!("library/group/{gi}");
+            self.registry.push(Registered {
+                id: id.clone(),
+                rect: chip,
+                class: TouchClass::S,
+                action: Action::ToggleLibraryGroup(gi),
+            });
+            self.audit_elements.push(InteractiveElement {
+                id,
+                class: TouchClass::S,
+                rect: chip,
+                dense_allowed: true,
+            });
+            cx += w + gap;
+            chips_bottom = cy + chip_h;
+        }
 
         // The card list, clipped to its region so half-scrolled cards cut at the panel edge
         // instead of drawing over the frame.
         let items = self.library_items();
-        let list =
-            Rect::new(Vec2::new(lib.min.x, cat.max.y + gap), Vec2::new(lib.max.x, lib.max.y - gap));
+        let list = Rect::new(
+            Vec2::new(lib.min.x, chips_bottom + gap),
+            Vec2::new(lib.max.x, lib.max.y - gap),
+        );
         p.text(
             egui::pos2(list.min.x + pad, list.min.y + gap),
             Align2::LEFT_TOP,
@@ -2097,6 +2231,8 @@ impl ShellUi {
         );
         let list_body =
             Rect::new(Vec2::new(list.min.x, list.min.y + LAYOUT_SPACE_4 as f32), list.max);
+        // The scroll clamp reads the region the cards actually live in (measured, not guessed).
+        self.library_list_rect = Some(list_body);
         let pc = p.with_clip_rect(egui_rect(list_body));
         let card_h = LAYOUT_SHELL_LIBRARY_CARD_H as f32;
         let step = card_h + gap;
@@ -2113,14 +2249,14 @@ impl ShellUi {
                 self.registry.push(Registered {
                     id: id.clone(),
                     rect: card,
-                    class: TouchClass::M,
+                    class: TouchClass::S,
                     action: Action::SpawnFromDock(ci),
                 });
                 self.audit_elements.push(InteractiveElement {
                     id,
-                    class: TouchClass::M,
+                    class: TouchClass::S,
                     rect: card,
-                    dense_allowed: false,
+                    dense_allowed: true,
                 });
             }
             y += step;
@@ -2128,10 +2264,9 @@ impl ShellUi {
         }
     }
 
-    /// One library card: the miniature node the registry describes — header dot + name, port
-    /// circles both edges, the first three parameter tracks at their defaults, the well shape
-    /// the registry declares (at rest, from defaults), and the port counts in words. Manifest
-    /// in, pixels out: no session, no selection, no state.
+    /// One library tile (operator ruling 2026-10-01): COMPACT — the module's colour ref (its
+    /// dominant signal class, as the class dot) and its NAME, and nothing else. The tile is a
+    /// door, not a miniature: what the module looks like is the canvas's job after the tap.
     fn draw_library_card(&self, p: &Painter, pal: &Palette, card: Rect, ci: usize) {
         use sparq_module_api::port::Direction;
         let Some(item) = self.canvas.catalog().get(ci) else { return };
@@ -2151,117 +2286,30 @@ impl ShellUi {
             .or_else(|| spec.ports.iter().find(|pt| pt.direction == Direction::In))
             .map(sparq_ui::canvas::layout::signal_class)
             .unwrap_or(sparq_ui::canvas::layout::SignalClass::Neutral);
-        // header: dot + name
+        // The colour ref: the class dot (the same accent the node's stripe and ports wear).
+        let dot_r = LAYOUT_SPACE_1 as f32;
         p.circle_filled(
-            egui::pos2(card.min.x + pad + 3.0, card.min.y + pad + 4.0),
-            3.0,
+            egui::pos2(card.min.x + pad + dot_r, card.center().y),
+            dot_r,
             canvas_ui::class_colour(cls, pal),
         );
+        // The name — truncating with an ellipsis rather than running off the tile (the value
+        // discipline: what gets cut is never the thing that identifies).
+        let char_w = LAYOUT_SPACE_2 as f32;
+        let text_x = card.min.x + pad * 2.0 + dot_r * 2.0;
+        let max_chars = ((card.max.x - pad - text_x) / char_w).floor().max(4.0) as usize;
+        let name = spec.display_name.as_str();
+        let shown = if name.len() > max_chars {
+            format!("{}\u{2026}", &name[..max_chars.saturating_sub(1)])
+        } else {
+            name.to_string()
+        };
         p.text(
-            egui::pos2(card.min.x + pad * 3.0, card.min.y + pad + 4.0),
+            egui::pos2(text_x, card.center().y),
             Align2::LEFT_CENTER,
-            spec.display_name.as_str(),
+            shown,
             font_xs(),
             pal.text_primary,
-        );
-        // port circles, both edges
-        let mut py = card.min.y + pad * 4.0;
-        for pt in spec.ports.iter().filter(|pt| pt.direction == Direction::In).take(4) {
-            p.circle_filled(
-                egui::pos2(card.min.x + pad, py),
-                3.0,
-                canvas_ui::class_colour(sparq_ui::canvas::layout::signal_class(pt), pal),
-            );
-            py += LAYOUT_SPACE_3 as f32;
-        }
-        let mut py = card.min.y + pad * 4.0;
-        for pt in spec.ports.iter().filter(|pt| pt.direction == Direction::Out).take(4) {
-            p.circle_filled(
-                egui::pos2(card.max.x - pad, py),
-                3.0,
-                canvas_ui::class_colour(sparq_ui::canvas::layout::signal_class(pt), pal),
-            );
-            py += LAYOUT_SPACE_3 as f32;
-        }
-        // three parameter tracks at their defaults
-        let mut ry = card.min.y + card.height() * 0.42;
-        for desc in spec.params.iter().take(3) {
-            let tr = Rect::new(
-                Vec2::new(card.min.x + pad * 3.0, ry),
-                Vec2::new(card.max.x - pad * 3.0, ry + LAYOUT_SPACE_2 as f32),
-            );
-            let mid_y = tr.center().y;
-            p.line_segment(
-                [egui::pos2(tr.min.x, mid_y), egui::pos2(tr.max.x, mid_y)],
-                pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
-            );
-            let kx = sparq_ui::canvas::inspector::knob_x(desc, tr, desc.default as f32);
-            p.circle_filled(egui::pos2(kx, mid_y), 3.0, canvas_ui::class_colour(cls, pal));
-            ry += LAYOUT_SPACE_3 as f32;
-        }
-        // the well miniature, at rest, from defaults
-        let well = Rect::new(
-            Vec2::new(card.min.x + pad, ry + gap0()),
-            Vec2::new(card.max.x - pad, card.max.y - LAYOUT_SPACE_4 as f32 - pad),
-        );
-        if well.height() > LAYOUT_SPACE_4 as f32 {
-            use sparq_ui::canvas::inset::{self, Well};
-            use sparq_ui::canvas::response;
-            let r = well;
-            let stroke = pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32);
-            match inset::inset_well(&spec.module_id) {
-                Some(Well::Envelope) => {
-                    let pts = inset::envelope_polyline(
-                        inset::ENV_ATTACK_DEFAULT,
-                        inset::ENV_DECAY_DEFAULT,
-                        false,
-                        r,
-                    );
-                    p.line(pts.into_iter().map(egui_pos).collect(), stroke);
-                },
-                Some(Well::Sparkline) => {
-                    let pts = inset::lfo_period_polyline(0.0, 1.0, r);
-                    p.line(pts.into_iter().map(egui_pos).collect(), stroke);
-                },
-                Some(Well::Curve) => {
-                    let axes = response::Axes::at(crate::bridge::RENDER_RATE);
-                    let freqs = response::grid(&axes);
-                    let defaults: Vec<f32> = spec.params.iter().map(|d| d.default as f32).collect();
-                    if let Some(mags) = crate::bridge::response_curve(
-                        &spec.module_id,
-                        &defaults,
-                        crate::bridge::RENDER_RATE,
-                        &freqs,
-                    ) {
-                        let pts = response::polyline(&freqs, &mags, &axes, r);
-                        p.line(
-                            pts.into_iter().map(egui_pos).collect(),
-                            Stroke::new(
-                                LAYOUT_STROKE_HAIRLINE as f32,
-                                canvas_ui::class_colour(cls, pal),
-                            ),
-                        );
-                    }
-                },
-                Some(Well::Scope) => {
-                    let [a, b] = sparq_ui::canvas::scope::rest_line(r);
-                    p.line_segment([egui_pos(a), egui_pos(b)], stroke);
-                },
-                Some(Well::Meters) => {
-                    p.rect_stroke(egui_rect(well), 0, stroke, egui::StrokeKind::Middle);
-                },
-                None => {},
-            }
-        }
-        // port counts in words
-        let ins = spec.ports.iter().filter(|pt| pt.direction == Direction::In).count();
-        let outs = spec.ports.iter().filter(|pt| pt.direction == Direction::Out).count();
-        p.text(
-            egui::pos2(card.min.x + pad, card.max.y - pad * 0.5),
-            Align2::LEFT_BOTTOM,
-            format!("IN {ins} | OUT {outs}"),
-            font_xs(),
-            pal.text_disabled,
         );
     }
 
@@ -2328,104 +2376,4 @@ impl ShellUi {
             pal.text_disabled,
         );
     }
-
-    /// The right-edge master meters (increment 6, PN's strip): vertical IN/OUT stereo wells at
-    /// the canvas's right edge. OUT is the resolved master's first audio output port's ring
-    /// entry; IN is the entry of the port FEEDING the master's first audio input — the same
-    /// reading the wire lights from, pre-trim. At rest: empty wells, never frozen bars.
-    /// Nothing to touch, nothing registered — a reading.
-    fn draw_master_strip(
-        &self,
-        p: &Painter,
-        pal: &Palette,
-        canvas: Rect,
-        meters: &sparq_ui::canvas::levels::LiveMeters,
-    ) {
-        use sparq_module_api::port::{Direction, PortType};
-        let pad = LAYOUT_SPACE_2 as f32;
-        let strip_w = LAYOUT_SPACE_5 as f32;
-        let top = Self::toolbar_rect(canvas).max.y + pad * 2.0;
-        let r = Rect::new(
-            Vec2::new(canvas.max.x - strip_w - pad * 2.0, top),
-            Vec2::new(canvas.max.x - pad * 2.0, canvas.max.y - pad * 2.0),
-        );
-        if r.height() <= 0.0 {
-            return;
-        }
-        let Some(master) = self.canvas.resolve_master(&self.graph) else { return };
-        let Some(node) = self.graph.node(master) else { return };
-        let out_port = node
-            .spec
-            .ports
-            .iter()
-            .enumerate()
-            .find(|(_, pt)| pt.direction == Direction::Out && pt.port_type == PortType::Audio)
-            .map(|(i, _)| i);
-        let in_port = node
-            .spec
-            .ports
-            .iter()
-            .enumerate()
-            .find(|(_, pt)| pt.direction == Direction::In && pt.port_type == PortType::Audio)
-            .map(|(i, _)| i);
-        let in_src = in_port.and_then(|ip| {
-            self.graph
-                .wires()
-                .iter()
-                .find(|w| w.to.node == master && w.to.index == ip)
-                .map(|w| (w.from.node, w.from.index))
-        });
-        let out_m = out_port.and_then(|op| meters.get(&(master, op)).copied());
-        let in_m = in_src.and_then(|src| meters.get(&src).copied());
-        let bar_w = LAYOUT_SPACE_1 as f32;
-        let labels = [("IN", in_m), ("OUT", out_m)];
-        let mut bx = r.min.x;
-        for (word, m) in labels {
-            p.text(
-                egui::pos2(bx, r.min.y - pad),
-                Align2::LEFT_BOTTOM,
-                word,
-                font_xs(),
-                pal.text_tertiary,
-            );
-            for (ch, hold) in [
-                (m.map(|m| m.l).unwrap_or(0.0), m.map(|m| m.hold_l).unwrap_or(0.0)),
-                (m.map(|m| m.r).unwrap_or(0.0), m.map(|m| m.hold_r).unwrap_or(0.0)),
-            ] {
-                let well = Rect::new(Vec2::new(bx, r.min.y), Vec2::new(bx + bar_w, r.max.y));
-                p.rect_stroke(
-                    egui_rect(well),
-                    LAYOUT_CORNER_NONE as u8,
-                    pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
-                    egui::StrokeKind::Middle,
-                );
-                let lv = ch.clamp(0.0, 1.0);
-                if lv > 0.0 {
-                    let fh = well.height() * lv;
-                    let fill =
-                        Rect::new(Vec2::new(bx, r.max.y - fh), Vec2::new(bx + bar_w, r.max.y));
-                    p.rect_filled(egui_rect(fill), LAYOUT_CORNER_NONE as u8, pal.data);
-                }
-                let hd = hold.clamp(0.0, 1.0);
-                if hd > 0.0 {
-                    let hy = r.max.y - well.height() * hd;
-                    let tick = Rect::new(
-                        Vec2::new(bx, hy - bar_w * 0.5),
-                        Vec2::new(bx + bar_w, hy + bar_w * 0.5),
-                    );
-                    p.rect_filled(egui_rect(tick), LAYOUT_CORNER_NONE as u8, pal.audio);
-                }
-                bx += bar_w + pad * 0.5;
-            }
-            bx += pad;
-        }
-    }
-}
-
-fn gap0() -> f32 {
-    sparq_ui::tokens::LAYOUT_SPACE_2 as f32
-}
-
-fn egui_pos(v: sparq_ui::geom::Vec2) -> egui::Pos2 {
-    egui::pos2(v.x, v.y)
 }

@@ -57,6 +57,18 @@ impl ParamSet {
         Some(set)
     }
 
+    /// A copy of this snapshot with ONE value replaced (operator ruling 2026-10-01 r3): the
+    /// executor's per-block control-modulation scratch — the knob's value plus the cv's
+    /// deviation, clamped by the caller to the manifest range. `Copy` in, `Copy` out: no
+    /// allocation, so the audio thread may build one per block per modulated node.
+    #[must_use]
+    pub fn with_value(mut self, index: usize, value: f32) -> Self {
+        if index < MAX_PARAMS {
+            self.values[index] = value;
+        }
+        self
+    }
+
     /// The snapshot's version. Two snapshots with the same version are the same values.
     #[must_use]
     pub const fn version(self) -> u64 {

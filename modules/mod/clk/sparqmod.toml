@@ -1,0 +1,83 @@
+# sparq module manifest — mod/clk (operator round 2026-10-01).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The transport's voice as a module: a free-running tempo clock with one trigger output per
+# classic division — 4ths, 8ths, 16ths, 32nds — so a patch can drive sequencers and dividers
+# without a transport subsystem. Operator ruling 2026-10-01: "add a clock module, bpm,
+# 4th, 8th, 16th, 32nds".
+#
+# SEMANTICS, stated exactly:
+# * Each division is its own sample-accurate grid: an output fires once per interval
+#   (`60 / bpm` seconds ÷ 1, 2, 4, 8), scheduled at exact sample offsets inside the block —
+#   the clk-div sub-trigger discipline, free-running. All four grids start together at the
+#   module's first block, so the downbeats coincide (the 4th is everybody's downbeat).
+# * `bpm` is read once per block like every v0 param (the sine's smoothing discipline applies
+#   to coefficients, not to grids): a tempo edit re-spaces ticks FROM THE NEXT ONE — the grid
+#   never jumps backwards and never double-fires; a running patch follows the new tempo at the
+#   next tick of each division.
+# * State is the four 8-byte next-tick counters (32 bytes): a save/restore lands the clock
+#   mid-grid, phase-continuous, the sine's phase promise applied to tempo.
+#
+# v0 limits, declared: no transport sync, no swing, no start/stop gate — the clock runs from
+# the first block and says so.
+
+[identity]
+id = "sparq/mod/clk"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Clock"
+summary = "Free-running tempo clock: trigger outs at 4ths, 8ths, 16ths and 32nds"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "modulation/clock"
+top = "mod"
+kind = "source"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "4th"
+name = "Quarter"
+direction = "out"
+type = "event"
+event_kinds = ["trigger", "clock"]
+
+[[ports]]
+id = "8th"
+name = "Eighth"
+direction = "out"
+type = "event"
+event_kinds = ["trigger", "clock"]
+
+[[ports]]
+id = "16th"
+name = "Sixteenth"
+direction = "out"
+type = "event"
+event_kinds = ["trigger", "clock"]
+
+[[ports]]
+id = "32nd"
+name = "Thirty-second"
+direction = "out"
+type = "event"
+event_kinds = ["trigger", "clock"]
+
+[[params]]
+id = "bpm"
+name = "Tempo"
+type = "float"
+unit = "bpm"
+min = 20.0
+max = 300.0
+default = 120.0
+
+[state]
+schema_id = "sparq/mod/clk/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "trivial"

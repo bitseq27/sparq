@@ -1,0 +1,31 @@
+sparq operator rounds 2026-10-01 - REV 3 FULL-TREE overlay pack (name-fixed reissue)
+
+This pack carries the COMPLETE source tree at the state after operator rounds
+1-3 (commit f056f02 of the re-initialised sandbox repo). Rev 3 is a full tree,
+not a diff: the sandbox lost its .git in a reset, so no patch base survives for
+this rev. (Revs 1-2 patches remain valid for trees at those states.)
+
+HOW TO APPLY
+  1. Extract AT THE ROOT of your sparq workspace, overwriting. Excluded from the
+     pack: .git, target/, Cargo.lock, logs, *.wav - your copies of those win.
+  2. On the source machine:  python tools\sync_check.py --write --sync sync-ui-round-2026-10-01
+     (the stamp is deliberately not in the pack; test006's [00b] gate fails by
+     design until you re-stamp - its file list IS this round landing.)
+  3. Verify:  cargo fmt --all && cargo test --workspace &&
+              cargo run -p sparq-app --features ui -- ui --audit
+     Expected: 832 tests (+1 ignored), audit PASS 0 failures, selftest 9/9.
+
+WHAT'S IN ROUND 3 (on top of rounds 1-2)
+  * control wires: a cv drag reveals small blue dots beside every float setting
+    of the hovered module; dropping one modulates that parameter per block
+    (clamp(knob + cv * half-range), one block of latency) - executor param-mod plan
+  * util/vca (audio gain = knob + bipolar cv) and util/mult (six-dot junction
+    bus: role+type by first connection, one source, bridge-collapsed) - 21 modules
+  * trig seq wears sixteen step buttons (card strip + inspector 2x8 chips)
+  * scope accepts any audio/cv/event/data source; the trace wears the source's
+    class colour (an lfo on the scope draws control blue); audio outputs now
+    publish waveforms on the analysis ring; event/data bindings say NO WAVEFORM
+  * zoom ceiling 100% (token zoom_max 1.0)
+  * gates: tests/r3_controls.rs + headless smokes 51-52; analysis_pub re-pinned
+Docs: UI-CHANGES-PLAN.md (round 3 table), CHECKLIST.md / SYNC.md round paragraphs,
+docs/ui/gestures.md 3e/3f/3g, fresh shots in docs/ui/shots/.

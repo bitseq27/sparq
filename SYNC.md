@@ -1,4 +1,60 @@
-# Sync manifest — WO-014 increment 7c (the one-pole glide: the fast-drag bumps, dead)
+# Sync manifest — operator UI rounds (2026-10-01): rev 3, the control-wire / junction-bus round
+
+**Current bundle: `sparq-update-2026-10-01.zip` REV 3 (rounds 1+2+3 of 2026-10-01, overlay
+pack; NO patch base this rev — the sandbox lost its `.git` in a reset, so rev 3 is the file set,
+not a diff; revs 1–2 patches remain valid for trees at those states).** It stacks on
+`sync-wo014-inc7c.zip` (applied). Extract at the repo root, overwriting; the pack is
+workspace-relative and touches nothing else. **The stamp does NOT move from the sandbox:**
+`SYNC-STAMP.txt` still reads `sync sync-wo014-inc7c` / `fp 96f/2381733B` and the pack carries no
+stamp — it is the cross-machine contract, so re-run `python tools/sync_check.py --write` on the
+source machine after applying. Session-start discipline: `scripts\build.bat` will print the 24
+changed filenames before cargo — that report is EXPECTED, not a failure. **One manifest moved:**
+`syn/sine`'s frequency range is now 0.1 Hz – 10 kHz (operator ruling), so its sha moves and
+`docs/modules/syn-sine.md` was regenerated — `module_docs --check` reads 17/17 matched.
+
+**Rev 3 adds the third operator list:** control wires into every float parameter (small blue
+sink dots in flight, dashed control wires, executor param-mod plan at one block of latency,
+verdicts in words); `util/mult` the six-dot junction bus (role/type by first connection, one
+source, bridge-collapsed); `util/vca`; the sequencer's sixteen step buttons; the scope accepting
+any source class with the trace in the source's colour (audio outputs now publish waveforms on
+the analysis ring); the 100 % zoom ceiling (`zoom_max` 1.0). First-party set **21 modules**,
+`module_docs` 21/21. Gates: **832 tests (+1 ignored)**, goldens untouched, every runnable clippy
+cell, every python gate, `ui --audit` PASS 0 failures with two new round-3 smokes (the bus
+collapses and lights; the control wire applies).
+
+**Rev 2 added the second operator list:** sine/polyblep at 10 Hz – 10 kHz; the clock family —
+`mod/clk` (tempo clock, 4th/8th/16th/32nd trigger outs, sample-accurate grids, tempo edits
+re-space from the next tick) and `mod/seq` (3–16 step trigger sequencer, bitmask fires at the
+input event's sample) — taking the set to **19 modules** (`module_docs` 19/19); multi-choice ints
+(3…8) as button rows; the card-slider capture dead-zone fix; zoom-relative card content; the
+Main Out band's char-boundary clip + composed-to-fit second line + stereo main in; the lfo well
+in control blue; and delete-with-splice (one Batch, one undo, verdict-checked splices). Gates:
+**825 tests (+1 ignored)**, goldens untouched, every runnable clippy cell, every python gate,
+`ui --audit` PASS 0 failures; five new clock/seq gate tests pin exact tick lists and zero
+allocations in `process`.
+
+What round 1 is, in one breath: the operator's UI list, each item in the compute-then-draw
+discipline — log-mapped Hz sliders (the sine follows the mouse), ports floating 4 px beside the
+window with covered-is-untouchable hit-testing, 2 px stripes, a WHITE selection (the token set's
+one documented pure-white exemption), 32 px library tiles under per-group toggle switches, toggle
+buttons for binary settings, the right-edge IN/OUT strip gone, `out/main` permanent and reading
+the negotiated driver truth on its own info band, a 160 px scope screen with graticule and
+measurements, and the mouse hand's bindings (wheel = canvas zoom, right-drag = pan, DEL = delete
+the selection). `docs/ui/gestures.md` carries the rules (2b, 3c, 3d, 4c, 4e); the round's
+screenshots live in `docs/ui/shots/`.
+
+**Measured:** 818 tests (+10, +1 ignored) · goldens bit-identical (`ba577186c988db21` — the DSP
+never moved) · selftest 9/9 · every clippy cell runnable in the sandbox (workspace, `ui`,
+`ui-window`, `bootstrap-audio`) · every python gate · `ui --audit` PASS, 0 failures — the 5
+viewport × 4 DPI matrix and all 41 smoke checks (same count as inc7c; smokes 12, 17, 36, 45 and 50
+were RE-POINTED at the new behaviour, none removed).
+
+**THE ASK, two lines:** wheel-zoom and right-drag pan with the real mouse on SATURN; and one fast
+trim drag to hear that the toggle/log-map edits still glide.
+
+---
+
+## Previous bundle — WO-014 increment 7c (the one-pole glide: the fast-drag bumps, dead)
 
 **Current bundle: `sync-wo014-inc7c.zip` (11 entries, listed below).** It stacks on
 `sync-wo014-inc7b.zip` (applied). Extract at the repo root `Q:\morphosis\code\sparq`,

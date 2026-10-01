@@ -19,7 +19,6 @@ use egui::ViewportId;
 use sparq_ui::geom::Vec2 as SpVec2;
 use sparq_ui::gesture::GestureIntent;
 use sparq_ui::pointer::{PointerEvent, PointerKind, PointerPhase};
-use sparq_ui::tokens::LAYOUT_TOUCH_ROW_HEIGHT_LIST;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{
@@ -45,6 +44,13 @@ struct ShellApp {
     /// Last known cursor position (logical px), for synthesising mouse down/up events.
     cursor_logical: Option<SpVec2>,
     mouse_down: bool,
+    /// The right button's drag state (operator ruling 2026-10-01: right-drag MOVES THE
+    /// CANVAS; a right press that never moves stays the context menu — the desktop hand's
+    /// long-press, unchanged).
+    right_down: bool,
+    right_start: Option<SpVec2>,
+    right_last: Option<SpVec2>,
+    right_moved: bool,
     /// Intents synthesised outside the recogniser (right-click, wheel) — drained per frame.
     extras: Vec<GestureIntent>,
     start: Instant,
@@ -53,6 +59,17 @@ struct ShellApp {
     /// silently drawing nothing (an empty window on stage is a failure that looks like a hang).
     fatal: Option<String>,
 }
+
+/// One wheel notch's zoom factor (operator ruling 2026-10-01: the mouse scrollwheel ZOOMS the
+/// canvas about the cursor — the pinch's mouse hand, riding the recogniser's own `Zoom`
+/// vocabulary so the camera's clamp and anchor are the one implementation).
+const WHEEL_ZOOM_STEP: f32 = 1.15;
+/// Per-pixel wheel zoom for high-resolution (touchpad) deltas, clamped so one coalesced event
+/// can never jump the camera past a sane step.
+const WHEEL_ZOOM_PER_PX: f32 = 0.005;
+/// How far a right press must travel before it is a canvas drag and not a context menu — the
+/// recogniser's own drag threshold (8 px), so the mouse and the finger agree on the word "drag".
+const RIGHT_DRAG_MIN_PX: f32 = 8.0;
 
 impl ShellApp {
     fn new(opts: &UiOptions) -> Self {
@@ -71,6 +88,10 @@ impl ShellApp {
             pointers: Vec::new(),
             cursor_logical: None,
             mouse_down: false,
+            right_down: false,
+            right_start: None,
+            right_last: None,
+            right_moved: false,
             extras: Vec::new(),
             start: Instant::now(),
             theme,
@@ -180,10 +201,19 @@ impl ApplicationHandler for ShellApp {
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::KeyboardInput { event: ke, .. } => {
-                if ke.state == ElementState::Pressed
-                    && ke.physical_key == PhysicalKey::Code(KeyCode::Escape)
-                {
-                    event_loop.exit();
+                if ke.state == ElementState::Pressed {
+                    match ke.physical_key {
+                        PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
+                        // DELETE removes the selection (operator ruling 2026-10-01): the
+                        // canvas owns the answer, including its protections (locked nodes and
+                        // the permanent Main Out refuse in words) — the key only carries the
+                        // intent, the recogniser's own vocabulary. While the library's search
+                        // field has the keyboard, the key belongs to the text, not the canvas.
+                        PhysicalKey::Code(KeyCode::Delete) if !self.shell.library_focus => {
+                            self.extras.push(GestureIntent::Delete);
+                        },
+                        _ => {},
+                    }
                 }
             },
 
@@ -220,6 +250,22 @@ impl ApplicationHandler for ShellApp {
             WindowEvent::CursorMoved { position, .. } => {
                 let pos = self.to_logical(position.x, position.y);
                 self.cursor_logical = Some(pos);
+                // Right-drag MOVES THE CANVAS (operator ruling 2026-10-01): while the right
+                // button is down, motion past the drag threshold becomes the recogniser's own
+                // `Pan` — over the canvas the camera follows the hand, over a scrolling panel
+                // the panel scrolls (the Pan arm's existing routing; no parallel semantics).
+                if self.right_down {
+                    let start = self.right_start.unwrap_or(pos);
+                    if self.right_moved || pos.distance(start) >= RIGHT_DRAG_MIN_PX {
+                        self.right_moved = true;
+                        let last = self.right_last.unwrap_or(start);
+                        self.extras.push(GestureIntent::Pan {
+                            delta: SpVec2::new(pos.x - last.x, pos.y - last.y),
+                            center: pos,
+                        });
+                    }
+                    self.right_last = Some(pos);
+                }
                 // Hover is NOT a broken tap (increment 4, D2): unpressed mouse motion is
                 // dropped at the adapter, so the recogniser's "motion for an untracked
                 // pointer" line can only ever mean a REAL missed Down again — which is what
@@ -245,33 +291,69 @@ impl ApplicationHandler for ShellApp {
                 }
             },
 
-            // Right button = the context menu, immediately (D2): the desktop hand's long-press.
-            // Same intent the recogniser concludes after a 350 ms finger — same menu, same
-            // routing, no parallel semantics.
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Right,
-                ..
-            } => {
+            // Right button (operator ruling 2026-10-01): press-and-hold arms the canvas pan
+            // (see CursorMoved); a press that NEVER moves is the context menu, immediately on
+            // release (D2): the desktop hand's long-press. Same intent the recogniser
+            // concludes after a 350 ms finger — same menu, same routing, no parallel semantics.
+            WindowEvent::MouseInput { button: MouseButton::Right, state, .. } => {
                 if let Some(pos) = self.cursor_logical {
-                    self.extras.push(GestureIntent::Context { pos });
+                    match state {
+                        ElementState::Pressed => {
+                            self.right_down = true;
+                            self.right_start = Some(pos);
+                            self.right_last = Some(pos);
+                            self.right_moved = false;
+                        },
+                        ElementState::Released => {
+                            self.right_down = false;
+                            if !self.right_moved {
+                                self.extras.push(GestureIntent::Context { pos });
+                            }
+                            self.right_start = None;
+                            self.right_last = None;
+                            self.right_moved = false;
+                        },
+                    }
                 }
             },
 
-            // The wheel is a one-finger pan (D2): over a panel the panel scrolls itself (the
-            // Pan arm's existing routing), over the canvas the camera moves. One notch = one
-            // list row; pixel deltas pass through. No modifier keys anywhere (§8).
+            // The wheel (operator ruling 2026-10-01): over the CANVAS it ZOOMS about the
+            // cursor — the pinch's mouse hand, riding the recogniser's own `Zoom` vocabulary
+            // so the camera's clamp and anchor are the one implementation. Over a SCROLLABLE
+            // PANEL (inspector, library) it stays the panel's one-finger `Pan` scroll — a
+            // gesture OVER a surface belongs to that surface, and sending the wheel there as
+            // a Zoom would put it in the pinch's declined-over-panel arm, killing the scroll.
+            // Over the remaining chrome (rail, top bar, dock) it does nothing at all. The
+            // adapter knows which hardware meant what; the surface rects are the previous
+            // frame's — the same stale-by-one-frame convention every hit-test here uses.
             WindowEvent::MouseWheel { delta, .. } => {
                 if let Some(pos) = self.cursor_logical {
-                    let delta = match delta {
-                        MouseScrollDelta::LineDelta(_x, y) => {
-                            sparq_ui::geom::Vec2::new(0.0, y * LAYOUT_TOUCH_ROW_HEIGHT_LIST as f32)
-                        },
-                        MouseScrollDelta::PixelDelta(p) => {
-                            sparq_ui::geom::Vec2::new(p.x as f32, p.y as f32)
-                        },
-                    };
-                    self.extras.push(GestureIntent::Pan { delta, center: pos });
+                    let layout = self.shell.last_layout.as_ref();
+                    let over_panel = layout.is_some_and(|l| {
+                        l.inspector.is_some_and(|r| r.contains(pos))
+                            || l.library.is_some_and(|r| r.contains(pos))
+                    });
+                    let over_canvas = layout.is_some_and(|l| l.canvas.contains(pos));
+                    if over_panel {
+                        let delta = match delta {
+                            MouseScrollDelta::LineDelta(_x, y) => SpVec2::new(
+                                0.0,
+                                y * sparq_ui::tokens::LAYOUT_TOUCH_ROW_HEIGHT_LIST as f32,
+                            ),
+                            MouseScrollDelta::PixelDelta(p) => SpVec2::new(p.x as f32, p.y as f32),
+                        };
+                        self.extras.push(GestureIntent::Pan { delta, center: pos });
+                    } else if over_canvas {
+                        let factor = match delta {
+                            MouseScrollDelta::LineDelta(_x, y) => WHEEL_ZOOM_STEP.powf(y),
+                            MouseScrollDelta::PixelDelta(p) => {
+                                (1.0 + p.y as f32 * WHEEL_ZOOM_PER_PX).clamp(0.5, 2.0)
+                            },
+                        };
+                        if (factor - 1.0).abs() > f32::EPSILON {
+                            self.extras.push(GestureIntent::Zoom { factor, center: pos });
+                        }
+                    }
                 }
             },
 

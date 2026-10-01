@@ -111,11 +111,16 @@ fn node_id(op: &sparq_ui::canvas::model::Op) -> CanvasNodeId {
 /// manifests the executor instantiates from — so the browser cannot offer a module that is not
 /// installed (defect #58's rule, structurally, at the third consumer). Sorted by module id:
 /// deterministic rows for the audit and the goldens.
+///
+/// The permanent `out/main` is EXCLUDED (operator ruling 2026-10-01): Main Out is not a module
+/// the user creates — it is always already on the canvas — so no palette, library or browser
+/// offers it, and the spawn door in `sparq-ui::canvas::interact` refuses it structurally too.
 #[must_use]
 pub fn browser_catalog(registry: &Registry) -> Vec<sparq_ui::canvas::browser::BrowserItem> {
     let mut ids = registry.ids();
     ids.sort_unstable();
     ids.iter()
+        .filter(|id| &id[..] != sparq_ui::canvas::OUT_MAIN_ID)
         .filter_map(|id| {
             registry.get(id).map(|reg| {
                 let m = reg.manifest().manifest();
@@ -205,6 +210,25 @@ pub fn build_with_map_at(
         map.insert(n.id, kid);
     }
     for w in graph.wires() {
+        // A wire INTO a scope is a display binding, not a signal path (operator ruling
+        // 2026-10-01 r3: the scope accepts any source class): the UI reads the source's own
+        // publication, the module's process is a no-op, and the kernel's channel planning has
+        // no business judging an audio-or-event wire that nothing consumes. Skipped, declared.
+        if graph.node(w.to.node).is_some_and(|n| n.spec.module_id == sparq_ui::canvas::SCOPE_ID) {
+            continue;
+        }
+        // Control wires (r3) are modulation plans, not kernel edges: they ride the executor's
+        // param-mod plan below, and the kernel's channel planning never sees them.
+        if w.param.is_some() {
+            continue;
+        }
+        // The junction bus collapses (r3): wires touching a mult dot are patching, not signal
+        // paths — the copy-edges are emitted just below, source to destination directly.
+        if graph.node(w.from.node).is_some_and(|n| n.spec.module_id == sparq_ui::canvas::MULT_ID)
+            || graph.node(w.to.node).is_some_and(|n| n.spec.module_id == sparq_ui::canvas::MULT_ID)
+        {
+            continue;
+        }
         let (Some(from), Some(to)) = (map.get(&w.from.node), map.get(&w.to.node)) else {
             return Err(format!("wire {} references a node outside the graph", w.id));
         };
@@ -216,6 +240,30 @@ pub fn build_with_map_at(
         .map_err(|e| {
             format!("the kernel graph refused a wire the canvas accepted: {e} — report this")
         })?;
+    }
+    // The junction bus collapses here (operator ruling 2026-10-01 r3): every wire leaving a
+    // mult dot becomes a DIRECT kernel edge from the one source feeding that mult — what the
+    // canvas draws as dots, the executor runs as the fan-out the kernel already speaks. An
+    // unpowered bus (no input dot) contributes nothing, exactly like an unwired module.
+    for n in graph.nodes().iter().filter(|n| n.spec.module_id == sparq_ui::canvas::MULT_ID) {
+        let Some(feed) = graph.wires().iter().find(|w| w.to.node == n.id && w.param.is_none())
+        else {
+            continue;
+        };
+        let Some(&src_k) = map.get(&feed.from.node) else {
+            continue;
+        };
+        for w in graph.wires().iter().filter(|w| w.from.node == n.id) {
+            let Some(&dst_k) = map.get(&w.to.node) else { continue };
+            kg.connect(
+                KernelPortRef::new(src_k, feed.from.index as u32),
+                KernelPortRef::new(dst_k, w.to.index as u32),
+                EdgeKind::Plain,
+            )
+            .map_err(|e| {
+                format!("the kernel graph refused a collapsed mult wire: {e} — report this")
+            })?;
+        }
     }
     let Some(&k_master) = map.get(&master) else {
         return Err("the master node is not in the graph".to_string());
@@ -239,7 +287,41 @@ pub fn build_with_map_at(
         ));
     }
 
-    let ex = Executor::build(kg, builds, cfg).map_err(|e| e.to_string())?;
+    let mut ex = Executor::build(kg, builds, cfg).map_err(|e| e.to_string())?;
+    // Control connections (operator ruling 2026-10-01 r3): every canvas wire onto a float
+    // parameter becomes an executor param-mod plan — the knob's base plus the cv's deviation
+    // per block, clamped into the manifest range the bridge reads straight from the spec.
+    for w in graph.wires().iter().filter(|w| w.param.is_some()) {
+        // A control wire fed through a junction bus modulates from the bus's SOURCE (r3):
+        // the dot copies, so the modulation is the source's signal.
+        let mut src_ref = w.from;
+        for _ in 0..8 {
+            if !graph
+                .node(src_ref.node)
+                .is_some_and(|n| n.spec.module_id == sparq_ui::canvas::MULT_ID)
+            {
+                break;
+            }
+            match graph.wires().iter().find(|x| x.to.node == src_ref.node && x.param.is_none()) {
+                Some(feed) => src_ref = feed.from,
+                None => break,
+            }
+        }
+        if graph.node(src_ref.node).is_some_and(|n| n.spec.module_id == sparq_ui::canvas::MULT_ID) {
+            continue; // an unpowered bus modulates nothing, silently-by-rule, loudly-in-words elsewhere
+        }
+        let (Some(&dst), Some(&src)) = (map.get(&w.to.node), map.get(&src_ref.node)) else {
+            return Err(format!("control wire {} references a node outside the graph", w.id));
+        };
+        let idx = w.param.unwrap_or(0);
+        let (lo, hi) = graph
+            .node(w.to.node)
+            .and_then(|n| n.spec.params.get(idx))
+            .map(|d| (d.min as f32, d.max as f32))
+            .unwrap_or((0.0, 1.0));
+        ex.add_param_mod(dst, idx, src, src_ref.index as u32, lo, hi)
+            .map_err(|e| format!("the executor refused a control wire: {e}"))?;
+    }
     Ok((ex, k_master, map))
 }
 
@@ -282,6 +364,16 @@ pub fn node_levels(
     for (canvas_id, kernel_id) in &map {
         if let Some(m) = ex.meter(*kernel_id) {
             levels.set(*canvas_id, m.peak);
+        }
+    }
+    // The junction bus copies (r3): a mult dot reads its source's level, so the wires that
+    // leave it light like the wires that enter it.
+    for n in graph.nodes() {
+        if n.spec.module_id != sparq_ui::canvas::MULT_ID {
+            continue;
+        }
+        if let Some(feed) = graph.wires().iter().find(|w| w.to.node == n.id && w.param.is_none()) {
+            levels.set(n.id, levels.get(feed.from.node));
         }
     }
     // Per-port cv levels (WO-013 increment 5). A node's folded meter covers its AUDIO outputs, so
@@ -568,7 +660,13 @@ mod tests {
     fn the_catalogue_is_the_registry_sorted_with_full_specs() {
         let reg = registry();
         let cat = browser_catalog(&reg);
-        assert_eq!(cat.len(), reg.len());
+        // Operator ruling 2026-10-01: the catalogue is the registry MINUS the permanent
+        // `out/main` — Main Out is never user-created, so no palette offers it.
+        assert_eq!(cat.len(), reg.len() - 1);
+        assert!(
+            !cat.iter().any(|i| i.spec.module_id == sparq_ui::canvas::OUT_MAIN_ID),
+            "the permanent Main Out is not offered"
+        );
         let ids: Vec<&str> = cat.iter().map(|i| i.spec.module_id.as_str()).collect();
         let mut sorted = ids.clone();
         sorted.sort_unstable();

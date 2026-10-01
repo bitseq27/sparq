@@ -19,7 +19,7 @@
 
 | ID | Name | Dir | Type | Shape | Required | Multiplicity | Latency |
 |---|---|---|---|---|---|---|---|
-| `in` | Main In | in | audio | channel set: variable | no | — | 0 |
+| `in` | Main In | in | audio | channel set: stereo | no | — | 0 |
 | `out` | Main Out | out | audio | channel set: stereo | — | — | 0 |
 
 ## Parameters

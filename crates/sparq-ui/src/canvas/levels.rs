@@ -151,7 +151,20 @@ fn sanitised(level: f32) -> f32 {
 #[must_use]
 pub fn wire_level(graph: &Graph, levels: &NodeLevels, wire: WireId) -> f32 {
     let Some(w) = graph.wire(wire) else { return 0.0 };
-    levels.port(w.from.node, w.from.index).unwrap_or_else(|| levels.get(w.from.node))
+    // The junction bus (operator ruling 2026-10-01 r3): a wire leaving a mult dot carries
+    // the SOURCE's level — the dot copies, so the copy lights exactly like the original.
+    let src = if graph.node(w.from.node).is_some_and(|n| n.spec.module_id == crate::canvas::MULT_ID)
+    {
+        graph
+            .wires()
+            .iter()
+            .find(|f| f.to.node == w.from.node && f.param.is_none())
+            .map(|f| f.from)
+            .unwrap_or(w.from)
+    } else {
+        w.from
+    };
+    levels.port(src.node, src.index).unwrap_or_else(|| levels.get(src.node))
 }
 
 #[cfg(test)]

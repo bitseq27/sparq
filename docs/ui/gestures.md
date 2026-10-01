@@ -50,11 +50,41 @@ mode the graph is inert (the stage pads own the screen) and everything routes to
 | `Pan` (two-finger) | **inspector panel** (§4c) | scroll the rows (content follows the fingers); the camera stays put; the panel speaks only at the ends | scroll |
 | `Zoom` (pinch/spread) | canvas | zoom about the pinch centre (token clamp 0.25…4.0), LOD follows | camera |
 | `Zoom` (pinch/spread) | **inspector panel** | declined — the panel owns the gesture and has no zoom; the canvas behind it must not move | — |
+| `Zoom` (**mouse wheel**, §2b) | canvas | zoom about the cursor — the wheel is the pinch's mouse hand | camera |
+| `Pan` (**mouse wheel**, §2b) | inspector / library | scroll the rows / cards (the wheel over a scrollable panel stays that panel's scroll) | scroll |
+| `Pan` (**right-drag**, §2b) | canvas | pan the camera — the desktop hand's two-finger pan | camera |
+| `Context` (**right press, no travel**, §2b) | node / wire / empty | the long-press menu, without the hold | Menu |
+| `Delete` (**DEL key**, §2b) | the selection | delete selected wires, then selected nodes; locked nodes and the permanent Main Out refuse in words | `RemoveWire`/`RemoveNode` (one entry each) |
 | `Undo` (three-finger tap) | global | pop the undo stack, apply the inverse | Undo |
 
 `Rotate`, `Flick`, `DragFineChanged`, `TogglePanel`, `AllSoundOff`, `RecoveryMenu` are **not** canvas
 concerns in increment 1 — the canvas declines them and the shell owns them (rotate is reserved for
 the rig map, flick for Perform scenes).
+
+## 2b. The mouse hand (operator ruling 2026-10-01)
+
+The mouse rides the SAME intent vocabulary as the finger — the window adapter only translates
+hardware into intents; nothing downstream knows which hand asked. The ruling's four bindings:
+
+* **Scrollwheel = canvas zoom**, about the cursor (`Zoom`, one notch ≈ ×1.15, pixel deltas scaled
+  and clamped). Over the inspector or the library the wheel stays that panel's **scroll** (`Pan`),
+  because a gesture over a surface belongs to that surface; over the remaining chrome it is
+  nothing at all. A two-finger **pinch** over a panel is still declined (its sequential-contact
+  span wobble must not move camera *or* scroll — the wheel is the panel's scroll door for the
+  mouse hand, exactly as the two-finger pan is for the touch hand).
+* **Right-drag = canvas pan** (`Pan` from the cursor deltas): the desktop hand's two-finger pan,
+  and it works over nodes too (the camera, not the node, moves). A right press that **never
+  travels** past the drag threshold (8 px — the recogniser's own word for "drag") is the context
+  menu on release, unchanged: the desktop hand's long-press.
+* **DEL = delete the selection** (`Delete`, host-synthesised; the recogniser never fires it from
+  pointers): wires first, then nodes, each through the same op door the long-press menu's DELETE
+  rides. Protections speak: a **locked** node refuses and stays; the **permanent Main Out**
+  refuses and stays (§4e); an empty selection is a refusal with the remedy; while the rename
+  sheet or a menu/browser is open the key is answered in words instead of deleting behind the
+  sheet.
+* **Binary settings are toggle buttons, never sliders** (§4c): a `bool`, or an `int` whose whole
+  domain is `[0, 1]` (the manifests' Mute / Mode shapes), draws a switch; a tap FLIPS it wherever
+  it lands on the row, and a drag flips once and drags no further — one undo step per flip.
 
 ## 3. Connecting: the verdict is the contract's, not the canvas's
 
@@ -103,6 +133,75 @@ that end:
    removal's inverse: the drag was a question, and "no" changes nothing.
 4. Dropping the source end on an input (or the destination end on an output) is refused in words
    naming which end lives where. Dropping back on the same port is a note, not an op.
+
+## 3c. Ports float beside the window; covered is untouchable (operator ruling 2026-10-01)
+
+Connection points are drawn **4 px outside the card edge** (`canvas.node_port_offset`) — inputs
+left of the body, outputs right — so a port is never half-buried in the window it belongs to, and
+a wire visibly lands *beside* the card. The flip side of floating ports is that one card can sit
+on another card's ports, so the hit-test carries the drawing order's own rule: **nodes draw in
+list order, later cards on top, and what you cannot see you cannot touch** — a port (or a wire's
+re-patch grab, §3b) that lies under a LATER card's body is not targetable at that point: the
+click lands on the covering card. The same test applies to the port's own circle, so a buried
+port stays buried for the magnet too; node bodies and param rows already resolved top-down (the
+reverse-iteration rule), and this closes the last hole in "the pixel you see is the pixel you
+get".
+
+## 3d. The permanent Main Out (operator ruling 2026-10-01)
+`out/main` is **not a module the user creates or deletes**: the shell's patch always starts with
+it on the canvas (the demo patch seeds it), and every door
+that would create another — the library tiles, the browser sheet, the dock, DUPLICATE, spawn by
+id — refuses in words ("Main Out is permanent — it is already on the canvas…"). Every door that
+would remove it — DELETE from the menu, the DEL key, a select-all sweep — refuses likewise ("…it
+is the listener's output and cannot be deleted"). It is the one node whose presence is a contract
+with the listener, not a choice on the canvas. Because it is permanent, it is also the shell's
+**driver window**: an info band under its well (§4e) reads the live session's negotiated truth.
+
+## 3e. Control wires: every float setting is an input (operator ruling 2026-10-01, round 3)
+
+While a drag from a **cv output** is in flight, the hovered module wears a **small blue dot
+beside every float parameter** — half the radius of the main in/out ports, in the ports' own
+column at the row's height. They exist only while the control drag is in flight (at rest they
+are not drawn, and what you cannot see you cannot touch); the dot under the cursor glows and
+magnets the wire. Dropping on a dot makes a **control wire**: a dashed control-class run from
+the cv source to the parameter, stored as a wire with a `param` destination, undoable like any
+wire, and honoured by the executor — per block the parameter's effective value is
+`clamp(knob + cv × (max−min)/2)`: the knob stays the bias, a full-scale cv sweeps half the
+range either side, one block of latency (the latch is what keeps the plan independent of
+topological order). The verdicts speak: only a **cv output** may modulate (audio would modulate
+at a rate the block snapshot cannot carry), only a **float** parameter may be modulated (a
+toggle or a menu is a decision, not a voltage), cycles are refused, and a parameter already
+modulated gets its wire **replaced** atomically — one undo restores the old modulation. Control
+wires are structural on the live ledger (a re-stage, like any wire), they are skipped by the
+kernel graph (the modulation rides the executor's param-mod plan, not a port edge), and they are
+never re-patched by their ends — delete and redraw is their door.
+
+## 3f. The junction bus: `util/mult` (operator ruling 2026-10-01, round 3)
+
+Six vertical dots, each an input **or** an output, the type set by the **first connection**:
+the role and the class are derived from the wires (no second state to drift), and the rules are
+refusals in words — a dot never flips role while a wire touches it; a bus never carries two
+types; a bus never carries two sources ("every other dot copies it — sums are the mixer's
+job"); cycles refused as ever. The dots wear their state: uncommitted a hollow neutral ring,
+input a ring in the bus class, output a filled dot in it. `mult` is a **patching** module: its
+process is a no-op and the bridge COLLAPSES it at build time — every output dot's wires become
+direct kernel edges from the one source, so what the canvas draws is exactly what the executor
+runs, and the copies light like the original (the levels follow the bus). The sequencer's
+pattern row, meanwhile, is **sixteen step buttons** on the card (one strip) and in the
+inspector (2×8, touch-sized): a tap toggles that step's bit through the param door, one undo
+per flip; the clock input walks the ring as before.
+
+## 3g. Deleting keeps the chain connected (operator ruling 2026-10-01, round 2)
+
+Deleting a module used to leave its source dangling and its destinations silent. Now the removal
+**splices**: the wire that fed each input is re-aimed at the wires its outputs fed, paired in port
+order (first input's source → first output's destination, and so on), and every candidate splice
+runs the SAME `connect::resolve` verdict a hand-drawn wire gets — type, range, cycle, single-input
+replacement — so an incompatible pair is skipped, not forced. The removal and every accepted
+splice ride ONE `Op::Batch` into history: one undo restores the node, its original wires, and
+removes the splices — the deletion was one action, so it undoes as one. The shell says what it
+did ("chain kept: N wire(s) spliced past the deleted node"). The protections (§3d, LOCK) run
+first and refuse in words; a select-all DELETE sweep splices every deletable node the same way.
 
 ## 4. Context menu (long press)
 
@@ -163,6 +262,26 @@ trick applied to sliders). Tap sets the value at the tapped x; drag edits contin
 * Values clamp to `[min, max]` in the **model** (`Graph::op_set_param`), `int` snaps to whole
   steps, `bool` snaps to poles — one rule for every edit path, and history never holds an
   out-of-range value.
+* **Frequency rides the log map (operator ruling 2026-10-01):** a param whose unit is `Hz` and
+  whose minimum is strictly positive (`sparq/syn/sine`'s 0.1 Hz – 10 kHz, `flt/svf`'s cutoff)
+  maps x → value **logarithmically** — equal mouse distances are equal pitch distances, which
+  is what "the slider follows the mouse" means for the ear. `knob_x` is the same map inverted,
+  so the knob you see is the value you have. Ranges that include zero stay linear (log(0) is
+  not a mapping), and non-Hz params stay linear whatever their range.
+* **Binary settings are toggle buttons (operator ruling 2026-10-01):** a `bool` row, or an `int`
+  row whose whole domain is `[0, 1]` (the manifests' Mute / Mode shapes), draws a **switch** on
+  the track instead of a slider — ON filled in the control accent with the knob right, OFF an
+  empty well with the knob left — and its value column reads ON/OFF (the redundant word). A tap
+  anywhere on the row FLIPS the value; a drag flips exactly once and starts no continuous edit;
+  one flip is one `SetParam` history entry. A float on `[0, 1]` keeps its slider (it has values
+  in between), and a wider int keeps its slider too.
+* **Multi-choice settings are button rows (operator ruling 2026-10-01, round 2):** an `int` row
+  whose domain is 3…8 discrete choices (`flt/svf` mode, `mod/lfo` shape, `dsp/scope` colour map,
+  `mod/clk-div` multiply) draws **one button per choice**, the active one filled in the row's
+  class colour with its number, the rest empty wells — a slider over a menu is a menu pretending
+  to be a scale. A tap sets the choice under the finger; a drag steps across the buttons; the
+  model's int snap keeps the value on a choice either way. Wider ints (steps, masks, bits) are
+  numbers, not menus, and keep their sliders.
 * One drag is **one** `SetParam` history entry: updates inside the drag coalesce, preserving the
   entry's original `from`, so one undo restores the value the finger *found* (the acceptance
   criterion's "undo restores graph **and param state**", proven by smoke 12).
@@ -203,6 +322,24 @@ they dismiss the menu and browser.
   browser query both consume — the shared text-entry surface the browser's provisional feed was
   declared to be waiting for. Headless drivers call `rename_set_text` / `rename_commit` directly
   (the `browser_set_query` convention).
+
+## 4e. The Main Out driver window (operator ruling 2026-10-01)
+
+The permanent `out/main` (§3d) carries an **info band** between its meter well and its port row
+(layout token `canvas.node_info_height`, reserved for this node alone). At rest it states the
+at-rest fact in words — `NO SESSION - TRANSPORT'S PLAY OPENS THE DEVICE`. While a session runs it
+reads the session's own negotiated truth, in two lines, every number with its unit:
+
+* `backend · device` — the probe's names (`null (virtual device) · sparq Null Device …`,
+  `WASAPI shared · …` on the stage machine);
+* `rate Hz · channels ch · block fr · 32-bit float` — the negotiated config the executor was
+  built for, plus the HAL's sample-format contract (interleaved f32).
+
+Nothing is invented: the lines come from the live session (`LiveSession::driver_lines`), and a
+stopped session hands the painter `None`, which is the at-rest words. The workspace's right-edge
+IN/OUT master strip is **gone** with the same ruling — the master's meters live on the master's
+own card (its well), and the driver truth lives beside them; a strip of bars floating over the
+canvas was chrome pretending to be a reading.
 
 ## 5. Level of detail, snapping, and the audit
 

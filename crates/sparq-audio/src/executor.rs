@@ -428,11 +428,35 @@ struct InStaging {
     events: Vec<Vec<Event>>,
 }
 
+/// One control connection (operator ruling 2026-10-01 r3): a cv output modulates a float
+/// parameter. `scalar` is the source's most recent block value (latched after each render —
+/// the declared one-block latency that keeps the plan ordering-independent); the effective
+/// value per block is `clamp(base + scalar * depth, lo, hi)` with `depth = (hi - lo) / 2`,
+/// i.e. a full-scale cv sweeps half the range either side of the knob — the bipolar cv
+/// contract's own ±1 vocabulary, applied to a parameter.
+#[derive(Clone, Copy, Debug)]
+struct ParamMod {
+    dst_slot: usize,
+    param: usize,
+    src_slot: usize,
+    /// Manifest index of the source's cv OUTPUT port.
+    src_port: u32,
+    lo: f32,
+    hi: f32,
+    depth: f32,
+    scalar: f32,
+}
+
 /// One node's runtime home.
 struct ExecNode {
     id: NodeId,
     module: Box<dyn Module>,
     params: ParamSet,
+    /// Per-block modulation scratch (operator ruling 2026-10-01 r3): when `has_mods`, the
+    /// block's effective snapshot is the base plus every control wire's cv deviation.
+    param_scratch: ParamSet,
+    /// Whether any control wire modulates this node's parameters.
+    has_mods: bool,
     /// Audio output buffers, per audio-out port in manifest order: `frames × out_chs[p]`.
     out_bufs: Vec<Vec<f32>>,
     /// Resolved channels per audio-in port; 0 = unconnected (the module SEES unconnected, per
@@ -654,6 +678,10 @@ pub struct Executor {
     /// `None` leaves `tick` where it was (0 by default — the contract-v1 static-clock shape the
     /// determinism harness pins).
     musical: Option<(u64, u32)>,
+    /// Control connections (operator ruling 2026-10-01 r3): cv source → float parameter.
+    /// Applied per block on top of each destination's base snapshot; the scalar lags one
+    /// block (declared), so the plan is ordering-independent and allocation-free.
+    param_mods: Vec<ParamMod>,
     budget_bytes: usize,
     blocks_rendered: u64,
     /// The bounded watchdog journal (pre-reserved; audio-path pushes never allocate).
@@ -1324,6 +1352,8 @@ impl Executor {
                 id,
                 module: build.module,
                 params: build.params,
+                param_scratch: build.params,
+                has_mods: false,
                 out_bufs,
                 in_chs: in_chs[slot].clone(),
                 out_chs: out_chs[slot].clone(),
@@ -1396,6 +1426,7 @@ impl Executor {
             meters,
             ctx: BlockContext::offline(cfg.sample_rate, frames, cfg.device_channels),
             musical: None,
+            param_mods: Vec::new(),
             budget_bytes: budget,
             blocks_rendered: 0,
             // Reserved, not filled: the audio path may push into this, and a push inside
@@ -1619,8 +1650,24 @@ impl Executor {
                 // Assemble the contract-v1 context from disjoint borrows: the staging (local),
                 // the parameter snapshot and the output-side storage (fields of `n`). The
                 // per-type port order is the manifest order the module was written against.
+                // Control modulation (operator ruling 2026-10-01 r3): the block's effective
+                // snapshot is the knob's base plus every cv wire's latched deviation, clamped
+                // into the manifest range. Copy-in, copy-out on a `Copy` snapshot: no
+                // allocation, and a node with no modulation reads its base untouched.
+                if self.nodes[slot].has_mods {
+                    let base = self.nodes[slot].params;
+                    let mut scr = base;
+                    for m in &self.param_mods {
+                        if m.dst_slot == slot {
+                            let v = (base.at(m.param) + m.scalar * m.depth).clamp(m.lo, m.hi);
+                            scr = scr.with_value(m.param, v);
+                        }
+                    }
+                    self.nodes[slot].param_scratch = scr;
+                }
                 let n = &mut self.nodes[slot];
-                let mut ctx = AudioCtx::new(&self.ctx, &n.params);
+                let params_ref: &ParamSet = if n.has_mods { &n.param_scratch } else { &n.params };
+                let mut ctx = AudioCtx::new(&self.ctx, params_ref);
                 for b in bundle.audio.iter() {
                     ctx = ctx.with_audio_in(b);
                 }
@@ -1754,6 +1801,14 @@ impl Executor {
             write_edge(out, dev, m_out, m_ch, false, None);
         }
 
+        // -- latch this block's cv values for the NEXT block's modulation (r3): the declared
+        //    one-block latency that keeps the plan independent of topological order.
+        for i in 0..self.param_mods.len() {
+            let (ss, sp) = (self.param_mods[i].src_slot, self.param_mods[i].src_port);
+            let v = self.read_cv_scalar(ss, sp);
+            self.param_mods[i].scalar = v;
+        }
+
         // -- advance the sample clock (the musical clock is WO-009).
         self.ctx.block = sparq_kernel::block::BlockId(self.ctx.block.0 + 1);
         self.ctx.sample_offset += frames as u64;
@@ -1766,6 +1821,58 @@ impl Executor {
     ///
     /// # Errors
     /// [`ExecError::Graph`] wrapping `NoSuchNode` when the node is unknown.
+    /// The most recent value of one cv output port: the block-rate cell, or the last sample
+    /// of an audio-rate buffer — the same "block snapshot" reading a cv input port gets.
+    fn read_cv_scalar(&self, slot: usize, port: u32) -> f32 {
+        let Some(ord) = self.plans[slot].cv_out.iter().position(|&p| p == port) else {
+            return 0.0;
+        };
+        let n = &self.nodes[slot];
+        if n.cv_out_rates.get(ord) == Some(&CvRate::Block) {
+            n.cv_out_cells.get(ord).copied().unwrap_or(0.0)
+        } else {
+            n.cv_out_bufs.get(ord).and_then(|b| b.last().copied()).unwrap_or(0.0)
+        }
+    }
+
+    /// Register a CONTROL connection (operator ruling 2026-10-01 r3): `src`'s cv output
+    /// modulates `dst`'s float parameter `param`, additive around the knob over ±half the
+    /// manifest range. Build-time only (a live add is a re-stage, the structural door).
+    ///
+    /// # Errors
+    /// A node the build does not contain — the bridge maps ids before calling, so this is a
+    /// build-internal bug, refused loudly rather than dropped silently.
+    pub fn add_param_mod(
+        &mut self,
+        dst: NodeId,
+        param: usize,
+        src: NodeId,
+        src_port: u32,
+        lo: f32,
+        hi: f32,
+    ) -> Result<(), ExecError> {
+        let dst_slot =
+            *self.slot_of.get(&dst).ok_or(ExecError::Graph(GraphError::NoSuchNode(dst)))?;
+        let src_slot =
+            *self.slot_of.get(&src).ok_or(ExecError::Graph(GraphError::NoSuchNode(src)))?;
+        self.param_mods.push(ParamMod {
+            dst_slot,
+            param,
+            src_slot,
+            src_port,
+            lo,
+            hi,
+            depth: (hi - lo) / 2.0,
+            scalar: 0.0,
+        });
+        self.nodes[dst_slot].has_mods = true;
+        Ok(())
+    }
+
+    /// Replace a node's parameter snapshot at the block boundary (the command ring's door).
+    ///
+    /// # Errors
+    /// A node the build does not contain.
     pub fn set_params(&mut self, node: NodeId, params: ParamSet) -> Result<(), ExecError> {
         let Some(&slot) = self.slot_of.get(&node) else {
             return Err(ExecError::Graph(GraphError::NoSuchNode(node)));

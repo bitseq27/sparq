@@ -244,6 +244,23 @@ impl AnalysisUpdate {
         self.len = n as u32;
     }
 
+    /// Fill from an INTERLEAVED multi-channel buffer taking channel zero every `stride`
+    /// samples (operator ruling 2026-10-01 r3: the scope accepts ANY source, so an audio
+    /// output's waveform crosses the ring as its first channel — the scope is a mono
+    /// picture of a bus, declared, not a hidden downmix of the whole set).
+    pub fn set_samples_strided(&mut self, buf: &[f32], stride: usize) {
+        let stride = stride.max(1);
+        let mut n = 0usize;
+        for (i, &s) in buf.iter().step_by(stride).enumerate() {
+            if i >= ANALYSIS_WAVE_LEN {
+                break;
+            }
+            self.samples[i] = s;
+            n = i + 1;
+        }
+        self.len = n as u32;
+    }
+
     /// The valid waveform samples.
     #[must_use]
     pub fn wave(&self) -> &[f32] {
@@ -648,6 +665,19 @@ impl AudioEngine {
                 update.port = port;
                 update.block = block;
                 update.set_samples(&[v]);
+                self.analysis.push(update);
+            });
+            // Operator ruling 2026-10-01 r3: the scope accepts ANY source, so AUDIO outputs
+            // publish their first channel's waveform too (strided out of the interleaved
+            // bus). The ring stays bounded; a consumer that falls behind is refused and
+            // counted, never waited for.
+            let frames = patch.executor.config().block_frames.max(1);
+            patch.executor.with_audio_out(node, |port, buf| {
+                let stride = (buf.len() / frames).max(1);
+                update.node = node.0;
+                update.port = port;
+                update.block = block;
+                update.set_samples_strided(buf, stride);
                 self.analysis.push(update);
             });
         }

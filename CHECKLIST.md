@@ -6,7 +6,12 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-09-30, END of eighth session — handoff prepared. **PLAY MAKES SOUND.**
+**Last updated:** 2026-10-01, END of eleventh session round 3 (sandbox) — the control-wire /
+junction-bus round is sealed (`sparq-update-2026-10-01.zip` rev 3; NOTE: the sandbox lost its
+`.git` in a reset, so rev 3 ships as an overlay pack only — no patch base this time); the
+device-confirmed state below (eighth session) is unchanged. **PLAY MAKES SOUND.**
+**test006 on SATURN stopped at the sync gate as designed** (stamp still inc7c): re-stamp on the
+source machine (`python tools\sync_check.py --write --sync sync-ui-round-2026-10-01`) and re-run.
 Operator-confirmed on SATURN with `sync-wo012-inc4.zip` applied: the drawn patch is audible
 through the project's own HAL on the stage machine — the UX pivot's promise, measured where it
 counts. That closes, on hardware: WO-012 inc 2's device box J (live canvas audio on
@@ -16,6 +21,113 @@ on the device: test004 attempt 4 (the 🔴 exclusive acceptance — the ADR-008 
 rest of the test006 digests (F–K, the mouse paragraph, the H diff list against the mockup on
 the stage screen), and the gates digest at 777 / `src 94f/2188595B` / 37 smokes. **No bundle is
 waiting**; the next seal comes with the next build.
+
+**Eleventh session, third round (2026-10-01, sandbox) — operator UI round 3: control wires, the
+junction bus, and six more rulings. BUILT, GREEN and SEALED (`sparq-update-2026-10-01.zip`
+rev 3).** The operator's third list, deepest first: **every float parameter is now a controllable
+input** — while a cv drag is in flight the hovered module wears a small blue dot beside each
+float setting (half a port's radius, the ports' column at the row's height, drawn only in
+flight); dropping on a dot makes a dashed control wire the executor honours per block
+(`clamp(knob + cv × half-range)`, one block of latency, declared), with verdicts in words (cv
+sources only, float sinks only, cycles refused, one modulation per knob, replaced atomically);
+**`util/mult`** joins as the six-dot junction bus — role and type set by the first connection,
+one source per bus, refusals in words, dots wearing their role, and the bridge COLLAPSES it so
+the kernel runs direct source→destination edges (the copies light like the original); **`util/vca`**
+(audio gain = knob + bipolar cv, the glide discipline); the **sequencer's pattern is sixteen
+step buttons** on the card and 2×8 in the inspector (tap toggles the bit through the param
+door); the **scope accepts any audio/cv/event/data source** (the kernel never sees the binding;
+audio outputs now publish their first channel's waveform on the analysis ring; event/data
+bindings say NO WAVEFORM in words) and its trace wears the SOURCE's class colour — an LFO on the
+scope draws in control blue, which is also the lfo well's colour from round 2; **zoom stops at
+100 %** (token `zoom_max` 4.0 → 1.0); and card content already scales with the camera from
+round 2. First-party set: **21 modules**, docs regenerated 21/21. **Measured: 832 tests (+7:
+five r3 gate tests — exact tick lists stay round 2's, new ones pin the modulation's audibility
+and clamp, the bus's role/type/source refusals, the collapse-and-light levels, the step-button
+flips — plus two smokes), goldens untouched (selftest 9/9, hash ba577186c988db21), every clippy
+cell (workspace, ui, ui-window, bootstrap-audio), every python gate, `ui --audit` PASS — matrix
+plus 43 checks including the two new round-3 smokes, 0 failures.** Sandbox note, stated not
+buried: a reset between turns wiped `/tmp`, `/usr` additions and the workspace `.git`; the
+toolchain now lives INSIDE the workspace (`.tc/`, gitignored) and rev 3 ships as an overlay pack
+without a patch base (no common ancestor commit survives here) — the stamp still reads
+`sync-wo014-inc7c` until the source machine re-writes it after applying. **Device ask, four
+lines: wheel-zoom/right-drag/DEL with the real mouse; drag an LFO onto a gain knob's dot and
+hear the knob become a bias; clock → seq → percussion, listened; and a mult split lighting like
+its source.** Next session: (1) re-stamp + test006 re-run with rev 3; (2) device digests (test004
+attempt 4 still the WO-006 acceptance); (3) the operator's eye against `docs/ui/shots/`; (4) the
+bare-required badge (item 8) stays open.
+
+**Eleventh session, second round (2026-10-01, sandbox) — operator UI round 2: the clock family
+plus eight more rulings. BUILT, GREEN and SEALED (`sparq-update-2026-10-01.zip` rev 2).** The
+operator's second list, in the same compute-then-draw discipline: sine AND polyblep narrow to the
+audible **10 Hz – 10 kHz** (log map unchanged); two NEW first-party modules take the set to 19 —
+**`mod/clk`**, the free-running tempo clock: four sample-accurate trigger grids (4ths/8ths/16ths/
+32nds) that share the downbeat, a tempo edit re-spaces ticks FROM THE NEXT ONE (no jump, no
+double fire), 32-byte state lands the grid mid-stream — and **`mod/seq`**, the **3–16 step
+trigger sequencer**: the clock walks a step ring per qualifying trigger, the pattern bitmask
+fires the masked steps AT THE INPUT EVENT'S SAMPLE (pattern, not time), gate-offs ignored; five
+new gate tests pin exact sample lists, the wrap, the tempo re-space and zero allocations in
+`process`; **multi-choice settings are button rows** (int domains of 3…8 choices — svf mode, lfo
+shape, scope colormap, clk-div multiply: one button per choice, tap sets, drag steps; wider ints
+stay sliders); **the card-slider dead zone is dead** — a port's 24 px capture no longer reaches
+inside its own card (a press inside a body belongs to the body; regression test on both row
+ends); **card content is world geometry** — text, knobs, ports, switches, wells and strokes
+scale with the camera zoom while touch targets and the selection frame stay screen-sized; the
+**Main Out info band clips at char boundaries** (a device name sliced a multi-byte `·` — a panic,
+now an ellipsis) and its second line is composed to FIT (`48 kHz · 2 ch · 64 fr · f32`), and
+main's input is **stereo** like its output (mono sources still land via the documented
+conversion); the **control module's wave display is blue** (the lfo period well draws in the
+control-class accent at signal weight, not hairline grey); and **deleting keeps the chain
+connected** — the removed node's feed re-aims onto its feedees, paired in port order, each
+splice through the same `connect::resolve` verdict a drawn wire gets, removal plus splices in
+ONE Batch (one undo restores everything; the shell says how many wires it spliced). The review
+sheet now rigs tap → scope AND clock-16ths → seq, so the sheet shows the scope hot with its
+graticule and measurements beside the live event chain. **Measured: 825 tests (+1 ignored),
+goldens untouched (selftest 9/9, hash ba577186c988db21), every runnable clippy cell, every python
+gate, `ui --audit` PASS — matrix + every smoke, 0 failures.** Stamp still `sync-wo014-inc7c` on
+purpose: re-write on the source machine after applying, then re-run test006. **Device ask, three
+lines: wheel-zoom and right-drag with the real mouse; a fast trim drag; and clock → seq → a
+percussion voice, listened.** Next session: (1) re-stamp + test006 re-run; (2) device digests
+(test004 attempt 4 still the WO-006 acceptance); (3) the operator's eye against
+`docs/ui/shots/`; (4) the bare-required badge (item 8) stays open.
+
+**Eleventh session (2026-10-01, sandbox) — the operator UI round: fourteen rulings, BUILT,
+GREEN and SEALED (`sparq-update-2026-10-01.zip` / `.patch`, commit `19fd65b`).** The operator's
+UI list arrived as one round and every item landed in the compute-then-draw discipline (sparq-ui
+owns the geometry, the egui half only paints it): the sine's slider follows the mouse (Hz params
+with a positive minimum map x to value LOGARITHMICALLY, `value_from_x`/`knob_x` one inverse pair;
+sine's range is now 0.1 Hz - 10 kHz in the manifest), covered ports are untouchable AND ports
+float 4 px beside the window (`canvas.node_port_offset`, draw-order occlusion in `hit_test`, two
+new layout tests), the card stripe is 2 px, the selection highlight is WHITE (the token set's one
+documented pure-white exemption - `forbidden.pure_white_allowlist`, enforced both ways by
+token_gen check 7), the library is 32 px tiles (colour ref + name) under one toggle-switch chip
+per module group (the cycling category button is gone), binary settings (bool, or an int whose
+domain is [0,1] - the Mute/Mode shape) are TOGGLE BUTTONS on cards and inspector (tap flips, drag
+flips once, one undo step per flip), the workspace's right-edge IN/OUT master strip is GONE,
+`out/main` is PERMANENT (never spawned, duplicated or deleted - every door refuses in words, four
+new interact tests) and reads the session's negotiated driver truth on its own info band
+(`backend - device` / `rate Hz - ch - block fr - 32-bit float`; the at-rest sentence when no
+session), `dsp/scope`'s screen is 160 px with a 10x8 graticule and a measurement line (ms/div,
+Vpp, RMS, PK - `scope::measure`/`graticule`, computed from the SAME window the trace draws, NO
+SIGNAL in words when empty), and the mouse hand got its bindings: the scrollwheel ZOOMS the canvas
+about the cursor (panels keep their scroll - a pinch over a panel is still declined, its
+sequential-contact wobble must move neither camera nor scroll), right-DRAG pans, a still right
+press is the context menu as before, and DEL deletes the selection with its protections speaking.
+`docs/ui/gestures.md` grew the rules (new 2b the mouse hand, 3c floating ports + covered-is-
+untouchable, 3d the permanent Main Out, 4c log-map + toggle bullets, 4e the driver window); the
+review convergence sheet now rigs tap to scope so the enlarged scope screen reads hot, and the
+round's screenshots are committed under `docs/ui/shots/`. **Measured: 818 tests (+10, +1 ignored),
+goldens untouched (selftest 9/9, golden hash ba577186c988db21 - the DSP never moved), every
+runnable clippy cell (workspace, ui, ui-window, bootstrap-audio), every python gate, `ui --audit`
+PASS - the 5-viewport x 4-DPI matrix plus every smoke, 0 failures, 63 audited elements at
+desktop.** The stamp is deliberately NOT re-written in the sandbox: SYNC-STAMP.txt still reads
+`sync sync-wo014-inc7c` / `fp 96f/2381733B`, and the pack carries no stamp - on the source machine
+run `python tools/sync_check.py --write` after applying (session-start discipline: build.bat will
+print the 24 changed filenames before cargo; that report is EXPECTED, not a failure). **Device
+ask, two lines: wheel-zoom and right-drag pan with the real mouse, and one fast trim drag to hear
+that the toggle/log-map edits still glide.** Next session: (1) re-stamp + session-start discipline
+(expect the inc7c stamp until then); (2) device digests (test004 attempt 4 is still the WO-006
+acceptance - do NOT fire the ADR-008 exit early); (3) the operator's eye on the new library and
+the scope screen against this round's shots; (4) the bare-required badge (item 8) stays open.
 
 **Tenth session, seventh round (2026-09-30, sandbox) — WO-014 increment 7c: the one-pole glide.
 BUILT, GREEN and SEALED (`sync-wo014-inc7c.zip`).** Operator, third ear-report: *"I can still

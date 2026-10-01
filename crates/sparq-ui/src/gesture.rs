@@ -115,6 +115,11 @@ pub enum GestureIntent {
     },
     /// Three-finger tap: undo. Global.
     Undo,
+    /// The keyboard's DELETE key (host-synthesised, operator ruling 2026-10-01): delete the
+    /// current selection — selected wires first, then selected nodes. The recogniser never
+    /// fires this from pointers; the host adapter synthesises it from the key, exactly like the
+    /// mouse's right-click `Context` — same vocabulary, one routing table.
+    Delete,
     /// Three-finger swipe down: all sound off. Global, Perform mode.
     AllSoundOff,
     /// Five-finger hold: recovery menu. Global.
@@ -854,6 +859,7 @@ mod tests {
                 GestureIntent::Zoom { .. } => "zoom",
                 GestureIntent::Rotate { .. } => "rotate",
                 GestureIntent::Undo => "undo",
+                GestureIntent::Delete => "delete",
                 GestureIntent::AllSoundOff => "panic",
                 GestureIntent::RecoveryMenu => "recovery",
                 GestureIntent::Flick { .. } => "flick",

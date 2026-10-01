@@ -1,0 +1,77 @@
+# sparq module manifest — mod/seq (operator round 2026-10-01).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The trigger sequencer the operator asked for: a 3–16 STEP ring advanced by an incoming
+# clock/trigger, firing its output on the steps whose bit is set in `pattern`. One module,
+# one row of buttons' worth of pattern: the bitmask IS the step program (bit 0 = step 1).
+#
+# SEMANTICS, stated exactly:
+# * Every qualifying input event (a trigger, value > 0 — the clk-div counting rule) advances
+#   the ring by ONE step, wrapping at `steps`. The step index counts from 0.
+# * When the ring lands on a set bit, the module emits one trigger at the INPUT event's
+#   sample offset — zero latency through the step: the sequencer adds pattern, not time.
+# * `steps` and `pattern` read once per block (the v0 param discipline): an edit applies from
+#   the next clock tick; the ring position itself is performance state and survives edits.
+# * State is the 8-byte step counter: a save/restore resumes the pattern where it was walking,
+#   the clk-div seed promise applied to position.
+#
+# v0 limits, declared: one pattern, no per-step velocity (the output trigger is intensity 1),
+# no chain input — longer sequences are several sequencers on divided clocks, which is what
+# mod/clk-div is for.
+
+[identity]
+id = "sparq/mod/seq"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Trig Seq"
+summary = "3-16 step trigger sequencer: a clock walks the ring, the pattern mask fires steps"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "modulation/trigger-sequencer"
+top = "mod"
+kind = "processor"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "clk"
+name = "Clock In"
+direction = "in"
+type = "event"
+event_kinds = ["trigger", "clock"]
+required = false
+
+[[ports]]
+id = "trig"
+name = "Trig Out"
+direction = "out"
+type = "event"
+event_kinds = ["trigger"]
+
+[[params]]
+id = "steps"
+name = "Steps"
+type = "int"
+unit = "x"
+min = 3.0
+max = 16.0
+default = 8.0
+
+[[params]]
+id = "pattern"
+name = "Pattern Mask"
+type = "int"
+unit = "x"
+min = 0.0
+max = 65535.0
+default = 170.0
+
+[state]
+schema_id = "sparq/mod/seq/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "trivial"

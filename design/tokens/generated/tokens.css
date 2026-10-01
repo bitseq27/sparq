@@ -41,7 +41,7 @@
   --sparq-color-signal-spatial-glow: #D3C4FF;
   --sparq-color-signal-spatial-encoding: double-stroke;
   --sparq-color-signal-spatial-label: S;
-  --sparq-color-state-selected-colour: #F08C1E;
+  --sparq-color-state-selected-colour: #FFFFFF;
   --sparq-color-state-selected-width: 1;
   --sparq-color-state-selected-encoding: corner-ticks;
   --sparq-color-state-hover-colour: #F0E6D8;
@@ -192,7 +192,7 @@
   --sparq-layout-shell-dock-card-w: 112;
   --sparq-layout-shell-dock-card-h: 56;
   --sparq-layout-shell-library-width: 240;
-  --sparq-layout-shell-library-card-h: 128;
+  --sparq-layout-shell-library-card-h: 32;
   --sparq-layout-shell-toolbar-height: 32;
   --sparq-layout-shell-inspector-width: 400;
   --sparq-layout-shell-inspector-width-min: 320;
@@ -212,9 +212,12 @@
   --sparq-layout-canvas-node-param-row: 32;
   --sparq-layout-canvas-node-param-rows-max: 8;
   --sparq-layout-canvas-node-well-height: 48;
+  --sparq-layout-canvas-node-well-height-scope: 160;
+  --sparq-layout-canvas-node-info-height: 40;
+  --sparq-layout-canvas-node-port-offset: 4;
   --sparq-layout-canvas-node-radius: 2;
   --sparq-layout-canvas-zoom-min: 0.25;
-  --sparq-layout-canvas-zoom-max: 4.0;
+  --sparq-layout-canvas-zoom-max: 1.0;
   --sparq-layout-canvas-zoom-default: 1.0;
   --sparq-layout-canvas-zoom-step: 1.2;
   --sparq-layout-canvas-lod-levels: 3;
@@ -325,7 +328,7 @@ colour. The sixth (warning yellow) is reserved. A seventh category is a design e
   --sparq-color-hc-signal-spatial-colour: #C2A5FF;
   --sparq-color-hc-signal-spatial-dim: #645593;
   --sparq-color-hc-signal-spatial-glow: #EDDEFF;
-  --sparq-color-hc-state-selected-colour: #FFA642;
+  --sparq-color-hc-state-selected-colour: #FFFFFF;
   --sparq-color-hc-state-hover-colour: #FFFEEF;
   --sparq-color-hc-state-active-colour: #6EF3FF;
   --sparq-color-hc-state-armed-colour: #FFCD64;

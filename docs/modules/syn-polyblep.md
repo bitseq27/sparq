@@ -25,7 +25,7 @@
 
 | # | ID | Name | Type | Unit | Min | Max | Default |
 |---|---|---|---|---|---|---|---|
-| 0 | `freq` | Frequency | float | Hz | 0 | 24000 | 220 |
+| 0 | `freq` | Frequency | float | Hz | 10 | 10000 | 220 |
 | 1 | `shape` | Shape (0 saw 1 square 2 pulse) | int | x | 0 | 2 | 0 |
 | 2 | `pw` | Pulse width | float | ratio | 0.05 | 0.95 | 0.5 |
 | 3 | `amp` | Amplitude | float | ratio | 0 | 1 | 0.5 |

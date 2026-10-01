@@ -25,7 +25,7 @@
 
 | # | ID | Name | Type | Unit | Min | Max | Default |
 |---|---|---|---|---|---|---|---|
-| 0 | `freq` | Frequency | float | Hz | 0 | 24000 | 440 |
+| 0 | `freq` | Frequency | float | Hz | 10 | 10000 | 440 |
 | 1 | `amp` | Amplitude | float | ratio | 0 | 1 | 0.5 |
 
 Parameter order is the snapshot order: `param(i)` in `process` reads row `i`.

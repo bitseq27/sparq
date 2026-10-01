@@ -24,7 +24,7 @@ use crate::tokens::{
     LAYOUT_CANVAS_SNAP, LAYOUT_SPACE_2, LAYOUT_SPACE_3, LAYOUT_SPACE_PADDING_SECTION,
     LAYOUT_TOUCH_ROW_HEIGHT_LIST,
 };
-use sparq_module_api::port::Direction;
+use sparq_module_api::port::{Direction, Phase};
 
 /// Which nodes and wires are selected.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -69,6 +69,10 @@ pub struct PendingWire {
     pub cursor_screen: Vec2,
     /// The port the cursor is currently capturing (magnet), if any.
     pub hovered: Option<PortRef>,
+    /// The parameter SINK the cursor is capturing (operator ruling 2026-10-01 r3): while a
+    /// control (cv) drag is in flight, the hovered module's float settings wear small dots,
+    /// and this is the magnet for them.
+    pub hovered_param: Option<(NodeId, usize)>,
 }
 
 /// What a drag is doing right now.
@@ -619,6 +623,32 @@ impl CanvasState {
         self.apply_param(graph, node, index, value, false)
     }
 
+    /// Resolve and commit a CONTROL wire (operator ruling 2026-10-01 r3): a cv output onto a
+    /// float parameter — the same `connect::resolve_param` verdicts and the same `commit`
+    /// door the drop path rides. Documented headless/driver path, the `connect_ports`
+    /// sibling; the live-sync ledger marks it exactly as the drag would (structural).
+    pub fn connect_param(
+        &mut self,
+        graph: &mut Graph,
+        from: PortRef,
+        dst: NodeId,
+        param: usize,
+    ) -> Vec<CanvasEvent> {
+        match connect::resolve_param(graph, from, dst, param) {
+            ConnectOutcome::Connected { op, replaced, .. } => {
+                self.commit(op);
+                let mut ev = vec![CanvasEvent::Applied("control connected".to_string())];
+                if replaced {
+                    ev.push(CanvasEvent::Note(
+                        "replaced the modulation on that parameter".to_string(),
+                    ));
+                }
+                ev
+            },
+            ConnectOutcome::Refused(r) => vec![CanvasEvent::Refused(r.reason)],
+        }
+    }
+
     /// Resolve and commit a wire between two ports — the same `connect::resolve` verdicts and
     /// the same `commit` door the drag path (`finish_wire`) rides, without the layout and
     /// pending-wire machinery only a finger can supply. Documented headless/driver path; the
@@ -630,6 +660,28 @@ impl CanvasState {
         to: PortRef,
         ctx: &ConnectContext<'_>,
     ) -> Vec<CanvasEvent> {
+        // The junction bus (r3): a mult dot's role is the wire's orientation, not the
+        // manifest's static direction — pass the pair through as given and let the bus rules
+        // judge it in words.
+        let from_mult =
+            graph.node(from.node).is_some_and(|n| n.spec.module_id == crate::canvas::MULT_ID);
+        let to_mult =
+            graph.node(to.node).is_some_and(|n| n.spec.module_id == crate::canvas::MULT_ID);
+        if from_mult || to_mult {
+            return match connect::resolve(graph, from, to, ctx) {
+                ConnectOutcome::Connected { op, replaced, .. } => {
+                    self.commit(op);
+                    let mut ev = vec![CanvasEvent::Applied("connect".to_string())];
+                    if replaced {
+                        ev.push(CanvasEvent::Note(
+                            "replaced the wire on that single input".to_string(),
+                        ));
+                    }
+                    ev
+                },
+                ConnectOutcome::Refused(r) => vec![CanvasEvent::Refused(r.reason)],
+            };
+        }
         // Normalise orientation out→in regardless of argument order, as the drag path does.
         let from_dir = graph.port(from).map(|pt| pt.direction).unwrap_or(Direction::Out);
         let to_dir = graph.port(to).map(|pt| pt.direction).unwrap_or(Direction::In);
@@ -923,7 +975,10 @@ impl CanvasState {
             }
         }
         let wired = |id: crate::canvas::model::NodeId| {
-            graph.wires().iter().any(|w| w.from.node == id || w.to.node == id)
+            graph
+                .wires()
+                .iter()
+                .any(|w| w.param.is_none() && (w.from.node == id || w.to.node == id))
         };
         // The handover: the highest-id WIRED `out/main` is the master (an unwired one would
         // render silence, so it does not count). Falls through when the patch has none.
@@ -1006,7 +1061,10 @@ impl CanvasState {
                     // BEHIND it must not move because fingers pinched over the panel. (This is
                     // also what keeps the sequential-contact span wobble of a two-finger drag —
                     // the recogniser processes contacts one event at a time, so a straight
-                    // vertical drag momentarily reads as a pinch — off the camera.)
+                    // vertical drag momentarily reads as a pinch — off the camera AND off the
+                    // panel's scroll.) The MOUSE WHEEL never arrives here over a panel: the
+                    // window adapter routes it to the panel's own `Pan` scroll (operator ruling
+                    // 2026-10-01: wheel = canvas zoom, and a panel keeps its scroll).
                     Vec::new()
                 } else {
                     self.camera.zoom_about(factor, center, view);
@@ -1014,6 +1072,7 @@ impl CanvasState {
                 }
             },
             GestureIntent::Undo => self.undo(graph),
+            GestureIntent::Delete => self.delete_selection(graph),
             GestureIntent::DoubleTap { .. } => self.zoom_to_fit(graph, view),
             GestureIntent::Activate { pos } => self.activate(graph, pos, layout, view),
             GestureIntent::Context { pos } => self.open_menu(graph, pos, layout),
@@ -1163,15 +1222,30 @@ impl CanvasState {
 
         let lod = self.camera.lod();
         match layout::hit_test(layout, pos, lod) {
+            Hit::Step(node, step) => {
+                // A step button: the tap TOGGLES that step's bit in the pattern mask — the
+                // button is the program, one undo step per flip (operator ruling r3).
+                self.selection.clear();
+                self.selection.nodes.insert(node);
+                self.flip_step(graph, node, step)
+            },
             Hit::Param(node, index, track) => {
                 // The node card's own slider (increment 6): tap-to-set, the inspector's rule —
                 // the row under the finger is the row you edit, and one op serves both surfaces.
+                // A BINARY row is a toggle button (operator ruling 2026-10-01): the tap FLIPS
+                // it, x is irrelevant.
                 self.selection.clear();
                 self.selection.nodes.insert(node);
                 let desc = graph.node(node).and_then(|n| n.spec.params.get(index).cloned());
                 match desc {
                     Some(d) => {
-                        let v = inspector::value_from_x(&d, track, pos.x);
+                        let v = if inspector::is_binary(&d) {
+                            let cur =
+                                graph.node(node).and_then(|n| n.param_value(index)).unwrap_or(0.0);
+                            flipped(&d, cur)
+                        } else {
+                            inspector::value_from_x(&d, track, pos.x)
+                        };
                         self.apply_param(graph, node, index, v, false)
                     },
                     None => vec![CanvasEvent::Refused("no such parameter".to_string())],
@@ -1252,13 +1326,20 @@ impl CanvasState {
     }
 
     /// Insert a node at `world` (snapped to the grid; cascading off an occupied spot so a second
-    /// spawn never lands exactly under the first).
+    /// spawn never lands exactly under the first). The permanent Main Out is refused: the user
+    /// never creates it — it is always already on the canvas (operator ruling 2026-10-01).
     fn spawn_node(
         &mut self,
         graph: &mut Graph,
         spec: crate::canvas::model::NodeSpec,
         world: Vec2,
     ) -> Vec<CanvasEvent> {
+        if spec.module_id == crate::canvas::OUT_MAIN_ID {
+            return vec![CanvasEvent::Refused(
+                "Main Out is permanent — it is already on the canvas and cannot be added again"
+                    .to_string(),
+            )];
+        }
         let grid = LAYOUT_CANVAS_SNAP as f32;
         let mut pos = snap(world, grid);
         let mut guard = 0usize;
@@ -1305,12 +1386,31 @@ impl CanvasState {
         ))])
     }
 
-    /// Tap on an inspector row: select the node and set the parameter at the tapped x. Returns
-    /// `None` when the tap is not on the inspector (the caller continues to the canvas).
+    /// Tap on an inspector row: select the node and set the parameter at the tapped x — or FLIP
+    /// it when the row is a binary toggle (operator ruling 2026-10-01: binary settings are
+    /// toggle buttons, never sliders). Returns `None` when the tap is not on the inspector (the
+    /// caller continues to the canvas).
     fn activate_inspector(&mut self, graph: &mut Graph, pos: Vec2) -> Option<Vec<CanvasEvent>> {
-        let (node_id, index, editable, track) = self.inspector.as_ref().and_then(|il| {
-            il.row_at(pos)
-                .map(|i| (il.node, il.rows[i].index, il.rows[i].editable, il.rows[i].track))
+        // A step button inside the pattern row wins over the row's x-mapping (r3).
+        if let Some((node_id, step)) = self.inspector.as_ref().and_then(|il| {
+            il.row_at(pos).and_then(|i| {
+                il.rows[i].steps.iter().position(|c| c.contains(pos)).map(|k| (il.node, k))
+            })
+        }) {
+            self.selection.clear();
+            self.selection.nodes.insert(node_id);
+            return Some(self.flip_step(graph, node_id, step));
+        }
+        let (node_id, index, editable, toggle, track) = self.inspector.as_ref().and_then(|il| {
+            il.row_at(pos).map(|i| {
+                (
+                    il.node,
+                    il.rows[i].index,
+                    il.rows[i].editable,
+                    il.rows[i].toggle,
+                    il.rows[i].track,
+                )
+            })
         })?;
         let desc = graph.node(node_id)?.spec.params.get(index)?.clone();
         self.selection.clear();
@@ -1321,7 +1421,12 @@ impl CanvasState {
                 desc.name, desc.kind
             ))]);
         }
-        let v = inspector::value_from_x(&desc, track, pos.x);
+        let v = if toggle {
+            let cur = graph.node(node_id).and_then(|n| n.param_value(index)).unwrap_or(0.0);
+            flipped(&desc, cur)
+        } else {
+            inspector::value_from_x(&desc, track, pos.x)
+        };
         Some(self.apply_param(graph, node_id, index, v, false))
     }
 
@@ -1374,6 +1479,24 @@ impl CanvasState {
         vec![CanvasEvent::Applied(text)]
     }
 
+    /// Toggle one step button of `mod/seq`'s pattern (operator ruling 2026-10-01 r3): the
+    /// mask param's bit `step` flips, through the same op door as every param edit — one
+    /// undo step per flip, the live ring hears it like any edit.
+    fn flip_step(&mut self, graph: &mut Graph, node: NodeId, step: usize) -> Vec<CanvasEvent> {
+        let idx = match graph
+            .node(node)
+            .and_then(|n| n.spec.params.iter().position(|d| d.id == "pattern"))
+        {
+            Some(i) => i,
+            None => return vec![CanvasEvent::Refused("that node has no step pattern".to_string())],
+        };
+        let cur = graph.node(node).and_then(|n| n.param_value(idx)).unwrap_or(0.0);
+        let bit = step_mask_bit(step);
+        let masked = cur as i64 & bit as i64;
+        let next = if masked != 0 { (cur as i64) - bit as i64 } else { (cur as i64) | bit as i64 };
+        self.apply_param(graph, node, idx, next as f32, false)
+    }
+
     fn open_menu(&mut self, graph: &Graph, pos: Vec2, layout: &CanvasLayout) -> Vec<CanvasEvent> {
         // A long-press over an open browser closes it and opens the menu where you pressed —
         // the menu is the deeper modal (it can re-open the browser). An open rename sheet
@@ -1385,7 +1508,7 @@ impl CanvasState {
         }
         let lod = self.camera.lod();
         let target = match layout::hit_test(layout, pos, lod) {
-            Hit::Node(id) => {
+            Hit::Node(id) | Hit::Step(id, _) => {
                 self.selection.clear();
                 self.selection.nodes.insert(id);
                 MenuTarget::Node(id)
@@ -1511,6 +1634,13 @@ impl CanvasState {
         let Some(src) = graph.node(id).cloned() else {
             return vec![CanvasEvent::Refused("no such node".to_string())];
         };
+        // The permanent Main Out has no copy (operator ruling 2026-10-01): duplicating it
+        // would be creating it, which the user never does.
+        if src.spec.module_id == crate::canvas::OUT_MAIN_ID {
+            return vec![CanvasEvent::Refused(
+                "Main Out is permanent — it cannot be duplicated".to_string(),
+            )];
+        }
         let grid = LAYOUT_CANVAS_SNAP as f32;
         let pos = snap(Vec2::new(src.pos.x + grid * 3.0, src.pos.y + grid * 3.0), grid);
         let op = graph.op_add_node(src.spec.clone(), pos);
@@ -1565,20 +1695,73 @@ impl CanvasState {
     }
 
     fn delete_node(&mut self, graph: &mut Graph, id: NodeId) -> Vec<CanvasEvent> {
+        self.remove_node_spliced(graph, id)
+    }
+
+    /// Remove one node AND KEEP THE CHAIN CONNECTED (operator ruling 2026-10-01): a deleted
+    /// module used to leave its source dangling and its destinations silent. Now the wires
+    /// that fed the node's inputs are SPLICED onto the wires its outputs fed — paired in port
+    /// order (first input's source to first output's destination, and so on), each splice run
+    /// through the same connection verdict a hand-drawn wire gets (`connect::resolve`: type,
+    /// range, cycle, single-input replacement), so an incompatible pair is skipped, not
+    /// forced. The removal and every accepted splice ride ONE [`Op::Batch`] into history: one
+    /// undo restores the node, its old wires, and removes the splices — the deletion was one
+    /// action, so it undoes as one. Protections speak first: the permanent Main Out and locked
+    /// nodes refuse in words and stay.
+    fn remove_node_spliced(&mut self, graph: &mut Graph, id: NodeId) -> Vec<CanvasEvent> {
+        // The permanent node (operator ruling 2026-10-01): Main Out is where the listener
+        // lives — the user never creates it and never deletes it. The refusal is a sentence
+        // with the reason, like every other voice.
+        if graph.node(id).is_some_and(|n| n.spec.module_id == crate::canvas::OUT_MAIN_ID) {
+            return vec![CanvasEvent::Refused(
+                "Main Out is permanent — it is the listener's output and cannot be deleted"
+                    .to_string(),
+            )];
+        }
         let locked = graph.node(id).map(|n| n.flags.locked).unwrap_or(false);
         if locked {
             return vec![CanvasEvent::Refused(
                 "node is locked — unlock it from the long-press menu first".to_string(),
             )];
         }
-        match graph.op_remove_node(id) {
-            Some(op) => {
-                self.commit(op);
-                self.selection.clear();
-                vec![CanvasEvent::Applied("delete node".to_string())]
-            },
-            None => vec![CanvasEvent::Refused("no such node".to_string())],
+        // The splice pairs, read BEFORE the removal: inputs by input index, outputs by output
+        // index, paired positionally.
+        let mut ins: Vec<(PortRef, PortRef)> = graph
+            .wires()
+            .iter()
+            .filter(|w| w.param.is_none() && w.to.node == id)
+            .map(|w| (w.to, w.from))
+            .collect();
+        ins.sort_by_key(|(dst, _)| dst.index);
+        let mut outs: Vec<PortRef> = graph
+            .wires()
+            .iter()
+            .filter(|w| w.param.is_none() && w.from.node == id)
+            .map(|w| w.to)
+            .collect();
+        outs.sort_by_key(|d| d.index);
+        let pairs: Vec<(PortRef, PortRef)> = ins.iter().map(|(_, src)| *src).zip(outs).collect();
+        let Some(rm) = graph.op_remove_node(id) else {
+            return vec![CanvasEvent::Refused("no such node".to_string())];
+        };
+        let mut ops = vec![rm];
+        let ctx = ConnectContext::no_adapters(Phase::Zero);
+        let mut spliced = 0usize;
+        for (src, dst) in pairs {
+            if let ConnectOutcome::Connected { op, .. } = connect::resolve(graph, src, dst, &ctx) {
+                ops.push(op);
+                spliced += 1;
+            }
         }
+        self.commit(Op::Batch(ops));
+        self.selection.clear();
+        let mut ev = vec![CanvasEvent::Applied("delete node".to_string())];
+        if spliced > 0 {
+            ev.push(CanvasEvent::Note(format!(
+                "chain kept: {spliced} wire(s) spliced past the deleted node"
+            )));
+        }
+        ev
     }
 
     fn delete_wire(&mut self, graph: &mut Graph, id: WireId) -> Vec<CanvasEvent> {
@@ -1590,6 +1773,73 @@ impl CanvasState {
             },
             None => vec![CanvasEvent::Refused("no such wire".to_string())],
         }
+    }
+
+    /// The DELETE key's action (operator ruling 2026-10-01): remove the current selection —
+    /// wires first, then nodes — each through the same door (and the same history) the
+    /// long-press menu's DELETE rides. Protected nodes refuse in words and survive: a locked
+    /// node stays locked, and the permanent Main Out stays on the canvas even in a select-all
+    /// sweep. An empty selection is a refusal with the remedy, never a silence.
+    pub fn delete_selection(&mut self, graph: &mut Graph) -> Vec<CanvasEvent> {
+        if self.rename.is_some() {
+            return vec![CanvasEvent::Refused(
+                "the rename field has the keyboard — ENTER commits, ESCAPE cancels".to_string(),
+            )];
+        }
+        if self.browser.is_some() || self.menu.is_some() {
+            return vec![CanvasEvent::Refused(
+                "a sheet is open — close it first, then DELETE removes the selection".to_string(),
+            )];
+        }
+        if self.selection.is_empty() {
+            return vec![CanvasEvent::Refused(
+                "nothing selected — tap a node or a wire, then press DELETE".to_string(),
+            )];
+        }
+        let wires: Vec<WireId> = self.selection.wires.iter().copied().collect();
+        let nodes: Vec<NodeId> = self.selection.nodes.iter().copied().collect();
+        let mut ev = Vec::new();
+        let mut deleted = 0usize;
+        for w in wires {
+            match graph.op_remove_wire(w) {
+                Some(op) => {
+                    self.commit(op);
+                    deleted += 1;
+                },
+                None => ev.push(CanvasEvent::Refused("no such wire".to_string())),
+            }
+        }
+
+        for n in nodes {
+            // The same splicing door the menu's DELETE rides (chain stays connected), and the
+            // same protections: Main Out and locked nodes refuse in words and survive.
+            let before = graph.node_count();
+            let mut one = self.remove_node_spliced(graph, n);
+            if graph.node_count() == before {
+                // refused (permanent / locked / absent) — keep the refusal, not the count
+                ev.append(&mut one);
+            } else {
+                deleted += 1;
+                // keep only the splice note; the per-node "delete node" word would repeat
+                for e in one {
+                    if matches!(e, CanvasEvent::Note(_)) {
+                        ev.push(e);
+                    }
+                }
+            }
+        }
+        self.selection.clear();
+        if deleted > 0 {
+            ev.insert(
+                0,
+                CanvasEvent::Applied(format!(
+                    "deleted {deleted} {}",
+                    if deleted == 1 { "item" } else { "items" }
+                )),
+            );
+        }
+        ev.push(CanvasEvent::Selection(0));
+        ev
     }
 
     fn drag_start(
@@ -1642,15 +1892,46 @@ impl CanvasState {
         }
 
         // An inspector slider: the drag edits the parameter continuously (tap-to-set already
-        // happened via Activate when the recogniser decided it was a tap, not a drag).
-        if let Some((node_id, index, editable, track)) = self.inspector.as_ref().and_then(|il| {
-            il.row_at(pos)
-                .map(|i| (il.node, il.rows[i].index, il.rows[i].editable, il.rows[i].track))
+        // happened via Activate when the recogniser decided it was a tap, not a drag). A BINARY
+        // row is a toggle: the press flips it ONCE and there is nothing to drag (operator
+        // ruling 2026-10-01).
+        if let Some((node_id, step)) = self.inspector.as_ref().and_then(|il| {
+            il.row_at(pos).and_then(|i| {
+                il.rows[i].steps.iter().position(|c| c.contains(pos)).map(|k| (il.node, k))
+            })
         }) {
+            self.selection.clear();
+            self.selection.nodes.insert(node_id);
+            ev.extend(self.flip_step(graph, node_id, step));
+            return ev;
+        }
+        if let Some((node_id, index, editable, toggle, track)) =
+            self.inspector.as_ref().and_then(|il| {
+                il.row_at(pos).map(|i| {
+                    (
+                        il.node,
+                        il.rows[i].index,
+                        il.rows[i].editable,
+                        il.rows[i].toggle,
+                        il.rows[i].track,
+                    )
+                })
+            })
+        {
             if !editable {
                 ev.push(CanvasEvent::Refused(
                     "that parameter is not editable in v0 — see the inspector row".to_string(),
                 ));
+                return ev;
+            }
+            if toggle {
+                if let Some(n) = graph.node(node_id) {
+                    if let Some(d) = n.spec.params.get(index) {
+                        let cur = n.param_value(index).unwrap_or(0.0);
+                        let v = flipped(d, cur);
+                        ev.extend(self.apply_param(graph, node_id, index, v, false));
+                    }
+                }
                 return ev;
             }
             // Set at the grab x immediately (the finger may land off the knob; the value follows
@@ -1668,12 +1949,27 @@ impl CanvasState {
 
         let lod = self.camera.lod();
         match layout::hit_test(layout, pos, lod) {
+            Hit::Step(node, step) => {
+                // A step button pressed: flips once, no continuous drag (the toggle rule's
+                // sibling — a button is a decision, not a distance).
+                self.selection.clear();
+                self.selection.nodes.insert(node);
+                ev.extend(self.flip_step(graph, node, step));
+                return ev;
+            },
             Hit::Param(node, index, track) => {
                 // The card's slider, dragged: set at the grab x (no jump-on-move), then ride the
                 // shared Param interaction — one undo step per gesture, coalesced updates, the
-                // live ring traffic identical to the inspector's drag.
+                // live ring traffic identical to the inspector's drag. A BINARY row flips once
+                // and drags no further (the toggle rule).
                 if let Some(n) = graph.node(node) {
                     if let Some(d) = n.spec.params.get(index) {
+                        if inspector::is_binary(d) {
+                            let cur = n.param_value(index).unwrap_or(0.0);
+                            let v = flipped(d, cur);
+                            ev.extend(self.apply_param(graph, node, index, v, false));
+                            return ev;
+                        }
                         let v = inspector::value_from_x(d, track, pos.x);
                         ev.extend(self.apply_param(graph, node, index, v, false));
                     }
@@ -1688,6 +1984,7 @@ impl CanvasState {
                     from_dir: dir,
                     cursor_screen: pos,
                     hovered: Some(pref),
+                    hovered_param: None,
                 });
                 ev.push(CanvasEvent::Note("drawing a wire".to_string()));
             },
@@ -1771,9 +2068,19 @@ impl CanvasState {
                     Vec2::new(p.cursor_screen.x + delta.x, p.cursor_screen.y + delta.y);
                 // Magnet: capture a port under the cursor.
                 let lod = self.camera.lod();
-                p.hovered = match layout::hit_test(layout, p.cursor_screen, lod) {
-                    Hit::Port(pref, _) => Some(pref),
-                    _ => None,
+                let src_is_cv = p.from_dir == Direction::Out
+                    && graph
+                        .port(p.from)
+                        .is_some_and(|pt| pt.port_type == sparq_module_api::port::PortType::Cv);
+                p.hovered_param =
+                    if src_is_cv { layout::param_sink_at(layout, p.cursor_screen) } else { None };
+                p.hovered = if p.hovered_param.is_some() {
+                    None
+                } else {
+                    match layout::hit_test(layout, p.cursor_screen, lod) {
+                        Hit::Port(pref, _) => Some(pref),
+                        _ => None,
+                    }
                 };
             },
             Interaction::Repatch { cursor_screen, hovered, .. } => {
@@ -2020,6 +2327,17 @@ impl CanvasState {
         if cancelled {
             return vec![CanvasEvent::Note("wire cancelled".to_string())];
         }
+        // Control connection (operator ruling 2026-10-01 r3): dropping the drag on a
+        // parameter's sink dot modulates that float setting from this cv source.
+        if let Some((node, idx)) = layout::param_sink_at(layout, pos) {
+            let Direction::Out = p.from_dir else {
+                return vec![CanvasEvent::Refused(
+                    "a control wire starts at a cv OUTPUT — drag from the source to the setting"
+                        .to_string(),
+                )];
+            };
+            return self.connect_param(graph, p.from, node, idx);
+        }
         let lod = self.camera.lod();
         let target = match layout::hit_test(layout, pos, lod) {
             Hit::Port(pref, _) => pref,
@@ -2091,6 +2409,25 @@ impl CanvasState {
 /// Snap a world point to the grid.
 fn snap(v: Vec2, grid: f32) -> Vec2 {
     Vec2::new((v.x / grid).round() * grid, (v.y / grid).round() * grid)
+}
+
+/// The OTHER pole of a binary parameter (operator ruling 2026-10-01: binary settings are
+/// toggle buttons — a tap flips, it never maps x). The midpoint test matches the model's own
+/// bool snap ([`crate::canvas::model::Graph::op_set_param`]), so the flip and the clamp agree.
+/// The sequencer's pattern-mask bit for `step` (0..16) as a float mask delta — the one place
+/// the bit arithmetic lives, so the card, the inspector and the tests cannot drift apart.
+fn step_mask_bit(step: usize) -> f32 {
+    (1u32 << step.min(15)) as f32
+}
+
+fn flipped(desc: &crate::canvas::model::ParamDesc, current: f32) -> f32 {
+    let lo = desc.min as f32;
+    let hi = desc.max as f32;
+    if current >= (lo + hi) / 2.0 {
+        lo
+    } else {
+        hi
+    }
 }
 
 /// Whether two rects overlap (marquee selection).
@@ -2977,7 +3314,7 @@ mod tests {
         s.set_inspector(Some(il.clone()));
         let v = view();
         let layout = compute(&g, &s.camera, v);
-        let row = il.rows[0];
+        let row = il.rows[0].clone();
 
         // tap at 3/4 of the track → freq = 18 000 Hz, node selected, one history entry
         let tap = Vec2::new(row.track.min.x + row.track.width() * 0.75, row.track.center().y);
@@ -3594,5 +3931,187 @@ mod tests {
             &ctx(),
         );
         assert_eq!(s.response_marker(id), Some(at_start), "no axes, no move — never a guess");
+    }
+
+    // ---------------------------------------------------- DELETE key + the permanent Main Out
+
+    fn wire_id(op: &Op) -> WireId {
+        match op {
+            Op::AddWire(w) => w.id,
+            _ => unreachable!(),
+        }
+    }
+
+    fn out_main_spec() -> NodeSpec {
+        NodeSpec::new(
+            crate::canvas::OUT_MAIN_ID,
+            "Main Out",
+            vec![
+                audio("in", Direction::In, ChannelSet::Stereo),
+                audio("out", Direction::Out, ChannelSet::Stereo),
+            ],
+        )
+    }
+
+    #[test]
+    fn delete_removes_the_selection_and_an_empty_selection_refuses_in_words() {
+        let (mut g, aid, bid) = two_nodes();
+        let wid = wire_id(&g.op_add_wire(PortRef::new(aid, 0), PortRef::new(bid, 0)));
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        // nothing selected → a refusal with the remedy, never a silence
+        let ev = s.on_intent(&mut g, GestureIntent::Delete, &layout, v, &ctx());
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, CanvasEvent::Refused(r) if r.contains("nothing selected"))),
+            "{ev:?}"
+        );
+        assert_eq!(g.node_count(), 2);
+        // a selected wire → gone
+        s.selection.wires.insert(wid);
+        s.on_intent(&mut g, GestureIntent::Delete, &layout, v, &ctx());
+        assert!(g.wires().is_empty());
+        assert!(s.selection.is_empty(), "the selection clears with its content");
+        // a selected node → gone
+        s.selection.nodes.insert(aid);
+        let ev = s.on_intent(&mut g, GestureIntent::Delete, &layout, v, &ctx());
+        assert_eq!(g.node_count(), 1);
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Applied(t) if t.contains("deleted 1"))),
+            "{ev:?}"
+        );
+        // each delete rode the history: two undos restore the wire and the node
+        s.on_intent(&mut g, GestureIntent::Undo, &layout, v, &ctx());
+        s.on_intent(&mut g, GestureIntent::Undo, &layout, v, &ctx());
+        assert_eq!(g.node_count(), 2);
+        assert_eq!(g.wires().len(), 1);
+    }
+
+    #[test]
+    fn the_permanent_main_out_cannot_be_deleted_duplicated_or_spawned() {
+        // Operator ruling 2026-10-01: Main Out is not a module the user creates or deletes —
+        // every door refuses in words and the node survives all of them.
+        let mut g = Graph::new();
+        let m = nid(&g.op_add_node(out_main_spec(), Vec2::ZERO));
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        // DEL on a selected Main Out
+        s.selection.nodes.insert(m);
+        let ev = s.on_intent(&mut g, GestureIntent::Delete, &layout, v, &ctx());
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Refused(r) if r.contains("permanent"))),
+            "{ev:?}"
+        );
+        assert_eq!(g.node_count(), 1);
+        // the long-press menu's DELETE
+        let ev = s.run_menu_action(&mut g, MenuTarget::Node(m), MenuAction::Delete, Vec2::ZERO, v);
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Refused(r) if r.contains("permanent"))),
+            "{ev:?}"
+        );
+        // DUPLICATE
+        let ev = s.duplicate(&mut g, m);
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Refused(r) if r.contains("permanent"))),
+            "{ev:?}"
+        );
+        // a spawn through the catalogue door
+        s.set_catalog(vec![BrowserItem::new(out_main_spec())]);
+        let ev = s.spawn_module(&mut g, crate::canvas::OUT_MAIN_ID, Vec2::new(400.0, 0.0));
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Refused(r) if r.contains("permanent"))),
+            "{ev:?}"
+        );
+        assert_eq!(g.node_count(), 1, "every door refused; the one Main Out stands");
+    }
+
+    #[test]
+    fn a_locked_node_survives_a_select_all_delete_sweep() {
+        let (mut g, aid, bid) = two_nodes();
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let mut flags = g.node(aid).unwrap().flags;
+        flags.locked = true;
+        let _ = g.op_set_flags(aid, flags);
+        s.selection.nodes.insert(aid);
+        s.selection.nodes.insert(bid);
+        let ev = s.on_intent(&mut g, GestureIntent::Delete, &layout, v, &ctx());
+        assert_eq!(g.node_count(), 1, "the unlocked node went");
+        assert!(g.node(aid).is_some(), "the locked node stands");
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Refused(r) if r.contains("locked"))),
+            "and the refusal says why: {ev:?}"
+        );
+    }
+
+    #[test]
+    fn deleting_a_middle_module_keeps_the_chain_connected() {
+        // Operator ruling 2026-10-01: deleting a module splices its feed onto its feedees —
+        // the chain stays connected, and ONE undo restores the world before the delete.
+        let (mut g, aid, bid) = two_nodes();
+        let cid = nid(&g.op_add_node(gain(), Vec2::new(800.0, 0.0)));
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        s.connect_ports(&mut g, PortRef::new(aid, 0), PortRef::new(bid, 0), &ctx());
+        s.connect_ports(&mut g, PortRef::new(bid, 1), PortRef::new(cid, 0), &ctx());
+        assert_eq!(g.wires().len(), 2);
+        s.selection.nodes.insert(bid);
+        let ev = s.on_intent(&mut g, GestureIntent::Delete, &layout, v, &ctx());
+        assert_eq!(g.node_count(), 2);
+        assert_eq!(g.wires().len(), 1, "the chain is spliced past the deleted node");
+        assert_eq!(g.wires()[0].from, PortRef::new(aid, 0));
+        assert_eq!(g.wires()[0].to, PortRef::new(cid, 0));
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Note(n) if n.contains("spliced"))),
+            "and the shell says so: {ev:?}"
+        );
+        // one undo restores the node AND both original wires AND removes the splice
+        s.on_intent(&mut g, GestureIntent::Undo, &layout, v, &ctx());
+        assert_eq!(g.node_count(), 3);
+        assert_eq!(g.wires().len(), 2);
+    }
+
+    #[test]
+    fn a_binary_setting_flips_on_tap_and_never_maps_x() {
+        // Operator ruling 2026-10-01: Mute-shaped params are toggle buttons — the tap flips,
+        // wherever on the row it lands, and a drag flips exactly once (no continuous edit).
+        let mute = crate::canvas::model::ParamDesc {
+            id: "mute".into(),
+            name: "Mute".into(),
+            kind: sparq_module_api::manifest::ParamKind::Int,
+            unit: Some("x".into()),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+        };
+        let spec = NodeSpec::new("sparq/util/mutey", "Mutey", vec![]).with_params(vec![mute]);
+        let mut g = Graph::new();
+        let id = nid(&g.op_add_node(spec, Vec2::ZERO));
+        let mut s = CanvasState::new();
+        let panel = Rect::from_min_size(Vec2::new(800.0, 100.0), Vec2::new(400.0, 600.0));
+        let il = inspector::compute(g.node(id).unwrap(), panel);
+        assert!(il.rows[0].toggle, "the row is flagged a toggle");
+        s.set_inspector(Some(il.clone()));
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let row = il.rows[0].clone();
+        // tap at the far LEFT of the track — x is irrelevant: OFF flips ON
+        let left = Vec2::new(row.track.min.x + 1.0, row.track.center().y);
+        s.on_intent(&mut g, GestureIntent::Activate { pos: left }, &layout, v, &ctx());
+        assert_eq!(g.node(id).unwrap().param_value(0).unwrap(), 1.0);
+        // tap at the far RIGHT — ON flips OFF
+        let right = Vec2::new(row.track.max.x - 1.0, row.track.center().y);
+        s.on_intent(&mut g, GestureIntent::Activate { pos: right }, &layout, v, &ctx());
+        assert_eq!(g.node(id).unwrap().param_value(0).unwrap(), 0.0);
+        // a drag flips ONCE and starts no continuous interaction
+        let before = s.history.undo_len();
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: left }, &layout, v, &ctx());
+        assert!(matches!(s.interaction, Interaction::Idle), "{:?}", s.interaction);
+        assert_eq!(g.node(id).unwrap().param_value(0).unwrap(), 1.0);
+        assert_eq!(s.history.undo_len(), before + 1, "one flip = one undo step");
     }
 }

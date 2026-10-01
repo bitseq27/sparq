@@ -265,6 +265,10 @@ pub fn run_audit(_opts: &UiOptions) -> i32 {
     println!("mouse + meter smoke (WO-012 inc 4: right-click, wheel, hover silence, master bars):");
     run_mouse_and_meter_smokes(&mut failures);
 
+    // ------------------------------------------------------------ round-3 smokes
+    println!("round-3 smoke (r3: the junction bus collapses; control wires modulate):");
+    run_r3_smokes(&mut failures);
+
     // ------------------------------------------------------------ response plot + inset wells
     println!(
         "response + inset smoke (WO-012 inc 5: wells on every audio node, the svf curve, the probe marker):"
@@ -531,20 +535,29 @@ fn run_gesture_smoke(failures: &mut Vec<String>) {
         _ => failures.push("could not locate gain out / gain2 in".to_string()),
     }
 
-    // 8. two-finger spread → the canvas camera zooms in.
-    let zoom_before = shell.canvas.camera.zoom;
+    // 8. two-finger pinch zooms out and spread zooms in — under the 100 % ceiling (operator
+    //    ruling 2026-10-01 r3): from home the spread has nowhere to go, so the smoke pinches
+    //    first and watches the spread climb back to the ceiling, not past it.
+    let zoom_home = shell.canvas.camera.zoom;
     now += 400;
     frame!([
-        finger(8, canvas_c.x - 60.0, canvas_c.y + 300.0, PointerPhase::Down, now),
-        finger(9, canvas_c.x + 60.0, canvas_c.y + 300.0, PointerPhase::Down, now),
+        finger(8, canvas_c.x - 150.0, canvas_c.y + 300.0, PointerPhase::Down, now),
+        finger(9, canvas_c.x + 150.0, canvas_c.y + 300.0, PointerPhase::Down, now),
     ]);
+    now += 16;
+    frame!([finger(9, canvas_c.x + 60.0, canvas_c.y + 300.0, PointerPhase::Moved, now)]);
+    now += 16;
+    frame!([finger(8, canvas_c.x - 60.0, canvas_c.y + 300.0, PointerPhase::Moved, now)]);
+    let zoom_pinched = shell.canvas.camera.zoom;
     now += 16;
     frame!([finger(9, canvas_c.x + 150.0, canvas_c.y + 300.0, PointerPhase::Moved, now)]);
     now += 16;
     frame!([finger(8, canvas_c.x - 150.0, canvas_c.y + 300.0, PointerPhase::Moved, now)]);
     check(
-        "two-finger spread zooms the canvas camera in",
-        shell.canvas.camera.zoom > zoom_before,
+        "two-finger pinch zooms out, spread zooms in, and 100 % is the ceiling",
+        zoom_pinched < zoom_home - 1e-3
+            && shell.canvas.camera.zoom > zoom_pinched + 1e-3
+            && shell.canvas.camera.zoom <= zoom_home + 1e-4,
         failures,
     );
     now += 16;
@@ -744,8 +757,9 @@ fn run_gesture_smoke(failures: &mut Vec<String>) {
             )
         })
     });
+    let slider_track = shell.canvas.inspector().and_then(|il| il.rows.first().map(|r| r.track));
     let mut param_ok = false;
-    if let Some((x0, y, x1)) = slider {
+    if let (Some((x0, y, x1)), Some(track)) = (slider, slider_track) {
         let freq0 = shell.graph.node(n0b_id).and_then(|n| n.param_value(0));
         now += 400;
         frame!([finger(25, x0, y, PointerPhase::Down, now)]);
@@ -756,7 +770,18 @@ fn run_gesture_smoke(failures: &mut Vec<String>) {
         now += 16;
         frame!([finger(25, x1, y, PointerPhase::Up, now)]);
         let freq1 = shell.graph.node(n0b_id).and_then(|n| n.param_value(0));
-        let dragged = freq1.is_some_and(|v| (v - 18_000.0).abs() < 600.0);
+        // The expectation is the mapping's OWN answer at the release x (operator ruling
+        // 2026-10-01: frequency rides the log map, 0.1 Hz – 10 kHz) — the smoke tests that
+        // the param FOLLOWS THE FINGER through the one mapping, not the mapping's shape.
+        let expected = shell
+            .graph
+            .node(n0b_id)
+            .and_then(|n| n.spec.params.first().cloned())
+            .map(|d| sparq_ui::canvas::inspector::value_from_x(&d, track, x1));
+        let dragged = match (freq1, expected) {
+            (Some(v), Some(e)) => (v - e).abs() <= (e * 0.02).max(1.0),
+            _ => false,
+        };
         let logged = shell.log().iter().any(|l| l.contains("Frequency ="));
         // undo: three-finger tap → the drag's single history entry reverses
         now += 400;
@@ -1667,7 +1692,7 @@ pub fn run_svg(opts: &UiOptions) -> i32 {
             ("sparq/flt/svf", 800.0, 400.0),
             // A BARE required-input node on purpose: the review sheet shows the light-red
             // unfinished flag the operator's 2026-09-30 ruling introduced (flag, not refuse).
-            ("sparq/util/delay", 1_040.0, 640.0),
+            ("sparq/util/delay", 1_360.0, 640.0),
         ] {
             if let Some(spec) = shell.modules.get(id).map(|r| NodeSpec::from_manifest(r.manifest()))
             {
@@ -1701,6 +1726,87 @@ pub fn run_svg(opts: &UiOptions) -> i32 {
             }
             shell.canvas.selection.clear();
             shell.canvas.selection.nodes.insert(id);
+        }
+        // The scope rig joins the review sheet (operator ruling 2026-10-01 made the scope
+        // screen bigger, with a graticule and measurements — the sheet is where a reviewer
+        // sees it): tap reads the svf's output, the scope reads the tap's waveform — "the
+        // wire is the binding, the ring is the payload".
+        {
+            use sparq_module_api::port::Phase;
+            use sparq_ui::canvas::connect::ConnectContext;
+            use sparq_ui::canvas::model::{NodeSpec, Op, PortRef};
+            let nid = |op: Op| match op {
+                Op::AddNode(n) => n.id,
+                _ => u32::MAX,
+            };
+            let cctx = ConnectContext::no_adapters(Phase::Zero);
+            let mut tap_id = None;
+            let mut scope_id = None;
+            for (id, x, y) in [
+                ("sparq/ana/tap", 1_080.0f32, 160.0f32),
+                ("sparq/dsp/scope", 1_080.0, 320.0),
+                ("sparq/mod/clk", 1_360.0, 160.0),
+                ("sparq/mod/seq", 1_360.0, 400.0),
+            ] {
+                if let Some(spec) =
+                    shell.modules.get(id).map(|r| NodeSpec::from_manifest(r.manifest()))
+                {
+                    let spawned =
+                        nid(shell.graph.op_add_node(spec, sparq_ui::geom::Vec2::new(x, y)));
+                    if id == "sparq/ana/tap" {
+                        tap_id = Some(spawned);
+                    } else if id == "sparq/dsp/scope" {
+                        scope_id = Some(spawned);
+                    }
+                }
+            }
+            if let (Some(svf), Some(tap)) = (review_svf, tap_id) {
+                // svf.out (index 1) → tap.in (index 0)
+                shell.canvas.connect_ports(
+                    &mut shell.graph,
+                    PortRef::new(svf, 1),
+                    PortRef::new(tap, 0),
+                    &cctx,
+                );
+            }
+            if let (Some(tap), Some(scope)) = (tap_id, scope_id) {
+                // tap.wave (index 1) → scope.x (index 0)
+                shell.canvas.connect_ports(
+                    &mut shell.graph,
+                    PortRef::new(tap, 1),
+                    PortRef::new(scope, 0),
+                    &cctx,
+                );
+            }
+        }
+        // The clock family joins the sheet too (operator round 2): the clock's 16ths drive
+        // the sequencer's ring — the event→event wire, visible and live.
+        {
+            use sparq_module_api::port::Phase;
+            use sparq_ui::canvas::connect::ConnectContext;
+            use sparq_ui::canvas::model::PortRef;
+            let cctx = ConnectContext::no_adapters(Phase::Zero);
+            let clk = shell
+                .graph
+                .nodes()
+                .iter()
+                .find(|n| n.spec.module_id == "sparq/mod/clk")
+                .map(|n| n.id);
+            let seq = shell
+                .graph
+                .nodes()
+                .iter()
+                .find(|n| n.spec.module_id == "sparq/mod/seq")
+                .map(|n| n.id);
+            if let (Some(clk), Some(seq)) = (clk, seq) {
+                // clk.16ths (port index 2) → seq.clk (port 0)
+                shell.canvas.connect_ports(
+                    &mut shell.graph,
+                    PortRef::new(clk, 2),
+                    PortRef::new(seq, 0),
+                    &cctx,
+                );
+            }
         }
         shell.start_live_with(crate::ui::live::LiveOptions {
             backend: Some(sparq_kernel::hal::BackendKind::Null),
@@ -1929,6 +2035,147 @@ fn frame_collect(
         }
     }
     (texts, paths, fills)
+}
+
+/// Round-3 smokes: the junction bus collapses into direct kernel edges (the copy lights like
+/// the original, the render runs), and a control wire from a cv source onto a float parameter
+/// is audible in the rendered block (the modulation is not decoration).
+fn run_r3_smokes(failures: &mut Vec<String>) {
+    use sparq_module_api::port::Phase;
+    use sparq_ui::canvas::connect::ConnectContext;
+    use sparq_ui::canvas::model::PortRef;
+
+    let ctx = egui::Context::default();
+    adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
+    let (w, h) = (1920.0_f32, 1080.0_f32);
+    let mut shell = ShellUi::new();
+    let mut t = 0.0_f64;
+    let now = 0_u64;
+    macro_rules! frame {
+        ($pts:expr) => {{
+            t += 1.0 / 60.0;
+            step(&mut shell, &ctx, w, h, t, now, &$pts)
+        }};
+    }
+    frame!([]);
+
+    // 51. sine → mult dot 0; mult dots 1 and 2 → two fresh gains: the bus collapses, the
+    //     render runs, and every copy lights exactly like the source. (Fresh gains, because
+    //     the demo's gain and rms inputs are single and already fed — a bus copy into an
+    //     occupied single input is the fan-in replacement rule's business, not the bus's.)
+    let cctx = ConnectContext::no_adapters(Phase::Zero);
+    let mut bus_ok = false;
+    let sine =
+        shell.graph.nodes().iter().find(|n| n.spec.module_id == "sparq/syn/sine").map(|n| n.id);
+    if let Some(sine) = sine {
+        let modules = shell.modules.clone();
+        let spawn = |shell: &mut ShellUi,
+                     id: &str,
+                     x: f32,
+                     y: f32|
+         -> Option<sparq_ui::canvas::model::NodeId> {
+            let spec = modules
+                .get(id)
+                .map(|r| sparq_ui::canvas::model::NodeSpec::from_manifest(r.manifest()))?;
+            match shell.graph.op_add_node(spec, sparq_ui::geom::Vec2::new(x, y)) {
+                sparq_ui::canvas::model::Op::AddNode(n) => Some(n.id),
+                _ => None,
+            }
+        };
+        let mult = spawn(&mut shell, "sparq/util/mult", 400.0, 400.0);
+        let g2 = spawn(&mut shell, "sparq/util/gain", 700.0, 300.0);
+        let g3 = spawn(&mut shell, "sparq/util/gain", 700.0, 500.0);
+        if let (Some(mid), Some(a), Some(b)) = (mult, g2, g3) {
+            let w1 = shell.canvas.connect_ports(
+                &mut shell.graph,
+                PortRef::new(sine, 0),
+                PortRef::new(mid, 0),
+                &cctx,
+            );
+            let w2 = shell.canvas.connect_ports(
+                &mut shell.graph,
+                PortRef::new(mid, 1),
+                PortRef::new(a, 0),
+                &cctx,
+            );
+            let w3 = shell.canvas.connect_ports(
+                &mut shell.graph,
+                PortRef::new(mid, 2),
+                PortRef::new(b, 0),
+                &cctx,
+            );
+            let wired = [&w1, &w2, &w3].iter().all(|evs| {
+                evs.iter().any(|e| matches!(e, sparq_ui::canvas::interact::CanvasEvent::Applied(_)))
+            });
+            let master = shell.canvas.resolve_master(&shell.graph).unwrap_or(a);
+            let levels = crate::bridge::node_levels(&shell.graph, master, &shell.modules).ok();
+            bus_ok = wired
+                && levels.as_ref().is_some_and(|lv| {
+                    let src = lv.get(sine);
+                    src > 0.0
+                        && (lv.get(mid) - src).abs() < 1e-6
+                        && lv.get(a) > 0.0
+                        && lv.get(b) > 0.0
+                });
+        }
+    }
+    check(
+        "the junction bus collapses: one source, copied to two destinations, every copy lights like the original",
+        bus_ok,
+        failures,
+    );
+
+    // 52. A control wire is audible: lfo cv out → gain's Level parameter; the rendered peak
+    //     moves off the plain knob value (the executor's param-mod plan, one block of latency).
+    let mut mod_ok = false;
+    let mut lfo =
+        shell.graph.nodes().iter().find(|n| n.spec.module_id == "sparq/mod/lfo").map(|n| n.id);
+    if lfo.is_none() {
+        let modules = shell.modules.clone();
+        if let Some(spec) = modules
+            .get("sparq/mod/lfo")
+            .map(|r| sparq_ui::canvas::model::NodeSpec::from_manifest(r.manifest()))
+        {
+            if let sparq_ui::canvas::model::Op::AddNode(n) =
+                shell.graph.op_add_node(spec, sparq_ui::geom::Vec2::new(200.0, 700.0))
+            {
+                lfo = Some(n.id);
+            }
+        }
+    }
+    let gain =
+        shell.graph.nodes().iter().find(|n| n.spec.module_id == "sparq/util/gain").map(|n| n.id);
+    if let (Some(lfo), Some(gain)) = (lfo, gain) {
+        // the lfo's cv OUT port, found by inspection (port 0 is its sync input)
+        let cv_out = shell.graph.node(lfo).and_then(|n| {
+            n.spec
+                .ports
+                .iter()
+                .enumerate()
+                .find(|(_, p)| {
+                    p.direction == sparq_module_api::port::Direction::Out
+                        && p.port_type == sparq_module_api::port::PortType::Cv
+                })
+                .map(|(i, _)| i)
+        });
+        let gidx = shell.graph.node(gain).and_then(|n| {
+            n.spec
+                .params
+                .iter()
+                .position(|d| d.kind == sparq_module_api::manifest::ParamKind::Float)
+        });
+        if let (Some(co), Some(gi)) = (cv_out, gidx) {
+            let evs = shell.canvas.connect_param(&mut shell.graph, PortRef::new(lfo, co), gain, gi);
+            mod_ok = evs
+                .iter()
+                .any(|e| matches!(e, sparq_ui::canvas::interact::CanvasEvent::Applied(_)));
+        }
+    }
+    check(
+        "a cv source onto a parameter's sink becomes a control wire (applied; the audible half lives in tests/r3_controls.rs)",
+        mod_ok,
+        failures,
+    );
 }
 
 /// WO-012 increment 5 smokes (convergence slice B): the meter wells go live on EVERY
@@ -2263,8 +2510,9 @@ fn run_response_smokes(failures: &mut Vec<String>) {
     );
 
     // 45. The NODE LIBRARY is a real door: the search narrows with the browser's own ranking,
-    //     the category cycle filters, the wheel scrolls the card list, and the count word says
-    //     what the filter left — the sidebar cannot offer what the registry lacks (#58).
+    //     the GROUP SWITCHES filter (operator ruling 2026-10-01: one toggle per module group),
+    //     the wheel scrolls the card list where it overflows, and the count word says what the
+    //     filter left — the sidebar cannot offer what the registry lacks (#58).
     use sparq_ui::canvas::entry::TextEntry;
     shell.library_entry = TextEntry::new("sine");
     let (texts45, _, _) = {
@@ -2279,41 +2527,61 @@ fn run_response_smokes(failures: &mut Vec<String>) {
     shell.library_entry = TextEntry::new("");
     frame!([]);
     let all = shell.library_items().len() == shell.canvas.catalog_len();
-    let mut cycled = false;
-    if let Some(cat) = shell.rect_of("library/cat") {
-        let c = cat.center();
+    // The group switches: flipping one OFF hides exactly that group; flipping it back ON
+    // restores the full list. The first switch addresses the first category the registry
+    // contains — the vocabulary is derived, never hard-coded.
+    let mut toggled = false;
+    let first_group = shell.library_categories().first().cloned();
+    if let (Some(chip), Some(group)) = (shell.rect_of("library/group/0"), first_group) {
+        let c = chip.center();
         now += 400;
         frame!([finger(96, c.x, c.y, PointerPhase::Down, now)]);
         now += 80;
         frame!([finger(96, c.x, c.y, PointerPhase::Up, now)]);
-        cycled = shell.library_cat == 1
+        toggled = shell.library_groups_off.contains(&group)
             && shell.library_items().len() < shell.canvas.catalog_len()
             && shell.library_items().iter().all(|&i| {
-                shell.canvas.catalog()[i].spec.module_id.split('/').nth(1).unwrap_or("?")
-                    == shell.library_cat_word()
+                shell.canvas.catalog()[i].spec.module_id.split('/').nth(1).unwrap_or("?") != group
             });
         now += 400;
         frame!([finger(97, c.x, c.y, PointerPhase::Down, now)]);
         now += 80;
-        frame!([finger(97, c.x, c.y, PointerPhase::Up, now)]); // back to ALL
+        frame!([finger(97, c.x, c.y, PointerPhase::Up, now)]); // switch back ON
+        toggled = toggled
+            && shell.library_groups_off.is_empty()
+            && shell.library_items().len() == shell.canvas.catalog_len();
     }
-    shell.library_cat = 0; // back to ALL: a filtered two-card list has nothing to scroll
+    shell.library_groups_off.clear(); // belt: every group shown again
     shell.library_scroll = 0.0;
     frame!([]);
-    let scroll0 = shell.library_scroll;
-    if let Some(lib) = shell.last_layout.as_ref().and_then(|l| l.library) {
-        frame_x!(
-            [],
-            [GestureIntent::Pan {
+    // The scroll: at 1080p the COMPACT tiles (operator ruling 2026-10-01) all fit, so there is
+    // honestly nothing to scroll — the motion test runs at the tablet viewport, where the list
+    // overflows and the pan must move it.
+    let ctx2 = egui::Context::default();
+    adapter::apply_style(&ctx2, ThemeChoice::PhosphorDark);
+    let mut shell2 = ShellUi::new();
+    let (w2, h2) = (1024.0_f32, 700.0_f32);
+    step(&mut shell2, &ctx2, w2, h2, 0.0, 0, &[]);
+    let scroll0 = shell2.library_scroll;
+    if let Some(lib) = shell2.last_layout.as_ref().and_then(|l| l.library) {
+        step_x(
+            &mut shell2,
+            &ctx2,
+            w2,
+            h2,
+            1.0 / 60.0,
+            16,
+            &[],
+            &[GestureIntent::Pan {
                 delta: SpVec2::new(0.0, -200.0),
                 center: SpVec2::new(lib.center().x, lib.center().y),
-            }]
+            }],
         );
     }
-    let scrolled = shell.library_scroll > scroll0 + 1.0;
+    let scrolled = shell2.library_scroll > scroll0 + 1.0;
     check(
-        "the NODE LIBRARY searches, filters, scrolls and counts in words (one ranking, two surfaces)",
-        searched && all && cycled && scrolled,
+        "the NODE LIBRARY searches, group-switches filter, the list scrolls where it overflows, and the count says it in words",
+        searched && all && toggled && scrolled,
         failures,
     );
     shell.library_scroll = 0.0;
@@ -2373,26 +2641,46 @@ fn run_response_smokes(failures: &mut Vec<String>) {
         failures,
     );
 
-    // 48. The zoom step buttons move the camera percent; RESET takes it home.
-    let z0 = shell.canvas.camera.zoom;
-    if let Some(b) = shell.rect_of("toolbar/zoom-in") {
-        let c = b.center();
-        now += 400;
-        frame!([finger(99, c.x, c.y, PointerPhase::Down, now)]);
-        now += 80;
-        frame!([finger(99, c.x, c.y, PointerPhase::Up, now)]);
-    }
-    let zin = shell.canvas.camera.zoom > z0 + 1e-3;
-    if let Some(b) = shell.rect_of("toolbar/reset") {
-        let c = b.center();
-        now += 400;
-        frame!([finger(100, c.x, c.y, PointerPhase::Down, now)]);
-        now += 80;
-        frame!([finger(100, c.x, c.y, PointerPhase::Up, now)]);
-    }
+    // 48. The zoom step buttons move the camera percent; RESET takes it home; and the
+    //     ceiling is 100 % (operator ruling 2026-10-01 r3) — at home, zoom-in changes nothing.
+    let tap_btn = |shell: &mut ShellUi, id: &str, now: &mut u64, fid: u64| {
+        if let Some(b) = shell.rect_of(id) {
+            let c = b.center();
+            *now += 400;
+            let _ = step(
+                shell,
+                &ctx,
+                w,
+                h,
+                0.0,
+                *now,
+                &[finger(fid, c.x, c.y, PointerPhase::Down, *now)],
+            );
+            *now += 80;
+            let _ = step(
+                shell,
+                &ctx,
+                w,
+                h,
+                0.0,
+                *now,
+                &[finger(fid, c.x, c.y, PointerPhase::Up, *now)],
+            );
+        }
+    };
+    let z_home = shell.canvas.camera.zoom;
+    tap_btn(&mut shell, "toolbar/zoom-in", &mut now, 99);
+    let ceiling = (shell.canvas.camera.zoom - z_home).abs() < 1e-4 && z_home <= 1.0 + 1e-4;
+    tap_btn(&mut shell, "toolbar/zoom-out", &mut now, 99);
+    let z_out = shell.canvas.camera.zoom;
+    let zout = z_out < z_home - 1e-3;
+    tap_btn(&mut shell, "toolbar/zoom-in", &mut now, 99);
+    let zin = shell.canvas.camera.zoom > z_out + 1e-3;
+    tap_btn(&mut shell, "toolbar/reset", &mut now, 100);
+    let home_again = (shell.canvas.camera.zoom - z_home).abs() < 1e-4;
     check(
-        "the toolbar zoom steps move the camera percent and RESET takes it home",
-        zin && (shell.canvas.camera.zoom - 1.0).abs() < 1e-6,
+        "the toolbar zoom steps move the camera percent, RESET takes it home, and 100 % is the ceiling",
+        zin && zout && ceiling && home_again,
         failures,
     );
 
@@ -2416,21 +2704,23 @@ fn run_response_smokes(failures: &mut Vec<String>) {
         failures,
     );
 
-    // 50. The right-edge master strip reads the ring: empty wells at rest, hot fills after
-    //     PLAY + pump (OUT from the master's output port, IN from the port feeding it).
+    // 50. Main Out is the driver's window (operator ruling 2026-10-01): the right-edge IN/OUT
+    //     strip is GONE from the workspace, and the permanent out/main card says which driver
+    //     is under it — the at-rest words before PLAY, the negotiated truth (backend · device ·
+    //     rate · channels · block · format) while the session runs.
     let Some(canvas_r) = shell.last_layout.as_ref().map(|l| l.canvas) else {
-        failures.push("no canvas rect for the master-strip smoke".to_string());
+        failures.push("no canvas rect for the main-out smoke".to_string());
         return;
     };
     let strip = sparq_ui::geom::Rect::new(
         SpVec2::new(canvas_r.max.x - 40.0, canvas_r.min.y),
         SpVec2::new(canvas_r.max.x - 8.0, canvas_r.max.y),
     );
-    let (_, _, fills_rest) = {
+    let (texts_rest, _, fills_rest) = {
         t += 1.0 / 60.0;
         frame_collect(&mut shell, &ctx, w, h, t, now)
     };
-    let in_strip = |fills: &Vec<(egui::Rect, egui::Color32)>| {
+    let strip_fills = |fills: &Vec<(egui::Rect, egui::Color32)>| {
         fills
             .iter()
             .filter(|(r, c)| {
@@ -2441,7 +2731,8 @@ fn run_response_smokes(failures: &mut Vec<String>) {
             })
             .count()
     };
-    let rest_empty_strip = in_strip(&fills_rest) == 0;
+    let rest_ok =
+        texts_rest.iter().any(|s| s.contains("NO SESSION")) && strip_fills(&fills_rest) == 0;
     shell.start_live_with(LiveOptions {
         backend: Some(BackendKind::Null),
         paced: false,
@@ -2450,14 +2741,23 @@ fn run_response_smokes(failures: &mut Vec<String>) {
     if let Some(ss) = shell.live.as_mut() {
         let _ = ss.pump_manual(8);
     }
-    let (_, _, fills_hot) = {
+    let driver = shell.live.as_ref().map(|ss| ss.driver_lines());
+    let (texts_hot, _, _) = {
         t += 1.0 / 60.0;
         frame_collect(&mut shell, &ctx, w, h, t, now)
     };
-    let hot = in_strip(&fills_hot) >= 2;
+    let live_ok = driver.as_ref().is_some_and(|lines| {
+        let head: String = lines[0].chars().take(12).collect();
+        texts_hot.iter().any(|s| s == &lines[1])
+            && texts_hot.iter().any(|s| s.starts_with(&head))
+            && lines[1].contains("kHz")
+            && lines[1].contains("ch")
+            && lines[1].contains("fr")
+            && lines[1].contains("f32")
+    });
     check(
-        "the right-edge master strip reads the ring (empty at rest, hot IN and OUT while playing)",
-        rest_empty_strip && hot,
+        "the right-edge IN/OUT strip is gone; the Main Out card reads the driver at rest and the negotiated truth while playing",
+        rest_ok && live_ok,
         failures,
     );
     if let Some(ss) = shell.live.take() {

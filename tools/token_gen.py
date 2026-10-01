@@ -644,9 +644,24 @@ def validate(data: dict, luts: dict, cmap_tables: dict) -> dict:
         "detail": "phosphor.cb, bipolar.cb, categorical-6.cb present" if not miss else f"missing {miss}",
     }
 
-    # 7. no pure white anywhere in the token set
-    whites = [k for k, v in flatten(data).items() if isinstance(v, str) and v.upper() == "#FFFFFF"]
-    rep["no pure white"] = {"pass": not whites, "detail": f"offenders: {whites}" if whites else "clean"}
+    # 7. no pure white anywhere in the token set, EXCEPT the documented allowlist
+    #    (operator ruling 2026-10-01: state.selected reads white — the one exemption).
+    allow = set(c.get("forbidden", {}).get("pure_white_allowlist", []))
+    whites = [
+        k
+        for k, v in flatten(data).items()
+        if isinstance(v, str) and v.upper() == "#FFFFFF" and k not in allow
+    ]
+    unlisted = [k for k in allow if flatten(data).get(k, "").upper() != "#FFFFFF"]
+    rep["no pure white"] = {
+        "pass": not whites and not unlisted,
+        "detail": (
+            f"offenders: {whites}" if whites
+            else f"stale allowlist entries: {unlisted}" if unlisted
+            else f"clean (allowlisted: {sorted(allow)})" if allow
+            else "clean"
+        ),
+    }
 
     # 8. touch minimums
     tm = lay["touch"]

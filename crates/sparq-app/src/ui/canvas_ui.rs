@@ -35,7 +35,8 @@ use crate::ui::adapter::{c32, egui_rect, font_s, font_xs, sp_rect, Palette};
 const FLAG_TINT_ALPHA: f32 = 0.12;
 
 /// Paint the whole canvas for one frame. `view` is the canvas rect (screen px); `audit` collects
-/// the touch targets the layout audit measures.
+/// the touch targets the layout audit measures. `main_info` is the live session's driver truth
+/// for the permanent Main Out card's info band (operator ruling 2026-10-01) — `None` at rest.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     p: &Painter,
@@ -48,6 +49,7 @@ pub fn draw(
     traces: &ScopeTraces,
     meters: &LiveMeters,
     curves: &Curves,
+    main_info: Option<&[String; 2]>,
     audit: &mut Vec<InteractiveElement>,
 ) {
     draw_grid(p, pal, canvas, view);
@@ -62,7 +64,10 @@ pub fn draw(
     // build flags on the audio side — so the highlight is there at rest AND while playing,
     // and clears the frame the wire lands.
     let missing = graph.missing_required_inputs();
-    draw_nodes(p, pal, graph, canvas, layout, master_id, traces, meters, curves, &missing, audit);
+    draw_nodes(
+        p, pal, graph, canvas, layout, master_id, traces, meters, curves, &missing, main_info,
+        audit,
+    );
     draw_marquee(p, pal, canvas);
     draw_menu(p, pal, canvas, view, audit);
     draw_browser(p, pal, canvas, view, audit);
@@ -157,13 +162,91 @@ fn with_alpha(c: Color32, a: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (a.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
+/// A toggle switch for a BINARY setting (operator ruling 2026-10-01: binary settings are
+/// toggle buttons, never sliders — a slider that can only rest in two places is a switch
+/// wearing a slider's clothes). Pill body on the token space scale, round knob (the knob/port
+/// circle family), ON in the control accent, OFF an empty inset well — position AND fill AND
+/// the row's ON/OFF word all carry the state, so colour is never alone.
+pub fn draw_toggle(p: &Painter, pal: &Palette, right: Pos2, on: bool, col: Color32, z: f32) {
+    let h = LAYOUT_SPACE_3 as f32 * z;
+    let w = LAYOUT_SPACE_5 as f32 * z;
+    let body = egui::Rect::from_min_max(
+        egui::pos2(right.x - w, right.y - h / 2.0),
+        egui::pos2(right.x, right.y + h / 2.0),
+    );
+    let r = h / 2.0;
+    let kr = (r - LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5 * z);
+    if on {
+        p.rect_filled(body, r, col);
+        p.circle_filled(egui::pos2(body.max.x - r, right.y), kr, pal.ground_panel);
+    } else {
+        p.rect_filled(body, r, pal.ground_inset);
+        p.rect_stroke(
+            body,
+            r,
+            pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32 * z),
+            StrokeKind::Middle,
+        );
+        p.circle_filled(egui::pos2(body.min.x + r, right.y), kr, pal.text_disabled);
+    }
+}
+
+/// The button row of a MULTI-CHOICE setting (operator ruling 2026-10-01): one segment button
+/// per choice — the active one filled in the row's class colour with its number in the ground
+/// tint, the rest empty inset wells with their number dim. Multi-choice settings are buttons,
+/// never sliders: a slider over a menu is a menu pretending to be a scale. `band` is the rect
+/// the buttons occupy (already zoom-scaled by the caller); the digits ride the xs font at the
+/// caller's zoom so the widget shrinks with the card like every other content object.
+pub fn draw_choices(
+    p: &Painter,
+    pal: &Palette,
+    band: egui::Rect,
+    desc: &sparq_ui::canvas::model::ParamDesc,
+    value: f32,
+    col: Color32,
+    z: f32,
+) {
+    let n = sparq_ui::canvas::inspector::choice_count(desc);
+    let active = (value - desc.min as f32).round().clamp(0.0, n as f32 - 1.0) as usize;
+    let gap = (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5);
+    let w = (band.width() - gap * (n.saturating_sub(1)) as f32) / n.max(1) as f32;
+    let font = scaled_font(font_xs(), z);
+    for i in 0..n {
+        let x0 = band.min.x + i as f32 * (w + gap);
+        let r =
+            egui::Rect::from_min_max(egui::pos2(x0, band.min.y), egui::pos2(x0 + w, band.max.y));
+        let word = format!("{}", desc.min as i64 + i as i64);
+        if i == active {
+            p.rect_filled(r, LAYOUT_CORNER_MICRO as u8, col);
+            p.text(r.center(), Align2::CENTER_CENTER, word, font.clone(), pal.ground_panel);
+        } else {
+            p.rect_filled(r, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+            p.rect_stroke(
+                r,
+                LAYOUT_CORNER_MICRO as u8,
+                pal.hairline(pal.hairline_regular, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5)),
+                StrokeKind::Middle,
+            );
+            p.text(r.center(), Align2::CENTER_CENTER, word, font.clone(), pal.text_disabled);
+        }
+    }
+}
+
+/// A font at the canvas zoom — module CONTENT keeps its relative scale (operator ruling
+/// 2026-10-01): text and objects on a card shrink as the camera zooms out, because they are
+/// world objects, not chrome.
+fn scaled_font(f: egui::FontId, z: f32) -> egui::FontId {
+    egui::FontId { size: (f.size * z).max(1.0), family: f.family }
+}
+
 /// Hatch a rect with 45° hairlines — the BYPASS state pattern (increment 5, the mockup's
 /// `hatch8`: 8 px horizontal pitch, hairline weight, low alpha over the body fill). A pattern,
 /// not a colour: it survives greyscale and it survives LOD, which words do not (look-board §4:
 /// "states use pattern first — colour is redundant").
-fn hatch_rect(p: &Painter, r: egui::Rect, col: Color32) {
-    let step = LAYOUT_SPACE_2 as f32 * std::f32::consts::SQRT_2; // 8 px horizontal pitch at 45°
-    let stroke = Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, col);
+fn hatch_rect(p: &Painter, r: egui::Rect, col: Color32, z: f32) {
+    // 8 px horizontal pitch at 45° at zoom 1 — a world pattern, so it scales with the card
+    let step = LAYOUT_SPACE_2 as f32 * std::f32::consts::SQRT_2 * z;
+    let stroke = Stroke::new((LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5), col);
     let mut c = r.min.x + r.min.y;
     let end = r.max.x + r.max.y;
     while c <= end {
@@ -180,9 +263,9 @@ fn hatch_rect(p: &Painter, r: egui::Rect, col: Color32) {
 /// Stroke a rect's outline as a dash run — the MUTE state pattern (increment 5). The dash
 /// lengths ride the 8 px space scale (on = `space.2`, off = `space.1`), the same budget the wire
 /// class encodings use, so no dash number here is invented either.
-fn dashed_rect(p: &Painter, r: egui::Rect, stroke: Stroke) {
+fn dashed_rect(p: &Painter, r: egui::Rect, stroke: Stroke, z: f32) {
     let pts = vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
-    draw_dashed(p, &pts, LAYOUT_SPACE_2 as f32, LAYOUT_SPACE_1 as f32, stroke);
+    draw_dashed(p, &pts, LAYOUT_SPACE_2 as f32 * z, LAYOUT_SPACE_1 as f32 * z, stroke);
 }
 
 // --------------------------------------------------------------------- grid
@@ -274,6 +357,26 @@ fn draw_wires(
         };
         let stroke = Stroke::new(width, colour);
         let pts: Vec<Pos2> = w.points.iter().copied().map(pos).collect();
+
+        // Control wires (operator ruling 2026-10-01 r3) are MODULATION, not signal: dashed at
+        // hairline weight in the control accent, with a small dot on the parameter's sink —
+        // the same vocabulary the wire legend reserves for control, one tier quieter.
+        if w.is_param {
+            let z = canvas.camera.zoom;
+            let cst = Stroke::new(
+                (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5),
+                class_colour(SignalClass::Cv, pal),
+            );
+            draw_dashed(p, &pts, LAYOUT_SPACE_2 as f32 * z, LAYOUT_SPACE_1 as f32 * z, cst);
+            if let Some(&end) = pts.last() {
+                p.circle_filled(
+                    end,
+                    LAYOUT_TOUCH_PORT_RADIUS as f32 * 0.5 * z,
+                    class_colour(SignalClass::Cv, pal),
+                );
+            }
+            continue;
+        }
 
         // The under-glow: a wider, low-alpha pass in the class glow, drawn first so the crisp
         // stroke sits on top. Alpha scales with the level, so a hot wire visibly "energises".
@@ -392,9 +495,47 @@ fn draw_pending_wire(
         }
     }
 
-    // The in-flight wire: source port → hovered port (magnet) or the raw cursor.
+    // Control-drag affordance (operator ruling 2026-10-01 r3): while a CV output is in
+    // flight, the hovered module wears a small blue dot beside every float setting — the
+    // controllable inputs, smaller than the main in/out ports, visible exactly when they
+    // can be touched. The dot under the cursor glows; the wire snaps to it.
+    let z = canvas.camera.zoom;
+    let src_is_cv =
+        graph.port(pw.from).is_some_and(|pt| pt.port_type == sparq_module_api::port::PortType::Cv);
+    let mut sink_end: Option<Vec2> = None;
+    if src_is_cv {
+        let hov = layout.nodes.iter().find(|n| n.screen.contains(pw.cursor_screen));
+        let hov_id = hov.map(|n| n.id);
+        for n in &layout.nodes {
+            if Some(n.id) != hov_id {
+                continue;
+            }
+            for pr in &n.param_rows {
+                let Some(sink) = pr.sink else { continue };
+                let r = LAYOUT_TOUCH_PORT_RADIUS as f32 * 0.5 * z;
+                let captured = pw.hovered_param == Some((n.id, pr.index));
+                if captured {
+                    sink_end = Some(sink);
+                    p.circle_filled(
+                        pos(sink),
+                        r + LAYOUT_SPACE_1 as f32 * z,
+                        class_glow(SignalClass::Cv, pal),
+                    );
+                }
+                p.circle_filled(pos(sink), r, class_colour(SignalClass::Cv, pal));
+                p.circle_stroke(
+                    pos(sink),
+                    r,
+                    pal.hairline(pal.hairline_strong, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5)),
+                );
+            }
+        }
+    }
+
+    // The in-flight wire: source port → hovered port (magnet), hovered sink, or the raw cursor.
     if let Some((src, _)) = find_port(pw.from) {
-        let end = pw.hovered.and_then(find_port).map(|(s, _)| s).unwrap_or(pw.cursor_screen);
+        let end =
+            pw.hovered.and_then(find_port).map(|(s, _)| s).or(sink_end).unwrap_or(pw.cursor_screen);
         let stroke = Stroke::new(LAYOUT_STROKE_SIGNAL as f32, pal.text_secondary);
         p.line_segment([pos(src), pos(end)], stroke);
         // The source port itself is armed: draw it filled and ringed.
@@ -416,21 +557,24 @@ fn draw_nodes(
     meters: &LiveMeters,
     curves: &Curves,
     missing: &[(NodeId, usize)],
+    main_info: Option<&[String; 2]>,
     audit: &mut Vec<InteractiveElement>,
 ) {
+    let z = canvas.camera.zoom;
     for nl in &layout.nodes {
         let Some(node) = graph.node(nl.id) else { continue };
         let selected = canvas.selection.nodes.contains(&nl.id);
         let is_master = master_id == Some(nl.id);
         let flagged = missing.iter().any(|(id, _)| *id == nl.id);
         match layout.lod {
-            Lod::Dot => draw_node_dot(p, pal, node, nl, selected, is_master, flagged),
+            Lod::Dot => draw_node_dot(p, pal, node, nl, selected, is_master, flagged, z),
             Lod::Simplified => draw_node_box(
-                p, pal, node, nl, selected, is_master, false, traces, meters, curves, flagged,
-                audit,
+                p, pal, graph, node, nl, selected, is_master, false, traces, meters, curves,
+                flagged, main_info, z, audit,
             ),
             Lod::Full => draw_node_box(
-                p, pal, node, nl, selected, is_master, true, traces, meters, curves, flagged, audit,
+                p, pal, graph, node, nl, selected, is_master, true, traces, meters, curves,
+                flagged, main_info, z, audit,
             ),
         }
     }
@@ -450,33 +594,60 @@ pub fn dominant_class(node: &Node) -> SignalClass {
     pick(Direction::Out).or_else(|| pick(Direction::In)).unwrap_or(SignalClass::Neutral)
 }
 
-/// The `dsp/scope` display (WO-013 increment 6): a `ground.inset` well with a hairline-faint
-/// crosshair grid — the `scope.trace` colour map's own row, tokens only — and, at Full LOD, the
-/// trace itself in the WIRES' glow vocabulary (class colour lerped toward the class glow by the
-/// window's peak, plus the under-glow pass at the wires' alpha rule). The samples come from the
-/// analysis ring through the session's traces — never faked, never stale: an unbound or at-rest
-/// scope shows the flat rest line, which is the manifest's promised "a flat line, not a crash".
-/// The display steals no gestures: it is pixels under the node body's existing touch target.
+/// The `dsp/scope` display (WO-013 increment 6; ENLARGED with measurements and a graticule by
+/// operator ruling 2026-10-01): a `ground.inset` well on the scope's own taller band token, a
+/// 10 × 8 division graticule in hairline-faint (the classic oscilloscope grid, computed by
+/// `sparq_ui::canvas::scope::graticule` — the painter invents no geometry), the trace in the
+/// WIRES' glow vocabulary (class colour lerped toward the class glow by the window's peak, plus
+/// the under-glow pass at the wires' alpha rule), and — at Full LOD — the MEASUREMENT line:
+/// ms/div, Vpp, RMS and peak of the SAME trigger-selected window the trace draws, so the
+/// numbers and the picture can never disagree. The samples come from the analysis ring through
+/// the session's traces — never faked, never stale: an unbound or at-rest scope shows the flat
+/// rest line and says NO SIGNAL in words. The display steals no gestures: it is pixels under
+/// the node body's existing touch target.
+#[allow(clippy::too_many_arguments)] // the scope reads the graph, the traces, the LOD and the zoom
 fn draw_scope_display(
     p: &Painter,
     pal: &Palette,
+    graph: &Graph,
     node: &Node,
     nl: &NodeLayout,
     full: bool,
     traces: &ScopeTraces,
+    z: f32,
 ) {
+    /// The graticule's division counts (the classic 10 × 8 oscilloscope screen).
+    const DIVS: (usize, usize) = (10, 8);
     let Some(band) = nl.well_band else { return };
-    let disp = egui_rect(band).shrink(LAYOUT_SPACE_2 as f32);
+    let disp = egui_rect(band).shrink(LAYOUT_SPACE_2 as f32 * z);
     if disp.width() <= 0.0 || disp.height() <= 0.0 {
         return; // a collapsed viewport is not a scope's problem to solve
     }
     p.rect_filled(disp, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
-    let grid = pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32);
-    let c = disp.center();
-    p.line_segment([Pos2::new(disp.min.x, c.y), Pos2::new(disp.max.x, c.y)], grid);
-    p.line_segment([Pos2::new(c.x, disp.min.y), Pos2::new(c.x, disp.max.y)], grid);
+    let grid = pal.hairline(pal.hairline_faint, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5));
+    // The graticule: minor divisions hairline-faint, the centre cross one tier up — the
+    // structure reads without competing with the trace.
+    let (vs, hs) = scope::graticule(sp_rect(disp), DIVS.0, DIVS.1);
+    let mid_v = DIVS.0 / 2;
+    let mid_h = DIVS.1 / 2;
+    for (i, (a, b)) in vs.iter().enumerate() {
+        let stroke = if i == mid_v {
+            pal.hairline(pal.hairline_regular, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5))
+        } else {
+            grid
+        };
+        p.line_segment([pos(*a), pos(*b)], stroke);
+    }
+    for (j, (a, b)) in hs.iter().enumerate() {
+        let stroke = if j == mid_h {
+            pal.hairline(pal.hairline_regular, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5))
+        } else {
+            grid
+        };
+        p.line_segment([pos(*a), pos(*b)], stroke);
+    }
     if !full {
-        return; // Simplified: the well says "scope"; the trace is a Full-LOD reading (D8)
+        return; // Simplified: the well says "scope"; trace and words are Full-LOD readings (D8)
     }
 
     // The view params, read from the node per frame and clamped by the model (D10). Index
@@ -490,6 +661,21 @@ fn draw_scope_display(
     );
     let r = sp_rect(disp);
     let tr = traces.get(nl.id);
+    // The trace wears the colour of the SIGNAL IT DISPLAYS (operator ruling 2026-10-01 r3):
+    // the scope accepts any source class, so an LFO on the scope draws in control blue, a
+    // kick in audio amber — the wire's own class vocabulary, read off the binding's source
+    // port. No binding: the audio convention (the scope's historical voice).
+    let src_port = graph
+        .wires()
+        .iter()
+        .find(|w| w.to.node == nl.id && w.to.index == 0)
+        .or_else(|| graph.wires().iter().find(|w| w.to.node == nl.id))
+        .map(|w| w.from);
+    let src_class = src_port
+        .and_then(|pref| graph.port(pref))
+        .map(sparq_ui::canvas::layout::signal_class)
+        .unwrap_or(SignalClass::Audio);
+    let no_wave = matches!(src_class, SignalClass::Event | SignalClass::Data);
     let pts: Vec<Pos2> = match (view.mode_xy, tr) {
         (true, Some(t)) => scope::xy_polyline(&t.x, &t.y, &view, r),
         (false, Some(t)) => scope::trace_polyline(&t.x, &view, r),
@@ -504,17 +690,17 @@ fn draw_scope_display(
         .clamp(0.0, 1.0);
 
     if pts.len() >= 2 {
-        let base = class_colour(SignalClass::Audio, pal);
-        let colour = if level > 0.0 {
-            lerp_colour(base, class_glow(SignalClass::Audio, pal), level)
-        } else {
-            base
-        };
-        let width = class_width(SignalClass::Audio);
+        let base = class_colour(src_class, pal);
+        let colour =
+            if level > 0.0 { lerp_colour(base, class_glow(src_class, pal), level) } else { base };
+        let width = class_width(src_class) * z;
         // The under-glow pass, the wires' own expression — glow is data: it encodes level.
         if level > 0.02 {
-            let glow = with_alpha(class_glow(SignalClass::Audio, pal), 0.15 + 0.45 * level);
-            p.line(pts.clone(), Stroke::new(width + LAYOUT_SPACE_1 as f32 * (0.5 + level), glow));
+            let glow = with_alpha(class_glow(src_class, pal), 0.15 + 0.45 * level);
+            p.line(
+                pts.clone(),
+                Stroke::new(width + LAYOUT_SPACE_1 as f32 * z * (0.5 + level), glow),
+            );
         }
         p.line(pts, Stroke::new(width, colour));
     } else {
@@ -522,6 +708,48 @@ fn draw_scope_display(
         let [a, b] = scope::rest_line(r);
         p.line_segment([pos(a), pos(b)], grid);
     }
+
+    // The measurement line: the numbers OF THE DRAWN WINDOW — ms/div from the timebase and
+    // the graticule's own column count, Vpp/RMS/PK from `scope::measure` on the same
+    // trigger-selected samples. Every number with its unit or word; NO SIGNAL when the window
+    // is empty, because confident zeros about a signal that does not exist would be a lie.
+    let words = match tr.and_then(|t| {
+        if view.mode_xy {
+            scope::measure(&t.y, &view).or_else(|| scope::measure(&t.x, &view))
+        } else {
+            scope::measure(&t.x, &view)
+        }
+    }) {
+        // An event or data source is a legal binding (r3) but publishes no waveform: the
+        // scope says exactly that, in words, rather than drawing a confident flat line about
+        // a signal shape it cannot have.
+        Some(m) if !no_wave => format!(
+            "{mode}{:.1} ms/div  Vpp {:.2}  RMS {:.2}  PK {:.2}",
+            scope::ms_per_div(&view, DIVS.0),
+            m.vpp,
+            m.rms,
+            m.peak,
+            mode = if view.mode_xy { "X/Y  " } else { "" },
+        ),
+        None if no_wave => format!(
+            "{mode}{:.1} ms/div  NO WAVEFORM - {:?} SOURCE",
+            scope::ms_per_div(&view, DIVS.0),
+            src_class,
+            mode = if view.mode_xy { "X/Y  " } else { "" },
+        ),
+        _ => format!(
+            "{mode}{:.1} ms/div  NO SIGNAL",
+            scope::ms_per_div(&view, DIVS.0),
+            mode = if view.mode_xy { "X/Y  " } else { "" },
+        ),
+    };
+    p.text(
+        disp.left_top() + egui::vec2(LAYOUT_SPACE_1 as f32 * z, LAYOUT_SPACE_1 as f32 * 0.5 * z),
+        Align2::LEFT_TOP,
+        words,
+        scaled_font(font_xs(), z),
+        pal.text_tertiary,
+    );
 }
 
 /// A node at Dot LOD, with its states as SHAPES (increment 5 — the Dot contract is "a
@@ -529,6 +757,7 @@ fn draw_scope_display(
 /// (the signal goes around it), muted = a DIMMED fill, locked = a concentric hairline ring,
 /// master = a `selected`-colour hairline ring (selection's own ring is emphasis-WEIGHT at the
 /// same radius, so the two never rely on colour alone to tell them apart).
+#[allow(clippy::too_many_arguments)] // the LOD dot carries its states AND the zoom factor
 fn draw_node_dot(
     p: &Painter,
     pal: &Palette,
@@ -537,46 +766,42 @@ fn draw_node_dot(
     selected: bool,
     master: bool,
     flagged: bool,
+    z: f32,
 ) {
+    // Dot LOD: the dot IS the module, so it scales with the camera like every other content
+    // object (operator ruling 2026-10-01); the state rings scale with it.
     let c = pos(nl.screen.center());
-    let r = LAYOUT_SPACE_2 as f32;
+    let r = LAYOUT_SPACE_2 as f32 * z;
     let col = class_colour(dominant_class(node), pal);
     let dimmed = node.flags.bypassed || node.flags.muted;
     let fill_col = if dimmed { col.gamma_multiply(0.4) } else { col };
+    let hair = (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5);
     if node.flags.bypassed {
-        p.circle_stroke(c, r, Stroke::new(LAYOUT_STROKE_SIGNAL as f32, fill_col));
+        p.circle_stroke(c, r, Stroke::new(LAYOUT_STROKE_SIGNAL as f32 * z, fill_col));
     } else {
         p.circle_filled(c, r, fill_col);
     }
     if node.flags.locked {
         p.circle_stroke(
             c,
-            r + LAYOUT_SPACE_1 as f32 * 0.5,
-            pal.hairline(pal.hairline_strong, LAYOUT_STROKE_HAIRLINE as f32),
+            r + LAYOUT_SPACE_1 as f32 * 0.5 * z,
+            pal.hairline(pal.hairline_strong, hair),
         );
     }
     if master {
-        p.circle_stroke(
-            c,
-            r + LAYOUT_SPACE_1 as f32,
-            Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, pal.selected),
-        );
+        p.circle_stroke(c, r + LAYOUT_SPACE_1 as f32 * z, Stroke::new(hair, pal.selected));
     }
     if flagged {
         // The Dot-LOD half of the unfinished flag: an error-colour ring (the bypass ring's
         // radius, the flag's own colour — colour plus the box LOD's tint and word, never
         // colour alone).
-        p.circle_stroke(
-            c,
-            r + LAYOUT_SPACE_1 as f32 * 0.5,
-            Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, pal.error),
-        );
+        p.circle_stroke(c, r + LAYOUT_SPACE_1 as f32 * 0.5 * z, Stroke::new(hair, pal.error));
     }
     if selected {
         p.circle_stroke(
             c,
-            r + LAYOUT_SPACE_1 as f32,
-            Stroke::new(LAYOUT_STROKE_EMPHASIS as f32, pal.selected),
+            r + LAYOUT_SPACE_1 as f32 * z,
+            Stroke::new(LAYOUT_STROKE_EMPHASIS as f32 * z, pal.selected),
         );
     }
 }
@@ -585,6 +810,7 @@ fn draw_node_dot(
 fn draw_node_box(
     p: &Painter,
     pal: &Palette,
+    graph: &Graph,
     node: &Node,
     nl: &NodeLayout,
     selected: bool,
@@ -594,8 +820,15 @@ fn draw_node_box(
     meters: &LiveMeters,
     curves: &Curves,
     flagged: bool,
+    main_info: Option<&[String; 2]>,
+    z: f32,
     audit: &mut Vec<InteractiveElement>,
 ) {
+    // ONE zoom factor for every content object on the card (operator ruling 2026-10-01):
+    // text, knobs, ports, switches, wells and strokes are WORLD objects and shrink with the
+    // camera; touch targets and the selection frame stay screen-sized, because a finger and
+    // a "which node am I editing" cue do not shrink.
+    let hair = |a: f32| pal.hairline(a, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5));
     let body = egui_rect(nl.screen);
     let corner = LAYOUT_CANVAS_NODE_RADIUS as u8;
     let dimmed = node.flags.bypassed || node.flags.muted;
@@ -612,11 +845,12 @@ fn draw_node_box(
     }
 
     // The card's left stripe (increment 6, the PN convergence): the node's DOMINANT SIGNAL
-    // CLASS at emphasis weight — sparq's §4 rule (colour says what the module carries) read in
-    // the reference's category-stripe position.
+    // CLASS — sparq's §4 rule (colour says what the module carries) read in the reference's
+    // category-stripe position. TWO px thin at zoom 1 (operator ruling 2026-10-01), and a
+    // world object: it scales with the card.
     let stripe = egui::Rect::from_min_size(
         body.left_top(),
-        egui::vec2(LAYOUT_STROKE_EMPHASIS as f32, body.height()),
+        egui::vec2((LAYOUT_STROKE_SIGNAL as f32 * z).max(0.5), body.height()),
     );
     p.rect_filled(stripe, LAYOUT_CORNER_NONE as u8, class_colour(dominant_class(node), pal));
 
@@ -625,21 +859,21 @@ fn draw_node_box(
     // BYPASSED hatches the body — the mockup's own encoding (`design-mode.svg`'s `hatch8`).
     // The header band draws over the hatch, so the pattern reads as "the body is bypassed".
     if node.flags.bypassed {
-        hatch_rect(p, body, pal.hairline_colour.gamma_multiply(0.35));
+        hatch_rect(p, body, pal.hairline_colour.gamma_multiply(0.35), z);
     }
 
     // Border: selected wears the selection accent at emphasis width; else the regular hairline —
     // and a MUTED node's border is dashed (the state pattern; the selection accent outranks it,
     // because "which node am I editing" beats "which node is silent" at the border's one job).
     let border = if selected {
-        Stroke::new(LAYOUT_STROKE_EMPHASIS as f32, pal.selected)
+        Stroke::new((LAYOUT_STROKE_EMPHASIS as f32 * z).max(0.5), pal.selected)
     } else if flagged {
-        Stroke::new(LAYOUT_STROKE_SIGNAL as f32, pal.error)
+        Stroke::new((LAYOUT_STROKE_SIGNAL as f32 * z).max(0.5), pal.error)
     } else {
-        pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32)
+        hair(pal.hairline_regular)
     };
     if node.flags.muted && !selected {
-        dashed_rect(p, body, border);
+        dashed_rect(p, body, border, z);
     } else {
         p.rect_stroke(body, corner, border, StrokeKind::Middle);
     }
@@ -647,9 +881,9 @@ fn draw_node_box(
     // a doubled signal, here meaning "this node is pinned in place".
     if node.flags.locked {
         p.rect_stroke(
-            body.shrink(LAYOUT_SPACE_1 as f32),
+            body.shrink(LAYOUT_SPACE_1 as f32 * z),
             corner,
-            pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
+            hair(pal.hairline_faint),
             StrokeKind::Middle,
         );
     }
@@ -657,17 +891,14 @@ fn draw_node_box(
     // Header band.
     let header = egui_rect(nl.header_screen);
     p.rect_filled(header, corner, pal.ground_panel_alt);
-    p.line_segment(
-        [header.left_bottom(), header.right_bottom()],
-        pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
-    );
+    p.line_segment([header.left_bottom(), header.right_bottom()], hair(pal.hairline_faint));
 
     if full {
         p.text(
-            header.left_center() + egui::vec2(LAYOUT_SPACE_2 as f32, 0.0),
+            header.left_center() + egui::vec2(LAYOUT_SPACE_2 as f32 * z, 0.0),
             Align2::LEFT_CENTER,
             node.title(),
-            font_s(),
+            scaled_font(font_s(), z),
             if dimmed { pal.text_disabled } else { pal.text_primary },
         );
     } else if master {
@@ -675,8 +906,8 @@ fn draw_node_box(
         // be readable — a filled chip in the badge's own accent sits where the word would be.
         // The pattern set (hatch/dash/double) stays distinguishable from it: those are outlines
         // on the body, this is a solid on the header.
-        let chip = LAYOUT_SPACE_2 as f32;
-        let c = header.right_center() - egui::vec2(LAYOUT_SPACE_2 as f32 + chip / 2.0, 0.0);
+        let chip = LAYOUT_SPACE_2 as f32 * z;
+        let c = header.right_center() - egui::vec2(LAYOUT_SPACE_2 as f32 * z + chip / 2.0, 0.0);
         p.rect_filled(
             egui::Rect::from_center_size(c, egui::vec2(chip, chip)),
             LAYOUT_CORNER_MICRO as u8,
@@ -690,12 +921,12 @@ fn draw_node_box(
     if full {
         let top = node.spec.module_id.split('/').nth(1).unwrap_or("");
         let cat = format!("{top} · {}", nl.id);
-        cat_w = cat.len() as f32 * LAYOUT_SPACE_2 as f32;
+        cat_w = cat.len() as f32 * LAYOUT_SPACE_2 as f32 * z;
         p.text(
-            header.right_center() - egui::vec2(LAYOUT_SPACE_2 as f32, 0.0),
+            header.right_center() - egui::vec2(LAYOUT_SPACE_2 as f32 * z, 0.0),
             Align2::RIGHT_CENTER,
             cat,
-            font_xs(),
+            scaled_font(font_xs(), z),
             pal.text_disabled,
         );
     }
@@ -707,7 +938,7 @@ fn draw_node_box(
     // start LEFT of the category word: a state outranks a label for the right edge.
     if full {
         let mut badge_x =
-            header.right_center().x - LAYOUT_SPACE_2 as f32 - cat_w - LAYOUT_SPACE_2 as f32;
+            header.right_center().x - LAYOUT_SPACE_2 as f32 * z - cat_w - LAYOUT_SPACE_2 as f32 * z;
         for (on, label, col) in [
             (master, "MASTER", pal.selected),
             (node.flags.locked, "LOCK", pal.text_tertiary),
@@ -718,19 +949,21 @@ fn draw_node_box(
             if !on {
                 continue;
             }
-            let g = font_xs();
-            let w = label.len() as f32 * LAYOUT_SPACE_2 as f32;
+            let g = scaled_font(font_xs(), z);
+            let w = label.len() as f32 * LAYOUT_SPACE_2 as f32 * z;
             badge_x -= w;
             p.text(Pos2::new(badge_x, header.center().y), Align2::LEFT_CENTER, label, g, col);
-            badge_x -= LAYOUT_SPACE_2 as f32;
+            badge_x -= LAYOUT_SPACE_2 as f32 * z;
         }
     }
 
     // Inline parameter rows (increment 6, the PN card anatomy): label left in xs tertiary
-    // uppercase, value right in the node's dominant class colour, a round knob on a thin track
-    // below — and the SAME op path as the inspector (Hit::Param → Interaction::Param), so one
-    // door serves both surfaces and the live ring cannot hear a difference. Full LOD only: the
-    // Simplified contract is ports, wells and patterns, no text.
+    // uppercase, value right in the node's dominant class colour, and the control itself in
+    // the row's lower band — slider, toggle or button row by the param's SHAPE (operator
+    // ruling 2026-10-01: binary = toggle, multi-choice = buttons, the rest = slider) — and
+    // the SAME op path as the inspector (Hit::Param → Interaction::Param), so one door serves
+    // both surfaces and the live ring cannot hear a difference. Full LOD only: the Simplified
+    // contract is ports, wells and patterns, no text.
     if full {
         let col = class_colour(dominant_class(node), pal);
         for pr in &nl.param_rows {
@@ -742,7 +975,7 @@ fn draw_node_box(
             // an ellipsis rather than colliding (a number without its unit is a bug, so the
             // VALUE is never the thing that gets cut — look-board §5).
             let value_s = sparq_ui::canvas::inspector::value_text(desc, value);
-            let char_w = LAYOUT_SPACE_2 as f32;
+            let char_w = LAYOUT_SPACE_2 as f32 * z;
             let avail = row.width() - char_w * 3.0 - value_s.len() as f32 * char_w;
             let max_chars = (avail / char_w).floor().max(4.0) as usize;
             let name = desc.name.to_uppercase();
@@ -752,38 +985,66 @@ fn draw_node_box(
                 name
             };
             p.text(
-                egui::pos2(row.min.x + LAYOUT_SPACE_2 as f32, label_y),
+                egui::pos2(row.min.x + LAYOUT_SPACE_2 as f32 * z, label_y),
                 Align2::LEFT_CENTER,
                 label_s,
-                font_xs(),
+                scaled_font(font_xs(), z),
                 pal.text_tertiary,
             );
             p.text(
-                egui::pos2(row.max.x - LAYOUT_SPACE_2 as f32, label_y),
+                egui::pos2(row.max.x - LAYOUT_SPACE_2 as f32 * z, label_y),
                 Align2::RIGHT_CENTER,
                 value_s,
-                font_xs(),
+                scaled_font(font_xs(), z),
                 col,
             );
             let tr = egui_rect(pr.track);
             let mid_y = tr.center().y;
-            p.line_segment(
-                [egui::pos2(tr.min.x, mid_y), egui::pos2(tr.max.x, mid_y)],
-                pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32),
-            );
-            let kx = sparq_ui::canvas::inspector::knob_x(desc, pr.track, value);
-            p.line_segment(
-                [egui::pos2(tr.min.x, mid_y), egui::pos2(kx, mid_y)],
-                Stroke::new(LAYOUT_STROKE_SIGNAL as f32, col),
-            );
-            p.circle_filled(egui::pos2(kx, mid_y), LAYOUT_SPACE_1 as f32, col);
+            if nl.step_param == Some(pr.index) && !nl.step_cells.is_empty() {
+                // The sequencer's program: 16 step buttons the clock walks (operator ruling
+                // 2026-10-01 r3) — set steps filled in the class accent, unset steps empty
+                // wells; the mask number to the right stays the redundant word.
+                let mask = value as i64;
+                for (k, cell) in nl.step_cells.iter().enumerate() {
+                    let r = egui_rect(*cell);
+                    if mask & (1 << k.min(15)) != 0 {
+                        p.rect_filled(r, LAYOUT_CORNER_MICRO as u8, col);
+                    } else {
+                        p.rect_filled(r, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+                        p.rect_stroke(
+                            r,
+                            LAYOUT_CORNER_MICRO as u8,
+                            hair(pal.hairline_regular),
+                            StrokeKind::Middle,
+                        );
+                    }
+                }
+                let _ = (tr, mid_y);
+            } else if sparq_ui::canvas::inspector::is_choice(desc) {
+                draw_choices(p, pal, tr, desc, value, col, z);
+            } else if sparq_ui::canvas::inspector::is_binary(desc) {
+                // Binary setting → toggle switch, right-aligned on the track; the ON/OFF word
+                // above is the redundant encoding.
+                draw_toggle(p, pal, egui::pos2(tr.max.x, mid_y), value >= 0.5, col, z);
+            } else {
+                p.line_segment(
+                    [egui::pos2(tr.min.x, mid_y), egui::pos2(tr.max.x, mid_y)],
+                    hair(pal.hairline_regular),
+                );
+                let kx = sparq_ui::canvas::inspector::knob_x(desc, pr.track, value);
+                p.line_segment(
+                    [egui::pos2(tr.min.x, mid_y), egui::pos2(kx, mid_y)],
+                    Stroke::new((LAYOUT_STROKE_SIGNAL as f32 * z).max(0.5), col),
+                );
+                p.circle_filled(egui::pos2(kx, mid_y), LAYOUT_SPACE_1 as f32 * z, col);
+            }
         }
         if let Some((more, r)) = nl.param_overflow {
             p.text(
                 egui_rect(r).center(),
                 Align2::CENTER_CENTER,
                 format!("+{more} MORE - INSPECTOR"),
-                font_xs(),
+                scaled_font(font_xs(), z),
                 pal.text_disabled,
             );
         }
@@ -799,23 +1060,97 @@ fn draw_node_box(
     // LIVE where the rings carry it (meters), the param-derived declared shape otherwise —
     // at rest, never faked.
     match inset::well_for(&node.spec) {
-        Some(Well::Scope) => draw_scope_display(p, pal, node, nl, full, traces),
-        Some(Well::Meters) => draw_meters_well(p, pal, node, nl, meters),
-        Some(Well::Envelope) => draw_envelope_well(p, pal, node, nl),
-        Some(Well::Sparkline) => draw_sparkline_well(p, pal, node, nl),
-        Some(Well::Curve) => draw_curve_well(p, pal, node, nl, curves),
+        Some(Well::Scope) => draw_scope_display(p, pal, graph, node, nl, full, traces, z),
+        Some(Well::Meters) => draw_meters_well(p, pal, node, nl, meters, z),
+        Some(Well::Envelope) => draw_envelope_well(p, pal, node, nl, z),
+        Some(Well::Sparkline) => draw_sparkline_well(p, pal, node, nl, z),
+        Some(Well::Curve) => draw_curve_well(p, pal, node, nl, curves, z),
         None => {}, // no well: the body is the box, honest
     }
 
-    // Ports.
+    // The Main Out driver-info band (operator ruling 2026-10-01): the permanent node says
+    // WHICH driver is under it and the negotiated truth (rate · channels · block · format) in
+    // words with units, while a session runs — and says the at-rest fact when none does. The
+    // layout reserves the band on `out/main` alone; the lines come from the session itself,
+    // never invented here. The words are CLIPPED to the band (operator report: a long device
+    // name broke the frame) — an ellipsis, never an overflow.
+    if let Some(band) = nl.info_band {
+        let r = egui_rect(band);
+        if r.width() > 0.0 && r.height() > 0.0 {
+            p.rect_filled(r, LAYOUT_CORNER_NONE as u8, pal.ground_inset);
+            p.line_segment([r.left_top(), r.right_top()], hair(pal.hairline_faint));
+            if full {
+                let pad = LAYOUT_SPACE_2 as f32 * z;
+                let char_w = LAYOUT_SPACE_2 as f32 * z;
+                let max_chars = ((r.width() - pad * 2.0) / char_w).floor().max(4.0) as usize;
+                // char-boundary-safe: the driver lines carry `·` separators (multi-byte), and
+                // a byte-slice ellipsis there is a panic, not a truncation
+                let clip = |line: &str| -> String {
+                    if line.chars().count() <= max_chars {
+                        line.to_string()
+                    } else {
+                        let cut: String = line.chars().take(max_chars.saturating_sub(1)).collect();
+                        format!("{cut}…")
+                    }
+                };
+                let line_h = r.height() / 2.0;
+                match main_info {
+                    Some(lines) => {
+                        for (i, line) in lines.iter().enumerate() {
+                            p.text(
+                                egui::pos2(r.min.x + pad, r.min.y + line_h * (i as f32 + 0.5)),
+                                Align2::LEFT_CENTER,
+                                clip(line),
+                                scaled_font(font_xs(), z),
+                                if i == 0 { pal.text_secondary } else { pal.text_tertiary },
+                            );
+                        }
+                    },
+                    None => {
+                        p.text(
+                            egui::pos2(r.min.x + pad, r.center().y),
+                            Align2::LEFT_CENTER,
+                            clip("NO SESSION - TRANSPORT'S PLAY OPENS THE DEVICE"),
+                            scaled_font(font_xs(), z),
+                            pal.text_disabled,
+                        );
+                    },
+                }
+            }
+        }
+    }
+
+    // Ports: the circles are world objects and scale with the card (operator ruling
+    // 2026-10-01); their CAPTURE stays screen-sized (the audit's zoom-invariant 24 px ring),
+    // because a finger does not shrink with the zoom.
+    // The junction bus (operator ruling 2026-10-01 r3): a mult dot wears its ROLE, not a
+    // static direction — uncommitted a hollow neutral ring, carrying an input a ring in the
+    // bus's class, carrying an output a filled dot in it. The first connection's class is
+    // the bus's colour from then on, so the dot says what it carries without a word.
+    let is_mult = node.spec.module_id == sparq_ui::canvas::MULT_ID;
     for pl in &nl.ports {
-        let col = class_colour(pl.class, pal);
-        p.circle_filled(pos(pl.screen), LAYOUT_TOUCH_PORT_RADIUS as f32, col);
-        p.circle_stroke(
-            pos(pl.screen),
-            LAYOUT_TOUCH_PORT_RADIUS as f32,
-            pal.hairline(pal.hairline_strong, LAYOUT_STROKE_HAIRLINE as f32),
-        );
+        let (col, filled) = if is_mult {
+            let role = graph.mult_port_role(nl.id, pl.pref.index);
+            let cls = graph
+                .mult_defining_port(nl.id, pl.pref.index)
+                .and_then(|pref| graph.port(pref))
+                .map(sparq_ui::canvas::layout::signal_class)
+                .unwrap_or(SignalClass::Neutral);
+            (class_colour(cls, pal), role == Some(sparq_module_api::port::Direction::Out))
+        } else {
+            (class_colour(pl.class, pal), true)
+        };
+        let pr = LAYOUT_TOUCH_PORT_RADIUS as f32 * z;
+        if filled {
+            p.circle_filled(pos(pl.screen), pr, col);
+            p.circle_stroke(pos(pl.screen), pr, hair(pal.hairline_strong));
+        } else {
+            p.circle_stroke(
+                pos(pl.screen),
+                pr,
+                Stroke::new((LAYOUT_STROKE_SIGNAL as f32 * z).max(0.5), col),
+            );
+        }
         if full {
             // Redundant encoding: the class letter rides beside the port name.
             let name =
@@ -823,19 +1158,17 @@ fn draw_node_box(
             let label = format!("{name} {}", class_label(pl.class));
             let anchor = match pl.dir {
                 sparq_module_api::port::Direction::In => {
-                    pos(pl.screen)
-                        + egui::vec2(LAYOUT_TOUCH_PORT_RADIUS as f32 + LAYOUT_SPACE_2 as f32, 0.0)
+                    pos(pl.screen) + egui::vec2(pr + LAYOUT_SPACE_2 as f32 * z, 0.0)
                 },
                 sparq_module_api::port::Direction::Out => {
-                    pos(pl.screen)
-                        - egui::vec2(LAYOUT_TOUCH_PORT_RADIUS as f32 + LAYOUT_SPACE_2 as f32, 0.0)
+                    pos(pl.screen) - egui::vec2(pr + LAYOUT_SPACE_2 as f32 * z, 0.0)
                 },
             };
             let align = match pl.dir {
                 sparq_module_api::port::Direction::In => Align2::LEFT_CENTER,
                 sparq_module_api::port::Direction::Out => Align2::RIGHT_CENTER,
             };
-            p.text(anchor, align, label, font_xs(), pal.text_tertiary);
+            p.text(anchor, align, label, scaled_font(font_xs(), z), pal.text_tertiary);
         }
         // Register the port's capture circle (zoom-invariant, ≥ 44 px) as a class-S touch target.
         let cap = LAYOUT_TOUCH_PORT_CAPTURE_RADIUS as f32;
@@ -1260,23 +1593,30 @@ pub fn draw_wire_legend(p: &Painter, pal: &Palette, r: Rect) {
 ///
 /// At rest the shell hands over empty maps and the wells sit empty, because a frozen bar from
 /// a dead stream is a lie with a scale on it.
-fn draw_meters_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout, meters: &LiveMeters) {
+fn draw_meters_well(
+    p: &Painter,
+    pal: &Palette,
+    node: &Node,
+    nl: &NodeLayout,
+    meters: &LiveMeters,
+    z: f32,
+) {
     // `out/main` alone wears bars (operator ruling 2026-09-30): its first audio output's
     // per-port ring entry. At rest the shell hands over an empty map and the wells sit empty,
     // because a frozen bar from a dead stream is a lie with a scale on it.
     let Some(band) = nl.well_band else { return };
     if let Some(port) = inset::first_audio_out(&node.spec) {
         let m = meters.get(&(nl.id, port)).copied().unwrap_or_default();
-        draw_meter_bars(p, pal, band, &[(m.l, m.hold_l), (m.r, m.hold_r)]);
+        draw_meter_bars(p, pal, band, &[(m.l, m.hold_l), (m.r, m.hold_r)], z);
     }
 }
 
 /// The bar vocabulary itself (increment 4's, unchanged): one hairline well per channel, a
 /// data-class fill to the level, an audio-class hold block where a hold was published.
-fn draw_meter_bars(p: &Painter, pal: &Palette, band: Rect, channels: &[(f32, f32)]) {
+fn draw_meter_bars(p: &Painter, pal: &Palette, band: Rect, channels: &[(f32, f32)], z: f32) {
     let body = egui_rect(band);
-    let inset = LAYOUT_SPACE_2 as f32;
-    let bar_h = LAYOUT_SPACE_2 as f32;
+    let inset = LAYOUT_SPACE_2 as f32 * z;
+    let bar_h = LAYOUT_SPACE_2 as f32 * z;
     let well_w = body.width() - inset * 4.0;
     let x0 = body.min.x + inset * 2.0;
     let mut y = body.min.y + inset * 1.5;
@@ -1285,14 +1625,14 @@ fn draw_meter_bars(p: &Painter, pal: &Palette, band: Rect, channels: &[(f32, f32
         p.rect_stroke(
             well,
             LAYOUT_CORNER_NONE as u8,
-            pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
+            pal.hairline(pal.hairline_faint, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5)),
             egui::StrokeKind::Middle,
         );
         let lv = level.clamp(0.0, 1.0);
         if lv > 0.0 {
             let fill = egui::Rect::from_min_size(
                 well.left_top(),
-                egui::vec2((well_w * lv).max(LAYOUT_STROKE_SIGNAL as f32), bar_h),
+                egui::vec2((well_w * lv).max(LAYOUT_STROKE_SIGNAL as f32 * z), bar_h),
             );
             p.rect_filled(fill, LAYOUT_CORNER_NONE as u8, pal.data);
         }
@@ -1300,8 +1640,8 @@ fn draw_meter_bars(p: &Painter, pal: &Palette, band: Rect, channels: &[(f32, f32
         if hd > 0.0 {
             let hx = x0 + well_w * hd;
             let block = egui::Rect::from_min_size(
-                egui::pos2((hx - LAYOUT_SPACE_1 as f32).max(x0), y),
-                egui::vec2(LAYOUT_SPACE_1 as f32, bar_h),
+                egui::pos2((hx - LAYOUT_SPACE_1 as f32 * z).max(x0), y),
+                egui::vec2(LAYOUT_SPACE_1 as f32 * z, bar_h),
             );
             p.rect_filled(block, LAYOUT_CORNER_NONE as u8, pal.audio);
         }
@@ -1314,9 +1654,9 @@ fn draw_meter_bars(p: &Painter, pal: &Palette, band: Rect, channels: &[(f32, f32
 /// declared next half, waiting on a ring that carries per-block cv history). Hairline-faint at
 /// rest — the scope rest line's own stroke. Param order is the manifest's (0 attack · 1 decay ·
 /// 2 loop · 3 curve), pinned by a sparq-app test.
-fn draw_envelope_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout) {
+fn draw_envelope_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout, z: f32) {
     let Some(band) = nl.well_band else { return };
-    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32);
+    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32 * z);
     if disp.width() <= 0.0 || disp.height() <= 0.0 {
         return;
     }
@@ -1329,8 +1669,17 @@ fn draw_envelope_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout) 
         sp_rect(disp),
     );
     if pts.len() >= 2 {
+        // The control module's wave display is BLUE (operator ruling 2026-10-01): the LFO's
+        // period outline rides the CONTROL class accent at signal weight — the wave is the
+        // module's promise, not chrome, so it wears its class colour, not a hairline grey.
         let line = pts.into_iter().map(pos).collect::<Vec<Pos2>>();
-        p.line(line, pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32));
+        p.line(
+            line,
+            Stroke::new(
+                (LAYOUT_STROKE_SIGNAL as f32 * z).max(0.5),
+                class_colour(SignalClass::Cv, pal),
+            ),
+        );
     }
 }
 
@@ -1338,9 +1687,9 @@ fn draw_envelope_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout) 
 /// 1 shape · 2 depth — the rate does not appear because the x-axis IS one period), the honest
 /// at-rest outline; the rolling cv-history overlay is D1′'s declared next half. Hairline-faint
 /// at rest, the envelope's stroke.
-fn draw_sparkline_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout) {
+fn draw_sparkline_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout, z: f32) {
     let Some(band) = nl.well_band else { return };
-    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32);
+    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32 * z);
     if disp.width() <= 0.0 || disp.height() <= 0.0 {
         return;
     }
@@ -1353,7 +1702,10 @@ fn draw_sparkline_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout)
     );
     if pts.len() >= 2 {
         let line = pts.into_iter().map(pos).collect::<Vec<Pos2>>();
-        p.line(line, pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32));
+        p.line(
+            line,
+            pal.hairline(pal.hairline_faint, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5)),
+        );
     }
 }
 
@@ -1363,14 +1715,21 @@ fn draw_sparkline_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout)
 /// in the node's dominant class colour over a 0 dB datum. Param-derived means it is NEVER at
 /// rest while params exist — the honest fallback when the shell supplied no frame (a rate
 /// never negotiated) is the flat rest centre line, the scope's own vocabulary.
-fn draw_curve_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout, curves: &Curves) {
+fn draw_curve_well(
+    p: &Painter,
+    pal: &Palette,
+    node: &Node,
+    nl: &NodeLayout,
+    curves: &Curves,
+    z: f32,
+) {
     let Some(band) = nl.well_band else { return };
-    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32);
+    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32 * z);
     if disp.width() <= 0.0 || disp.height() <= 0.0 {
         return;
     }
     p.rect_filled(disp, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
-    let grid = pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32);
+    let grid = pal.hairline(pal.hairline_faint, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5));
     let Some(frame) = curves.get(&nl.id) else {
         let [a, b] = scope::rest_line(sp_rect(disp));
         p.line_segment([pos(a), pos(b)], grid);
@@ -1383,6 +1742,6 @@ fn draw_curve_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout, cur
     if pts.len() >= 2 {
         let class = dominant_class(node);
         let line = pts.into_iter().map(pos).collect::<Vec<Pos2>>();
-        p.line(line, Stroke::new(class_width(class), class_colour(class, pal)));
+        p.line(line, Stroke::new(class_width(class) * z, class_colour(class, pal)));
     }
 }
