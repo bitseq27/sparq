@@ -284,8 +284,109 @@ on the UI thread from params.
   like the mockup.
 * **Hover affordances / cursor shapes** — parked (inc 4 D2; §8 forbids hover-only affordances).
 
-## Postscript — the acceptance, measured (to be filled after the sandbox run)
+## Postscript — the acceptance, measured (2026-09-30, tenth session, sandbox)
 
-_(This plan is the pre-build artefact the CHECKLIST mandates — "plan of record first". The
-postscript records the measured gates, the smoke lessons and the seal stamp once the increment
-is built and green, per the WO008-INC7 / WO012-INC4 house discipline.)_
+Built to this plan, D1–D4 as decided; no decision moved during the build. Measured:
+
+* **Unit tests: 805 passed / 0 failed / 1 ignored** (was 777): +4 the `magnitude_at` drift gate
+  and its boundary/linearity/sanitising companions, +9 the `response` model (axes, round trips,
+  grid, polyline sanitising, capture band, readout, words), +7 the `inset` model (registry,
+  fallback, cv port, envelope, lfo, degenerate rect), +1 the inspector's fixed plot well, +5 the
+  marker interaction (read-only proof, tap-to-place, reset-on-selection, no-curve refusal, stale
+  axes), +2 the bridge dispatch (the manifest param-order pin and the bit-identity with
+  `magnitude_at`).
+* **Smokes: 42** (was 37): the five acceptance smokes, all PASS — meter wells live on every
+  audio node (gain's stereo bars hot, rms's single cv bar reads, empty at rest); the inspector
+  shows the svf curve and the tap-placed marker reads `1240.0 Hz · +2.5 dB` with its capture band
+  audited; dragging the marker moves the readout with the patch byte-identical, history empty and
+  the live-sync ledger silent; a no-curve module paints NO RESPONSE CURVE (asserted on the DRAWN
+  text, not on state); the three param-shape thumbnails draw inside their node bodies at the
+  models' own point counts.
+* **Shape-of-the-diff proof held:** every golden bit-identical — `ba577186c988db21`,
+  `dd975a24f03b19c1`, the batch-2 exec renders bit-exact, stress hash `7bb06379bd6845e5`
+  (release re-run), determinism `0f5c3e86c7f117a9`. `selftest --golden` 9/9 · `modules --strict`
+  17/17 · `probe_alloc` 0 across 5 000 blocks · 464.4× realtime.
+* **Standing gates:** fmt clean; clippy clean in default, `bootstrap-audio`, `ui`, native
+  `ui-window` and the six runnable MSVC cells; the MSVC `ui-window` cell remains the sandbox's
+  declared OOM (the `windows` crate does not fit 1 GB even at `-j 1`, debug-less — same verdict
+  as increment 4, still SATURN's blind-side guard); 5 python gates clean (token_audit now scans
+  27 source files, R6 silent); `ui --audit` PASS, 0 failures, the breakpoint matrix 0 violations
+  with the marker capture measured inside it, DPI-invariant at 4 scales.
+* **Visual review:** `sparq ui --svg-out … --review` (new flag: the slice-B showcase state —
+  env/ad · mod/lfo · flt/svf spawned, the svf wired into the chain and selected, marker at the
+  mockup's 1 240 Hz, a pumped manual-null session so the wells read live) rendered through
+  rsvg-convert beside `design-mode.svg`; the standing sheet is
+  `design/mockups/convergence-wo012-inc5.png`. Deviations declared as mockup-review findings
+  18–22 (class-coloured curve not the mockup's cyan; no glow on a param-derived curve — §8; no
+  f_max tick word at the 400 px inspector; the well is 96 px not the mockup's 180; the
+  envelope/sparkline rest outlines are hairline-faint until D1′'s live half lands).
+* **Smoke lessons, recorded:** (1) a BARE `flt/svf` is an illegal live patch — its audio input is
+  `required`, and WO-008 inc 7's host-side enforcement refuses the whole build, so the meter
+  smoke runs BEFORE the showcase nodes spawn and the review state wires gain → svf; (2) the svg
+  dumper appended `Z` to every path — an open stroke (a trace, a curve) grew a closing segment
+  back to its first point; the dumper now closes only closed paths.
+* **Seal:** `sync-wo012-inc5.zip` (24 entries — heading, namelist and archive contents counts
+  verified equal), stamp moved once at completion to the `--write` output below; `log_check.py`'s
+  BASELINE moved with it (tests 805, realtime 464.4, the new stamp).
+
+## Addendum — increment 5b, the operator's feedback round (2026-09-30, same day)
+
+The operator ran the increment and ruled on four things; each is a correction of a
+decision this plan made, and each landed as shipped code, sealed `sync-wo012-inc5b.zip`:
+
+1. **"Meter bars on many modules; only the main out should have meter bars."** D1's
+   audio-output fallback is withdrawn: `well_for` is the registry alone, and the registry gives
+   `Meters` to `out/main` only. The `ana/rms`/`ana/tap` cv bars are withdrawn with it. The ring
+   still carries every port's peaks (increment 2's contract, untouched) — the painter simply
+   spends them on the one meter the patch has. Smoke 38 now asserts bars inside `out/main`'s
+   body and NONE inside any other node's, on the drawn pixels.
+2. **"Playback was not allowed if a module had no input; this should not happen. Put a light
+   red highlight on a module that is missing a required input."** WO-008 increment 7's
+   build refusal is withdrawn at the executor: `Executor::build` COLLECTS missing required
+   inputs (`Executor::missing_required`) and builds; the flagged modules render silenced by
+   their own `has_input` honesty. The canvas computes the same set per frame
+   (`Graph::missing_required_inputs`) and the painter draws the flag: the error token at 0.12
+   alpha over the body fill, an error-weight border, `NO IN` in the badge row at Full LOD, an
+   error ring at Dot. PLAY logs one sentence naming every flagged node and both remedies.
+   The refusal's test became the flag's test; the vocabulary moved from refusal to flag.
+3. **"The inspect panel has a box with a description in; remove this box and description."**
+   D3's no-curve state is withdrawn: `InspectorLayout::plot` is an `Option` reserved only when
+   the module declares a curve; a no-curve inspector is the port strip and the rows, exactly as
+   before the increment. The marker, the audit capture and the routing all key off the same
+   `Option`, so nothing probes a well that is not there.
+4. **"Move the log to the bottom dock under a log tab."** The canvas log band is gone; the dock
+   grows a sixth tab, LOG (live, beside MODULES), showing the tail of the intent/diagnostic log
+   — as many lines as the dock height carries, newest at the bottom. Tabs are now real controls
+   (registered, audited, dense-badged like the panel headers); the four stub tabs stay disabled
+   words. The canvas keeps only the affordance hint.
+
+Measured with the round: 805 tests (net zero: +1 canvas flag model, −1 withdrawn cv-bar test),
+**44 smokes** (+2: the flag/PLAY smoke and the LOG-tab smoke; 38 and 41 rewritten for the
+rulings), every gate re-run green, goldens bit-identical (the executor change is build-side
+only — the render path never touches the flag list). Convergence sheet re-rendered with a bare
+`util/delay` in the review state so the flag is visible in it; mockup-review finding 23 records
+the flag's encoding.
+
+## Addendum 2 — increment 5c: Perform mode removed, the shell loads into Design (operator ruling, same day)
+
+"when the app loads it should load directly into design mode, remove the perform mode for now."
+Shipped as `sync-wo012-inc5c.zip`:
+
+* `ShellMode`, `ShellState.mode`, `set_mode`, `Action::ToggleMode`, the top-bar mode word button,
+  the rail mode glyph, the Perform macro-pad canvas branch and the Perform half of the audit
+  (nothing-below-class-L) are removed; the shell has ONE surface, Design, at every viewport.
+* The below-breakpoint rule changes shape: Design is no longer REFUSED (there was nothing to
+  offer instead) — the reflow rule collapses the inspector, then the rail, to keep the canvas's
+  60 % floor, `ShellLayout::below_breakpoint` reports the small viewport, and the shell says the
+  reflow once in words (one-voice rule). The audit matrix's below-breakpoint cell now shows
+  SMALL-REFLOW with 0 violations.
+* Gesture smoke 2 became the load-in-Design assertion: no `topbar/mode`, no `rail/mode/toggle`,
+  no `perform/*` pad is registered, and the Design chrome is live from frame one.
+* Measured: 804 tests (the Perform audit test left with its subject), 44 smokes, fmt, every
+  runnable clippy cell, 5 python gates, selftest 9/9 · 17/17 · 420.3× realtime, goldens
+  bit-identical. **Recovery note:** a sandbox storage wipe destroyed `modules/out/main/
+  sparqmod.toml` (a directory named `out` is on the snapshot exclude list), the git history and
+  the upstream clone (now 404). The manifest was reconstructed field-identical from the
+  generated doc (`module_docs --check` proves it) and the module's own contract; its sha moves
+  from `725bf07a…` and the move is declared in SYNC.md — the file travels in this bundle so
+  every tree agrees byte-for-byte afterwards.

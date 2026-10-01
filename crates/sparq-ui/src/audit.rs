@@ -7,12 +7,11 @@
 //! could not hit.
 //!
 //! Class minimums come from the tokens (`layout.toml [touch]`): S 44 · M 56 · L 72 · XL 96.
-//! The Design-mode dense exception (32 px, non-destructive controls only) is *badged*, never
-//! silently accepted — and it does not exist in Perform mode, where nothing below class L is
-//! interactive at all (input-model §4).
+//! The dense exception (32 px, non-destructive controls only) is *badged*, never silently
+//! accepted. (A Perform mode once added a stricter rule — nothing below class L interactive;
+//! the operator removed Perform from the runtime on 2026-09-30, and the rule went with it.)
 
 use crate::geom::Rect;
-use crate::shell::ShellMode;
 use crate::tokens::{
     LAYOUT_TOUCH_MIN_TARGET_DENSE, LAYOUT_TOUCH_TARGET_L, LAYOUT_TOUCH_TARGET_M,
     LAYOUT_TOUCH_TARGET_S, LAYOUT_TOUCH_TARGET_XL,
@@ -21,13 +20,13 @@ use crate::tokens::{
 /// The touch class an interactive element declares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TouchClass {
-    /// 44 px: dense Design-mode controls, list rows, port capture.
+    /// 44 px: dense controls, list rows, port capture.
     S,
     /// 56 px: inspector sliders, chips, tab items.
     M,
     /// 72 px: canvas node bodies, browser tiles, scene cells.
     L,
-    /// 96 px: Perform-mode macros, transport, panic.
+    /// 96 px: macros, transport, panic.
     XL,
 }
 
@@ -129,35 +128,19 @@ impl AuditReport {
 /// Measurement is the **shorter side**: a 500×30 px strip is not a 500 px target, and pretending
 /// otherwise is how touch UIs fail under stage gloves.
 #[must_use]
-pub fn audit(elements: &[InteractiveElement], mode: ShellMode) -> AuditReport {
+pub fn audit(elements: &[InteractiveElement]) -> AuditReport {
     let mut report = AuditReport { checked: elements.len(), ..AuditReport::default() };
     let dense_floor = LAYOUT_TOUCH_MIN_TARGET_DENSE as f32;
 
     for e in elements {
         let actual = e.rect.min_side();
 
-        // Perform mode: nothing below class L is interactive — its presence is the violation,
-        // whatever its size (input-model §4: Design chrome "is not merely hidden — it is not
-        // hit-testable").
-        if mode == ShellMode::Perform && e.class < TouchClass::L {
-            report.violations.push(Violation {
-                id: e.id.clone(),
-                required: TouchClass::L.min_px(),
-                actual,
-                reason: format!(
-                    "class {:?} is not interactive in Perform mode (nothing below L)",
-                    e.class
-                ),
-            });
-            continue;
-        }
-
         let required = e.class.min_px();
         if actual + 1e-3 >= required {
             continue;
         }
-        // The dense exception: Design mode, non-destructive, above the dense floor. Badged.
-        if mode == ShellMode::Design && e.dense_allowed && actual + 1e-3 >= dense_floor {
+        // The dense exception: non-destructive, above the dense floor. Badged, never silent.
+        if e.dense_allowed && actual + 1e-3 >= dense_floor {
             report.dense_badges.push(DenseBadge { id: e.id.clone(), actual });
             continue;
         }
@@ -165,8 +148,8 @@ pub fn audit(elements: &[InteractiveElement], mode: ShellMode) -> AuditReport {
             id: e.id.clone(),
             required,
             actual,
-            reason: if mode == ShellMode::Design && e.dense_allowed {
-                String::from("below even the Design-mode dense floor")
+            reason: if e.dense_allowed {
+                String::from("below even the dense floor")
             } else {
                 String::from("below its class minimum")
             },
@@ -202,7 +185,7 @@ mod tests {
     #[test]
     fn the_shorter_side_is_what_counts() {
         // A 500×40 strip declaring class S: 500 px of width does not make it touchable.
-        let r = audit(&[el("list/row", TouchClass::S, 500.0, 40.0, false)], ShellMode::Design);
+        let r = audit(&[el("list/row", TouchClass::S, 500.0, 40.0, false)]);
         assert_eq!(r.violations.len(), 1);
         assert_eq!(r.violations[0].actual, 40.0);
         assert_eq!(r.violations[0].required, 44.0);
@@ -216,43 +199,32 @@ mod tests {
             el("canvas/node", TouchClass::L, 240.0, 72.0, false),
             el("perform/panic", TouchClass::XL, 160.0, 96.0, false),
         ];
-        let r = audit(&els, ShellMode::Design);
+        let r = audit(&els);
         assert!(r.is_clean(), "{}", r.format_report());
         assert_eq!(r.checked, 4);
     }
 
     #[test]
-    fn the_dense_exception_badges_and_never_excuses_perform_mode() {
+    fn the_dense_exception_badges_and_never_excuses() {
         let small = el("design/chip", TouchClass::S, 36.0, 36.0, true);
-        let design = audit(std::slice::from_ref(&small), ShellMode::Design);
+        let design = audit(std::slice::from_ref(&small));
         assert!(design.is_clean());
-        assert_eq!(design.dense_badges.len(), 1, "dense is legal in Design...");
-        let perform = audit(std::slice::from_ref(&small), ShellMode::Perform);
-        assert!(!perform.is_clean(), "...and does not exist in Perform");
+        assert_eq!(design.dense_badges.len(), 1, "dense is legal, badged...");
 
-        // Below the dense floor it is a violation even in Design.
+        // Below the dense floor it is a violation, badge or no badge.
         let tiny = el("design/pin", TouchClass::S, 24.0, 24.0, true);
-        let r = audit(&[tiny], ShellMode::Design);
+        let r = audit(&[tiny]);
         assert_eq!(r.violations.len(), 1);
         assert!(r.violations[0].reason.contains("dense floor"));
 
         // Destructive controls get no exception, at any size above the floor.
         let destructive = el("design/delete", TouchClass::S, 36.0, 36.0, false);
-        assert_eq!(audit(&[destructive], ShellMode::Design).violations.len(), 1);
-    }
-
-    #[test]
-    fn perform_mode_rejects_small_classes_regardless_of_size() {
-        // A 56 px class-M chip is perfectly sized — and still not interactive in Perform.
-        let chip = el("perform/chip", TouchClass::M, 56.0, 56.0, false);
-        let r = audit(&[chip], ShellMode::Perform);
-        assert_eq!(r.violations.len(), 1);
-        assert!(r.violations[0].reason.contains("Perform mode"));
+        assert_eq!(audit(&[destructive]).violations.len(), 1);
     }
 
     #[test]
     fn the_report_names_every_failure_with_its_numbers() {
-        let r = audit(&[el("x/y", TouchClass::XL, 80.0, 80.0, false)], ShellMode::Design);
+        let r = audit(&[el("x/y", TouchClass::XL, 80.0, 80.0, false)]);
         let text = r.format_report();
         assert!(text.contains("FAIL"));
         assert!(text.contains("x/y"));

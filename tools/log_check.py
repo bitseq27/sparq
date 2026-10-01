@@ -71,16 +71,16 @@ def read_text(path: pathlib.Path) -> str:
 # EVERY SEAL - defect #83 was exactly that nobody moved it for two increments, so the device's next
 # gates run would have hard-failed a perfectly good tree against numbers three increments old.
 BASELINE: dict[str, object] = {
-    "stamp": "src 94f/2188595B",
+    "stamp": "src 96f/2381733B",
     "golden_hash": "ba577186c988db21",
     "tests_failed": 0,
-    "tests_passed": 777,  # workspace suite only - the release golden rerun is scoped out (#72)
+    "tests_passed": 808,  # workspace suite only - the release golden rerun is scoped out (#72)
     "selftest": "PASS",
     "ui_audit": "PASS",
     "allocations": 0,
     "reopen_leak_outstanding": 0,
     "soak_xruns": 0,
-    "realtime_x": 309.5,
+    "realtime_x": 434.8,
     # tools/dispatch-bench, medians over three runs (us per 100-module x 64-sample block)
     "dispatch_block_dyn_us": (1.65, 1.95),
     "dispatch_block_enum_us": (1.26, 1.30),

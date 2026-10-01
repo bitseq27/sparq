@@ -12,7 +12,8 @@ use crate::canvas::camera::{Camera, Lod};
 use crate::canvas::model::{Graph, Node, NodeSpec, PortRef, WireId};
 use crate::geom::{Rect, Vec2};
 use crate::tokens::{
-    LAYOUT_CANVAS_NODE_HEADER_HEIGHT, LAYOUT_CANVAS_NODE_PORT_ROW,
+    LAYOUT_CANVAS_NODE_HEADER_HEIGHT, LAYOUT_CANVAS_NODE_PARAM_ROW,
+    LAYOUT_CANVAS_NODE_PARAM_ROWS_MAX, LAYOUT_CANVAS_NODE_PORT_ROW, LAYOUT_CANVAS_NODE_WELL_HEIGHT,
     LAYOUT_CANVAS_NODE_WIDTH_DEFAULT, LAYOUT_SPACE_2, LAYOUT_TOUCH_PORT_CAPTURE_RADIUS,
     LAYOUT_TOUCH_WIRE_HIT_WIDTH,
 };
@@ -83,8 +84,30 @@ pub struct NodeLayout {
     pub screen: Rect,
     /// Header band in screen px (the title strip).
     pub header_screen: Rect,
+    /// Inline parameter rows (WO-012 increment 6, the PN convergence): manifest order, capped at
+    /// [`LAYOUT_CANVAS_NODE_PARAM_ROWS_MAX`]; the row rect is the touch/draw band, the track is
+    /// the slider's x-mapping span. Screen px. Empty at any LOD — the rows exist in the geometry
+    /// regardless, the painter and the hit-test both gate on Full.
+    pub param_rows: Vec<ParamRowLayout>,
+    /// Parameters beyond the cap: how many, and where the "+N MORE" word sits (screen px).
+    pub param_overflow: Option<(usize, Rect)>,
+    /// The inset display band (scope / meters / envelope / sparkline / curve) in screen px —
+    /// `None` when the registry gives this node no well.
+    pub well_band: Option<Rect>,
     /// Ports, inputs then outputs, in spec order within each direction.
     pub ports: Vec<PortLayout>,
+}
+
+/// One inline parameter row on a node card: which parameter, its band, and the slider track the
+/// gesture path maps x → value through (the inspector's mapping, on the canvas).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ParamRowLayout {
+    /// Index into the node spec's params (manifest order).
+    pub index: usize,
+    /// The row band, screen px — the touch target and the label/value line.
+    pub row: Rect,
+    /// The slider track span, screen px (x-mapping; the drawn line is thinner).
+    pub track: Rect,
 }
 
 /// A wire, laid out as a sampled bézier polyline in screen px.
@@ -142,14 +165,42 @@ const WIRE_END_GRAB_OFFSET: f32 = (LAYOUT_TOUCH_PORT_CAPTURE_RADIUS + LAYOUT_SPA
 /// grabbable body). Height = header + rows × port row. With one row this is 32 + 48 = 80 world px,
 /// whose shorter side (80) clears the class-L minimum (72), which is what makes a node auditable
 /// as a touch target without a special case.
+/// How many inline parameter rows a card draws (the cap), and how many parameters overflow it.
+#[must_use]
+pub fn param_split(spec: &NodeSpec) -> (usize, usize) {
+    let n = spec.params.len();
+    let shown = n.min(LAYOUT_CANVAS_NODE_PARAM_ROWS_MAX as usize);
+    (shown, n - shown)
+}
+
+/// The card's vertical anatomy (world px): header, param band, well band, port band — the
+/// Persistent-Nodes convergence's card, in sparq's token scale (WO-012 increment 6).
+#[must_use]
+pub fn node_bands(spec: &NodeSpec) -> (f32, Option<f32>, f32) {
+    let (shown, overflow) = param_split(spec);
+    let row = LAYOUT_CANVAS_NODE_PARAM_ROW as f32;
+    let mut param_h = shown as f32 * row;
+    if overflow > 0 {
+        param_h += row / 2.0; // the "+N MORE" word rides a half row — a reading, not a control
+    }
+    let well = crate::canvas::inset::well_for(spec).map(|_| LAYOUT_CANVAS_NODE_WELL_HEIGHT as f32);
+    (param_h, well, param_h + well.unwrap_or(0.0))
+}
+
+/// The node card's world size: header + param band + well band + port band (the increment-6
+/// anatomy). With one port row and no params/well this is the old 80 px box, whose shorter
+/// side clears the class-L minimum — the audit property the original size was chosen for.
 #[must_use]
 pub fn node_size(spec: &NodeSpec) -> Vec2 {
     let inputs = spec.inputs().count();
     let outputs = spec.outputs().count();
     let rows = inputs.max(outputs).max(1);
     let w = LAYOUT_CANVAS_NODE_WIDTH_DEFAULT as f32;
-    let h =
-        LAYOUT_CANVAS_NODE_HEADER_HEIGHT as f32 + rows as f32 * LAYOUT_CANVAS_NODE_PORT_ROW as f32;
+    let (param_h, well_h, _) = node_bands(spec);
+    let h = LAYOUT_CANVAS_NODE_HEADER_HEIGHT as f32
+        + param_h
+        + well_h.unwrap_or(0.0)
+        + rows as f32 * LAYOUT_CANVAS_NODE_PORT_ROW as f32;
     Vec2::new(w, h)
 }
 
@@ -203,9 +254,45 @@ fn layout_node(
 
     let row = LAYOUT_CANVAS_NODE_PORT_ROW as f32;
     let header = LAYOUT_CANVAS_NODE_HEADER_HEIGHT as f32;
+    let (param_h, well_h, mid_h) = node_bands(&n.spec);
     let mut ports = Vec::new();
 
-    // Inputs down the left edge, outputs down the right, each in its own row stack.
+    // Inline parameter rows (increment 6): manifest order, capped; the track spans the card
+    // minus token padding, sitting in the row's lower half (label/value line above it).
+    let (shown, overflow) = param_split(&n.spec);
+    let prow = LAYOUT_CANVAS_NODE_PARAM_ROW as f32;
+    let pad = LAYOUT_SPACE_2 as f32;
+    let mut param_rows = Vec::with_capacity(shown);
+    for i in 0..shown {
+        let y0 = n.pos.y + header + i as f32 * prow;
+        let row_rect = Rect::new(Vec2::new(n.pos.x, y0), Vec2::new(n.pos.x + size.x, y0 + prow));
+        let track = Rect::new(
+            Vec2::new(n.pos.x + pad, y0 + prow * 0.55),
+            Vec2::new(n.pos.x + size.x - pad, y0 + prow - pad * 0.5),
+        );
+        param_rows.push(ParamRowLayout {
+            index: i,
+            row: Rect::new(
+                camera.to_screen(row_rect.min, view),
+                camera.to_screen(row_rect.max, view),
+            ),
+            track: Rect::new(camera.to_screen(track.min, view), camera.to_screen(track.max, view)),
+        });
+    }
+    let param_overflow = (overflow > 0).then(|| {
+        let y0 = n.pos.y + header + shown as f32 * prow;
+        let r = Rect::new(Vec2::new(n.pos.x, y0), Vec2::new(n.pos.x + size.x, y0 + prow / 2.0));
+        (overflow, Rect::new(camera.to_screen(r.min, view), camera.to_screen(r.max, view)))
+    });
+    let well_band = well_h.map(|wh| {
+        let y0 = n.pos.y + header + param_h;
+        let r = Rect::new(Vec2::new(n.pos.x, y0), Vec2::new(n.pos.x + size.x, y0 + wh));
+        Rect::new(camera.to_screen(r.min, view), camera.to_screen(r.max, view))
+    });
+    let _ = mid_h;
+
+    // Inputs down the left edge, outputs down the right, each in its own row stack — the stack
+    // starts BELOW the param and well bands (the card's anatomy, increment 6).
     for (side, dir) in [(0.0, Direction::In), (size.x, Direction::Out)] {
         let mut r = 0usize;
         for idx in
@@ -216,7 +303,8 @@ fn layout_node(
                 None => continue,
             };
             let wx = n.pos.x + side;
-            let wy = n.pos.y + header + r as f32 * row + row / 2.0;
+            let wy =
+                n.pos.y + header + param_h + well_h.unwrap_or(0.0) + r as f32 * row + row / 2.0;
             let wpos = Vec2::new(wx, wy);
             let class = signal_class(port);
             let pref = PortRef::new(n.id, idx);
@@ -232,7 +320,16 @@ fn layout_node(
         }
     }
 
-    NodeLayout { id: n.id, world, screen, header_screen, ports }
+    NodeLayout {
+        id: n.id,
+        world,
+        screen,
+        header_screen,
+        param_rows,
+        param_overflow,
+        well_band,
+        ports,
+    }
 }
 
 /// Whether a wire is a documented conversion (the only silent one: multi→mono summing).
@@ -331,12 +428,32 @@ pub enum Hit {
     Port(PortRef, Direction),
     /// A wire's re-patch grab point (which wire, which end), within the capture radius.
     WireEnd(WireId, WireEndSide),
+    /// An inline parameter row on a node card (which node, which param, the slider track) —
+    /// the row under the finger is the row you edit (increment 6).
+    Param(crate::canvas::model::NodeId, usize, Rect),
     /// A node body.
     Node(crate::canvas::model::NodeId),
     /// A wire.
     Wire(WireId),
     /// Empty canvas.
     Empty,
+}
+
+impl CanvasLayout {
+    /// Restyle every wire to a straight run between its endpoints (the toolbar's wire select,
+    /// increment 6): the points AND the re-patch grab points move together, so the hit-test and
+    /// the painter keep agreeing — what you see is what you can grab.
+    pub fn make_wires_straight(&mut self) {
+        for w in &mut self.wires {
+            let (Some(&first), Some(&last)) = (w.points.first(), w.points.last()) else {
+                continue;
+            };
+            w.points = vec![first, last];
+            let (gf, gt) = grab_points(&w.points);
+            w.grab_from = gf;
+            w.grab_to = gt;
+        }
+    }
 }
 
 /// Hit-test a screen point against a computed layout. `lod` gates port and wire-end hits: at
@@ -363,6 +480,17 @@ pub fn hit_test(layout: &CanvasLayout, pos_screen: Vec2, lod: Lod) -> Hit {
             }
             if w.grab_to.distance(pos_screen) <= capture {
                 return Hit::WireEnd(w.id, WireEndSide::To);
+            }
+        }
+    }
+    // Inline parameter rows (increment 6): a row under the finger is the row you edit. Full LOD
+    // only — at Simplified the rows are not drawn, and what you cannot see you cannot touch.
+    if lod == Lod::Full {
+        for n in layout.nodes.iter().rev() {
+            for pr in &n.param_rows {
+                if pr.row.contains(pos_screen) {
+                    return Hit::Param(n.id, pr.index, pr.track);
+                }
             }
         }
     }

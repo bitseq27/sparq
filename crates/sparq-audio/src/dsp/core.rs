@@ -199,6 +199,55 @@ pub fn linear_to_db(linear: f32) -> f32 {
     }
 }
 
+/// The coefficient glide's time constant, ms (defect #85, third round — the operator's ear,
+/// twice): a one-block linear ramp reaches its target in 1.3 ms and then HOLDS until the next
+/// UI snapshot (~16 ms), so a fast drag produces a staircase with sharp kinks at the update
+/// rate — audible as bumps. A one-pole glide chases the moving target instead: the envelope is
+/// C0-continuous across every boundary and smooth inside every block, at the cost of a
+/// declared 25 ms of fader lag (well inside the "motorised fader" feel, far below any
+/// musical event). SNAPPING (see [`glide_snap`]) makes the settled state exact, so static and
+/// settled renders remain the constant multiply the goldens pin.
+pub const GLIDE_TAU_MS: f32 = 25.0;
+
+/// The one-pole glide coefficient for one step of `frames_per_step` samples at `sample_rate`:
+/// `1 − e^(−dt/τ)`. Per-sample steps pass 1; per-frame steps on a block pass the block size.
+#[must_use]
+pub fn glide_k(sample_rate: u32, frames_per_step: usize) -> f32 {
+    let dt_ms = frames_per_step.max(1) as f32 * 1000.0 / sample_rate.max(1) as f32;
+    1.0 - (-dt_ms / GLIDE_TAU_MS).exp()
+}
+
+/// The snap: within −80 dB of the target (coefficient distance 1e-4) the glide lands EXACTLY,
+/// so a settled coefficient is the constant multiply again — bit-exact statics, which is what
+/// keeps every checked-in golden true while edits glide.
+#[must_use]
+pub fn glide_snap(g: f32, target: f32) -> f32 {
+    if (target - g).abs() < 1e-4 {
+        target
+    } else {
+        g
+    }
+}
+
+/// One glide step: `g` toward `target` by `k`, then the snap.
+#[must_use]
+pub fn glide(g: f32, target: f32, k: f32) -> f32 {
+    glide_snap(g + k * (target - g), target)
+}
+
+/// The first-block prime: a module fresh from its constructor has no applied coefficient yet
+/// (NaN sentinel), so its first block runs CONSTANT at the target — a patch that loads with
+/// non-default params starts honest, never fading in from a guess (and static goldens start
+/// bit-exact).
+#[must_use]
+pub fn primed(applied: f32, target: f32) -> f32 {
+    if applied.is_finite() {
+        applied
+    } else {
+        target
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

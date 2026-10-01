@@ -73,7 +73,10 @@
 //! * Channel-set `variable` resolution is single-pass with a device-channels fallback; every
 //!   Phase 0 module declares concrete sets, and the cascade rule (module-api §2) is exercised
 //!   properly when a variable-set module exists.
-//! * A `required` input that is unconnected IS refused at build (WO-008 increment 7 — the
+//! * A `required` input that is unconnected is FLAGGED at build and the module renders
+//!   silenced (WO-008 increment 7 built the refusal; the operator's 2026-09-30 ruling turned it
+//!   into a visible flag + silence, because playback must not be blocked by a module the user
+//!   can see is unfinished — the
 //!   declared open item, shipped as its own increment exactly because it moves the stress
 //!   harness's counters and the determinism world's shape, both recorded on purpose): the
 //!   manifest's declaration is a contract the HOST keeps, and a module that said "I need this
@@ -268,9 +271,10 @@ pub enum ExecError {
         /// Destination channels.
         to: usize,
     },
-    /// A `required` input port with no incoming wire (WO-008 increment 7: the host enforces
-    /// the manifest's declaration). The module never sees a required port unconnected; the
-    /// explicit-unconnected-signal vocabulary lives at ports declared `required = false`.
+    /// A `required` input port with no incoming wire. **No longer raised by `build`**: the
+    /// operator's 2026-09-30 ruling turned the refusal into a flag (see
+    /// [`Executor::missing_required`]) — the variant stays so downstream `match`es on
+    /// `ExecError` remain exhaustive, and names the condition the flag reports.
     RequiredUnconnected {
         /// Which node.
         node: NodeId,
@@ -656,6 +660,12 @@ pub struct Executor {
     wd_events: Vec<WatchdogEvent>,
     /// Events not logged because the journal was full — counted, never silently dropped.
     wd_dropped: u64,
+    /// Required inputs with no incoming wire, collected at build (operator ruling 2026-09-30:
+    /// FLAG, not refuse). Kernel node ids in graph order × manifest order, deterministic.
+    /// The flagged modules render silenced (their own `has_input` honesty); the host paints a
+    /// light-red highlight on them and says so in words, instead of the build refusing the
+    /// whole patch — playback must not be blocked by a module the user can see is unfinished.
+    missing_required: Vec<(NodeId, String, String)>,
 }
 
 impl std::fmt::Debug for Executor {
@@ -1026,28 +1036,26 @@ impl Executor {
             }
         }
 
-        // ---- required inputs must have wires (WO-008 increment 7's enforcement)
-        // A manifest that declares an input `required` is a contract the HOST keeps: the
-        // build refuses the patch in words rather than hand the module a signal-less port it
-        // said it needs. One or more incoming carried edges satisfies a port — audio fan-in is
-        // legal, event multi-source is legal, and a cv fan-in was already refused by the edge
-        // pass above, so this check can never legitimise a wiring the matrix refuses. Outputs
-        // are out of scope by the compiled contract's own words (`Port::required` = whether an
-        // unconnected INPUT is an error): a sinkless output is a legal patch shape (the demo's
-        // undrawn `rms.level` wire is the standing example). Graph order × manifest order:
-        // first violation wins, deterministic like every refusal in this gauntlet.
+        // ---- required inputs with no wire are FLAGGED, not refused (operator ruling
+        // 2026-09-30). WO-008 increment 7 made the host refuse the whole patch here; the
+        // operator's correction is that playback must not be blocked by a module the user can
+        // SEE is unfinished — so the build collects every missing required input, the flagged
+        // modules render silenced (their own `has_input` honesty, unchanged), and the host
+        // paints a light-red highlight on those nodes and names them in words. The declaration
+        // is still enforced as a contract — just as a visible flag plus silence, not as a
+        // refusal that stops everyone else playing. One or more incoming carried edges
+        // satisfies a port; outputs stay out of scope (`Port::required` is about INPUTs): a
+        // sinkless output is a legal patch shape (the demo's undrawn `rms.level` wire).
+        // Graph order × manifest order, deterministic.
         let mut fed: HashSet<(usize, u32)> = HashSet::with_capacity(ends.len());
         for (_, dst) in &ends {
             fed.insert((dst.slot, dst.manifest_port));
         }
+        let mut missing_required: Vec<(NodeId, String, String)> = Vec::new();
         for (slot, (id, build, _)) in slots.iter().enumerate() {
             for (pi, p) in build.manifest.ports().iter().enumerate() {
                 if p.direction == Direction::In && p.required && !fed.contains(&(slot, pi as u32)) {
-                    return Err(ExecError::RequiredUnconnected {
-                        node: *id,
-                        module: build.manifest.id().to_string(),
-                        port: p.id.clone(),
-                    });
+                    missing_required.push((*id, build.manifest.id().to_string(), p.id.clone()));
                 }
             }
         }
@@ -1394,6 +1402,7 @@ impl Executor {
             // capacity never allocates. Beyond the cap events are counted as dropped.
             wd_events: Vec::with_capacity(WATCHDOG_EVENT_CAP),
             wd_dropped: 0,
+            missing_required,
         })
     }
 
@@ -2048,6 +2057,15 @@ impl Executor {
         self.budget_bytes
     }
 
+    /// Required inputs with no incoming wire, collected at build — the nodes the host paints
+    /// with the light-red "unfinished" highlight (operator ruling 2026-09-30: flag, not
+    /// refuse). Kernel node ids, `(node, module id, port id)`, graph order × manifest order.
+    /// The flagged modules render silenced by their own `has_input` honesty; nothing here
+    /// blocks playback.
+    #[must_use]
+    pub fn missing_required(&self) -> &[(NodeId, String, String)] {
+        &self.missing_required
+    }
     /// The execution order (the kernel graph's cached order, captured at build).
     #[must_use]
     pub fn order(&self) -> &[NodeId] {

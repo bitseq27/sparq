@@ -357,11 +357,13 @@ fn an_unconnected_input_is_silenced_and_reported() {
 }
 
 #[test]
-fn a_required_input_with_no_wire_is_refused_in_words() {
-    // WO-008 increment 7: the manifest's `required` is a contract the HOST keeps — the shape
-    // the six single-input shipped processors declare (`gain`, `svf`, `rms`, `delay`,
-    // `bitcrush`, `panner`). A bare one is refused at build, in ONE sentence naming the node,
-    // the module, the port and both remedies; nothing is half-built.
+fn a_required_input_with_no_wire_is_flagged_and_silenced_not_refused() {
+    // WO-008 increment 7 built the refusal; the operator's 2026-09-30 ruling turned it into a
+    // FLAG + silence, because playback must not be blocked by a module the user can see is
+    // unfinished. The manifest's `required` is still a contract the host keeps — just as a
+    // visible flag (see [`Executor::missing_required`], which the host paints with the
+    // light-red highlight) plus a silenced node, not as a refusal that stops the whole patch.
+    // The shipped processors' declaration: `gain`, `svf`, `rms`, `delay`, `bitcrush`, `panner`.
     let mut m = gain_manifest("mono");
     m.ports[0].required = Some(true); // the shipped processors' declaration
     let vm = validated(m);
@@ -371,13 +373,19 @@ fn a_required_input_with_no_wire_is_refused_in_words() {
         gn,
         NodeBuild { module: Box::new(Gain), manifest: vm.clone(), params: params(&[1.0]) },
     )];
-    let err = Executor::build(graph, builds, cfg(1)).unwrap_err();
-    assert!(matches!(err, ExecError::RequiredUnconnected { .. }), "got {err:?}");
-    let s = err.to_string();
-    for needle in ["sparq/test/gain", "`in`", "required", "connect a source", "required = false"] {
-        assert!(s.contains(needle), "the sentence must name {needle}: {s}");
-    }
-    // The compliant twin builds: the same required input with one wire into it.
+    let mut ex = Executor::build(graph, builds, cfg(1)).unwrap();
+    // The flag names the node, the module and the port, deterministically.
+    let missing = ex.missing_required();
+    assert_eq!(missing.len(), 1, "one missing required input: {missing:?}");
+    assert_eq!(missing[0].0, gn);
+    assert_eq!(missing[0].1, "sparq/test/gain");
+    assert_eq!(missing[0].2, "in");
+    // The flagged node renders silenced — nothing is half-built, nothing blocks playback.
+    let mut out = vec![9.0f32; FRAMES];
+    ex.render_block(gn, &mut out).unwrap();
+    assert!(out.iter().all(|&s| s == 0.0));
+    assert_eq!(ex.meter(gn).map(|m| m.status), Some(BlockStatus::Silenced));
+    // The compliant twin builds with the same required input wired, and is NOT flagged.
     let mut graph = Graph::new();
     let dc = graph.add_node(0);
     let gn = graph.add_node(0);

@@ -21,6 +21,12 @@
 //! * [`scope`] — the `dsp/scope` display model: rolling trace accumulation, trigger alignment
 //!   and polyline geometry, toolkit-independent — the manifest's "the UI accumulates blocks up
 //!   to the timebase" made code (WO-013 increment 6).
+//! * [`inset`] — the node inset displays (WO-012 increment 5): the well registry that says which
+//!   module wears which well, and the param → shape mappings (the envelope triangle, the LFO
+//!   period) the wells draw at rest.
+//! * [`response`] — the response-plot model (WO-012 increment 5): log-f × dB axes, the
+//!   magnitude-grid → polyline mapping and the probe marker's geometry. It CONSUMES magnitudes;
+//!   the curve contract's DSP lives in the module that owns it (`SvfFilter::magnitude_at`).
 //! * [`interact`] — [`interact::CanvasState`], the intent→operation table: gestures in, ops and
 //!   *explained* refusals out.
 //!
@@ -33,11 +39,13 @@ pub mod browser;
 pub mod camera;
 pub mod connect;
 pub mod entry;
+pub mod inset;
 pub mod inspector;
 pub mod interact;
 pub mod layout;
 pub mod levels;
 pub mod model;
+pub mod response;
 pub mod scope;
 
 /// The stable id of the master-output module (WO-014 increment 5). The canvas's master-handover
@@ -55,8 +63,10 @@ pub use browser::{fuzzy_score, rank, BrowserHit, BrowserItem, BrowserState};
 pub use camera::{Camera, Lod};
 pub use connect::{ConnectContext, ConnectOutcome, Rejection};
 pub use entry::{RenameState, TextEntry, ENTRY_MAX_CHARS, RENAME_HINT};
+pub use inset::{inset_well, well_for, Well};
 pub use inspector::{InspectorLayout, ParamRow};
 pub use interact::{CanvasEvent, CanvasState, Interaction, MenuRow, MenuTarget};
 pub use layout::{CanvasLayout, Hit, NodeLayout, PortLayout, WireEndSide, WireLayout};
 pub use levels::{wire_level, NodeLevels};
 pub use model::{Graph, Node, NodeFlags, NodeId, NodeSpec, Op, PortRef, UndoStack, Wire, WireId};
+pub use response::{Axes as ResponseAxes, Curves as ResponseCurves, ResponseFrame};

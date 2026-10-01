@@ -1,41 +1,29 @@
 EXTRACT AT THE REPO ROOT:  Q:\morphosis\code\sparq
 =====================================================
 
-This zip is sync-wo008-inc7. Extract it over the existing tree and choose
-"Replace the files in the destination" for every prompt. Do not extract into a
-subfolder, and do not git clone onto this machine (defect #71: an extraction here
-once produced a stray `decode (2).rs` instead of overwriting, and the stray
-poisoned the build stamp). It stacks on sync-wo006-inc15, which you applied on
-2026-09-29.
+This zip is sync-wo014-inc7c - the third and (by the gates) final round of the
+crackle/bump fix. Extract it over the existing tree, "Replace the files in the
+destination" for every prompt. It stacks on sync-wo014-inc7b.
 
 THEN, BEFORE ANYTHING ELSE - ten seconds, no build:
 
     scripts\synccheck.bat
 
-It hashes every file that decides what the binary is against SYNC-STAMP.txt and
-names anything that differs. Expected: "sync_check: OK - 151 files match
-sync wo008-inc7, src 92f/2021628B". That single line is the difference between
-this run and the one that failed with six rustc errors about methods that were
-sitting in the file on disk (defect #78).
+Expected: "sync_check: OK - 155 files match sync wo014-inc7c, src 96f/..." (the
+exact fingerprint lives in SYNC-STAMP.txt; the stamp wins over this sheet).
 
-WHAT MOVES: the host now enforces the manifests' `required` inputs - a patch
-with a bare required input is REFUSED IN WORDS at build (the sentence names the
-node, the module, the port and both remedies). The canvas demo's fourth node is
-now a bare Main Out instead of a spare Gain; canvas-render.wav does NOT move
-(1 920 046 bytes, same samples). gates.bat now expects 762 passed / 0 failed /
-1 ignored, and the mutation-stress evidence line reads the NEW recorded baseline
-(hash 7bb06379bd6845e5, 2 383 swaps, 7 617 refused) - moved on purpose by this
-increment, not a regression. Full story: WO008-INC7-PLAN.md and the build-log
-entry in PHASE0-WORKORDERS.md (search "increment 7").
+WHAT MOVES: the shape of the coefficient glide. Rounds 7/7b made edits
+continuous; your fast-drag bumps were the SHAPE - a linear ramp that reached
+each snapshot in one block (1.3 ms) and then held until the next UI snapshot
+(~16 ms): a staircase, kinks at the update rate. Now the coefficient chases the
+moving target with a one-pole glide (25 ms time constant, the feel of a
+motorised fader), smooth inside every block and continuous across every
+boundary. A snap at -80 dB lands settled edits exactly, so static AND settled
+renders are the constant multiply again - every golden keeps its bits. Mute
+still cuts in exact zeros immediately. gates.bat expects 804+4 = 808 passed /
+0 failed / 1 ignored and ui --audit reports 50 smokes (smoke 27 now pumps past
+two glide taus before asking whether the level arrived - the lag is declared).
 
-THEN the standing order (unchanged contracts):
-
-    scripts\test004.bat   (attempt 4 - the exclusive acceptance at 48 kHz)
-    scripts\test006.bat   (the window session, steps F-I)
-    scripts\gates.bat
-
-and send back the DIGESTS: test004-digest.log, test006-digest.log,
-gates-digest.log, logs\ui-digest.log (the full logs stay on the device).
-
-The build stamp moves: src 92f/2021628B. If build.bat says stale and rebuilds
-once, that is the zip-sync freshness trap working as designed (defect #49).
+THE ASK, one line: drag the trim FAST again. The staircase kinks were the
+bumps; the glide has none. Then test004 attempt 4 when you have the stage time
+- still the WO-006 acceptance; do not fire the ADR-008 exit early.

@@ -190,6 +190,91 @@ impl SvfFilter {
         }
     }
 
+    /// Linear magnitude `|H(e^{jω})|` at `freq_hz` for the CURRENT mode, from the live
+    /// coefficients — the per-module curve contract's reference implementation (WO-012
+    /// increment 5, D2). Display-only: pure, allocation-free, and audio-thread-forbidden by
+    /// contract (never called from `tick`/`process`, so no golden can move).
+    ///
+    /// The exact discrete-time response, solved in the z-domain (`z = e^{jωT}`, `ω = 2πf/fs`)
+    /// from the same `a1/a2/a3/k` the sample loop uses. With `I = 2/(z+1)` the trapezoidal
+    /// integrator's frequency-domain gain and `Den = (1 − I(1−a3))(1 − a1 I) + a2² I²`:
+    ///
+    /// * `H_lp = a3 / Den` (the identity `a2² = a1·a3` collapses the general numerator —
+    ///   `a2 = g·a1`, `a3 = g·a2`, so `a1·a3 = a2²`)
+    /// * `H_bp = a2 (1 − I) / Den`
+    /// * `H_hp = (1 − I)[(1 − a1 I) − k a2] / Den`
+    /// * `H_notch = H_lp + H_hp`, `H_peak = H_lp − H_hp` — the mode's own sum/difference,
+    ///   matching `tick`'s `Notch`/`Peak` arms exactly; `Morph` is the same weighted sum, in
+    ///   complex.
+    ///
+    /// Evaluated in the `J = (z+1)/2 = 1/I` form (numerator and denominator both scaled by
+    /// `J²`), which is algebraically identical and finite at the boundaries: DC (`J = 1`)
+    /// gives `H_lp = 1`, `H_hp = H_bp = 0`; Nyquist (`J = 0`) gives `H_lp → 0`, `H_hp → 1` —
+    /// the two points every response must get right, with no `1/0` anywhere on the grid.
+    ///
+    /// `drive` is included: `tick` applies it as a plain linear input gain, so the display and
+    /// the sine sweep measure the same transfer. The sample loop's `±8` headroom clamp is a
+    /// large-signal guard, not part of the linear response, and is deliberately NOT modelled.
+    /// An unprepared filter (no coefficients — `tick` would output garbage) reads `0.0`, the
+    /// display's honest floor; a non-finite ask or result sanitises to `0.0` the same way.
+    #[must_use]
+    pub fn magnitude_at(&self, freq_hz: f64) -> f64 {
+        if !self.is_prepared() || !freq_hz.is_finite() {
+            return 0.0;
+        }
+        let fs = f64::from(self.sample_rate);
+        let theta = std::f64::consts::TAU * freq_hz.clamp(0.0, fs * 0.5) / fs;
+        // J = (z+1)/2 = cos(θ/2)·e^{jθ/2}, as a plain (re, im) pair — no complex type, no alloc.
+        let (sin_half, cos_half) = (theta * 0.5).sin_cos();
+        let jr = cos_half * cos_half;
+        let ji = cos_half * sin_half;
+
+        let (a1, a2, a3, k) =
+            (f64::from(self.a1), f64::from(self.a2), f64::from(self.a3), f64::from(self.k));
+        // Complex helpers, inlined: mul/add/sub of (re, im) pairs and |·|.
+        let mul =
+            |(ar, ai): (f64, f64), (br, bi): (f64, f64)| (ar * br - ai * bi, ar * bi + ai * br);
+        let add = |(ar, ai): (f64, f64), (br, bi): (f64, f64)| (ar + br, ai + bi);
+        let sub = |(ar, ai): (f64, f64), (br, bi): (f64, f64)| (ar - br, ai - bi);
+        let j = (jr, ji);
+        let j2 = mul(j, j);
+
+        // Den·J² = (J − (1−a3))(J − a1) + a2²
+        let den = add(mul(sub(j, (1.0 - a3, 0.0)), sub(j, (a1, 0.0))), (a2 * a2, 0.0));
+        let den_m2 = den.0 * den.0 + den.1 * den.1;
+        if den_m2.is_nan() || den_m2 <= 0.0 {
+            return 0.0; // a degenerate coefficient set reads at the floor, never NaN
+        }
+        // H·J² numerators (the J² scaling cancels between numerator and denominator).
+        let h_lp = (a3 * j2.0, a3 * j2.1);
+        let jm1 = sub(j, (1.0, 0.0));
+        let h_bp = mul((a2, 0.0), mul(jm1, j));
+        let h_hp = mul(jm1, sub(sub(j, mul((k * a2, 0.0), j)), (a1, 0.0)));
+        let h_notch = add(h_lp, h_hp);
+        let h = match self.mode {
+            SvfMode::LowPass => h_lp,
+            SvfMode::HighPass => h_hp,
+            SvfMode::BandPass => h_bp,
+            SvfMode::Notch => h_notch,
+            SvfMode::Peak => sub(h_lp, h_hp),
+            SvfMode::Morph => {
+                let m = self.morph;
+                add(
+                    add(mul((f64::from(m[0]), 0.0), h_lp), mul((f64::from(m[1]), 0.0), h_bp)),
+                    add(mul((f64::from(m[2]), 0.0), h_hp), mul((f64::from(m[3]), 0.0), h_notch)),
+                )
+            },
+        };
+        // |H| = |H·J²| / |Den·J²| — one square root per side, both real and non-negative.
+        let num_m2 = h.0 * h.0 + h.1 * h.1;
+        let mag = (num_m2 / den_m2).sqrt() * f64::from(self.drive);
+        if mag.is_finite() {
+            mag
+        } else {
+            0.0
+        }
+    }
+
     /// All four responses for one sample, as `[lp, bp, hp, notch]`. Useful for displays and for
     /// modules that want to morph without changing `mode`.
     #[inline]
@@ -219,6 +304,13 @@ mod tests {
     /// steady-state peak. Deliberately crude and dependency-free: it is a sanity instrument, not a
     /// reference analyser.
     fn response(f: &mut SvfFilter, freq: f64, sr: u32, seconds: f64) -> f64 {
+        response_amp(f, freq, sr, seconds, 0.5)
+    }
+
+    /// [`response`] at a chosen input amplitude. The drift gate drives it QUIET (0.05): a
+    /// resonant peak mode at 0.5 would exceed `tick`'s ±8 headroom clamp and the instrument
+    /// would measure the ceiling instead of the filter.
+    fn response_amp(f: &mut SvfFilter, freq: f64, sr: u32, seconds: f64, amp: f64) -> f64 {
         f.prepare(sr);
         f.reset();
         let n = (seconds * f64::from(sr)) as usize;
@@ -228,7 +320,7 @@ mod tests {
         // skip the first 20 % as transient
         let skip = n / 5;
         for i in 0..n {
-            let y = f.tick((phase.sin() * 0.5) as f32);
+            let y = f.tick((phase.sin() * amp) as f32);
             phase += inc;
             if phase > std::f64::consts::TAU {
                 phase -= std::f64::consts::TAU;
@@ -237,7 +329,7 @@ mod tests {
                 peak = peak.max(f64::from(y.abs()));
             }
         }
-        peak / 0.5
+        peak / amp
     }
 
     fn db(v: f64) -> f64 {
@@ -390,5 +482,143 @@ mod tests {
             peak = peak.max(y.abs());
         }
         assert!(peak < 8.0, "audio-rate cutoff modulation ran away: peak {peak}");
+    }
+
+    // ------------------------------------------------ the curve contract's drift gate (inc 5)
+    //
+    // `magnitude_at` is the DISPLAY's copy of nothing: it is computed from the filter's own
+    // cached coefficients, and this test pins it to the time-domain instrument above — the
+    // analytic curve and the measured filter must agree, or the inspector plot is a lie with
+    // axes on it. Tolerances are the plan of record's (WO012-INC5-PLAN.md D2): ≤ 0.5 dB where
+    // the response is in its passband (|H| ≥ −20 dB), ≤ 1 dB elsewhere — the sweep's crude
+    // peak measurement, not the math, is what the looser stopband band absorbs.
+
+    #[test]
+    fn magnitude_at_gets_the_two_boundary_points_every_response_must_get_right() {
+        let sr = 48_000;
+        for reso in [0.0f32, 0.7] {
+            let mut f = SvfFilter::new(1000.0, reso);
+            f.prepare(sr);
+            // DC (J = 1): lp passes, hp and bp reject.
+            f.mode = SvfMode::LowPass;
+            assert!((f.magnitude_at(0.0) - 1.0).abs() < 1e-6, "lp at DC is unity");
+            f.mode = SvfMode::HighPass;
+            assert!(f.magnitude_at(0.0).abs() < 1e-6, "hp at DC is zero");
+            f.mode = SvfMode::BandPass;
+            assert!(f.magnitude_at(0.0).abs() < 1e-6, "bp at DC is zero");
+            // Nyquist (J = 0): lp rejects, hp passes — computed, not extrapolated: the J-form
+            // is finite exactly at fs/2, so the grid can include its own endpoint.
+            f.mode = SvfMode::LowPass;
+            assert!(f.magnitude_at(f64::from(sr) / 2.0).abs() < 1e-6, "lp at Nyquist is zero");
+            f.mode = SvfMode::HighPass;
+            assert!(
+                (f.magnitude_at(f64::from(sr) / 2.0) - 1.0).abs() < 1e-6,
+                "hp at Nyquist is unity"
+            );
+            // Notch is lp + hp at both ends; peak is lp − hp. Both follow from the arms.
+            f.mode = SvfMode::Notch;
+            assert!((f.magnitude_at(0.0) - 1.0).abs() < 1e-6, "notch at DC is unity");
+            f.mode = SvfMode::Peak;
+            assert!((f.magnitude_at(0.0) - 1.0).abs() < 1e-6, "peak at DC is unity");
+        }
+    }
+
+    #[test]
+    fn magnitude_at_matches_the_sine_sweep_across_all_five_modes() {
+        let sr = 48_000;
+        for &mode in
+            &[SvfMode::LowPass, SvfMode::HighPass, SvfMode::BandPass, SvfMode::Notch, SvfMode::Peak]
+        {
+            for fc in [200.0f64, 1_000.0, 5_000.0] {
+                for reso in [0.0f32, 0.5, 0.9] {
+                    let mut f = SvfFilter::new(fc, reso);
+                    f.mode = mode;
+                    f.prepare(sr);
+                    for &probe in &[0.25f64, 0.5, 1.0, 2.0, 4.0] {
+                        let freq = fc * probe;
+                        if freq >= f64::from(sr) * 0.45 {
+                            continue; // keep the sweep instrument away from its own Nyquist
+                        }
+                        let analytic = db(f.magnitude_at(freq));
+                        let measured = db(response_amp(&mut f, freq, sr, 0.6, 0.05));
+                        if analytic >= -20.0 {
+                            // Passband: the two must agree tightly — this is the band a user
+                            // reads the curve in.
+                            assert!(
+                                (analytic - measured).abs() <= 0.5,
+                                "{mode:?} fc={fc} r={reso} @ {freq} Hz: analytic {analytic:.2} dB \
+                                 vs sweep {measured:.2} dB (tol 0.5 dB)"
+                            );
+                        } else if analytic >= -60.0 {
+                            // Stopband, still above the display floor: the looser declared tol.
+                            assert!(
+                                (analytic - measured).abs() <= 1.0,
+                                "{mode:?} fc={fc} r={reso} @ {freq} Hz: analytic {analytic:.2} dB \
+                                 vs sweep {measured:.2} dB (tol 1.0 dB)"
+                            );
+                        } else {
+                            // Below the display floor (the notch's own zero): the crude peak
+                            // instrument reads its transient residue, not −180 dB. The honest
+                            // shared claim at this depth is "well down", and the sweep proves it.
+                            assert!(
+                                measured <= -20.0,
+                                "{mode:?} fc={fc} r={reso} @ {freq} Hz: analytic is below the \
+                                 −60 dB floor but the sweep measured {measured:.2} dB"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn magnitude_at_is_the_linear_response_of_tick_including_drive_and_morph() {
+        let sr = 48_000;
+        // Drive is a plain input gain in `tick`, so the display curve must carry it too —
+        // one transfer function, measured and plotted the same way.
+        let mut f = SvfFilter::new(1_000.0, 0.3);
+        f.prepare(sr);
+        let base = f.magnitude_at(300.0);
+        f.drive = 2.0;
+        assert!(
+            (f.magnitude_at(300.0) - 2.0 * base).abs() < 1e-9,
+            "drive scales the response linearly"
+        );
+        f.drive = 1.0;
+        // Morph is the same weighted sum the sample loop makes, in complex: at the default
+        // weights it IS the lowpass, and lp+notch−hp mixes like the arms say.
+        f.mode = SvfMode::Morph;
+        f.morph = [1.0, 0.0, 0.0, 0.0];
+        let lp = {
+            f.mode = SvfMode::LowPass;
+            let v = f.magnitude_at(2_500.0);
+            f.mode = SvfMode::Morph;
+            v
+        };
+        assert!((f.magnitude_at(2_500.0) - lp).abs() < 1e-9, "morph[lp] == lp");
+        f.morph = [0.0, 1.0, 0.0, 0.0];
+        let bp = {
+            f.mode = SvfMode::BandPass;
+            let v = f.magnitude_at(2_500.0);
+            f.mode = SvfMode::Morph;
+            v
+        };
+        assert!((f.magnitude_at(2_500.0) - bp).abs() < 1e-9, "morph[bp] == bp");
+    }
+
+    #[test]
+    fn magnitude_at_sanitises_instead_of_propagating() {
+        let mut f = SvfFilter::new(1_000.0, 0.3);
+        assert_eq!(f.magnitude_at(500.0), 0.0, "unprepared: the honest floor, never garbage");
+        f.prepare(48_000);
+        assert_eq!(f.magnitude_at(f64::NAN), 0.0, "a NaN ask reads at the floor");
+        assert_eq!(f.magnitude_at(f64::INFINITY), 0.0, "an infinite ask reads at the floor");
+        // Below DC and above Nyquist clamp into the plotted range — the grid endpoint rule.
+        let at_neg = f.magnitude_at(-50.0);
+        assert!(at_neg.is_finite() && at_neg > 0.0, "negative frequencies clamp to DC");
+        let over = f.magnitude_at(1.0e9);
+        assert!(over.is_finite(), "above Nyquist clamps to fs/2, never NaN");
+        assert_eq!(over, f.magnitude_at(24_000.0), "…exactly onto the Nyquist point");
     }
 }

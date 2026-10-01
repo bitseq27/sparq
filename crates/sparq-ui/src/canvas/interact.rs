@@ -114,6 +114,15 @@ pub enum Interaction {
         /// Whether this drag already pushed its history entry.
         pushed: bool,
     },
+    /// Dragging the inspector's response-plot marker (WO-012 increment 5, D3). A READ-ONLY
+    /// probe: it moves no param, pushes no history, notes nothing on the live-sync ledger —
+    /// the marker is display state, exactly like the camera and the scroll offset.
+    Marker {
+        /// The node whose curve is being probed.
+        node: NodeId,
+        /// Where the finger is now, screen px.
+        cursor_screen: Vec2,
+    },
     /// Rubber-band multi-select; screen anchor + accumulated screen delta.
     Marquee {
         /// Where the drag began, screen px.
@@ -346,6 +355,16 @@ pub struct CanvasState {
     insp_scroll: f32,
     /// Which node `insp_scroll` belongs to — a selection change starts the new panel at the top.
     insp_node: Option<NodeId>,
+    /// The response plot's probe marker (WO-012 increment 5, D3): `(node, frequency in Hz)`.
+    /// DISPLAY state beside the camera and the scroll offset — NOT undoable (it edits no
+    /// param), reset when the inspected node changes or the selection closes. Private: the
+    /// drag/tap path and [`Self::set_response_marker`] are the only doors, so the clamp and the
+    /// node key cannot be bypassed.
+    response_marker: Option<(NodeId, f64)>,
+    /// The axes the shell computed this frame's response curve with, per inspected node — the
+    /// marker drag's x → frequency mapping (the layout's own log scale, never a second copy).
+    /// `None` while no curve module is inspected.
+    resp_axes: Option<(NodeId, crate::canvas::response::Axes)>,
     /// The module catalogue the browser ranks: what the registry actually has, supplied by the
     /// shell at startup — the canvas never invents modules (defect #58, structurally).
     catalog: Vec<BrowserItem>,
@@ -353,6 +372,10 @@ pub struct CanvasState {
     /// frame (`None` when nothing is selected or the panel is collapsed). The canvas reads it to
     /// route slider drags; the painter reads it to draw.
     inspector: Option<InspectorLayout>,
+    /// Wires draw as straight runs instead of béziers (increment 6 toolbar select). Display
+    /// state: not undoable, not on the live-sync ledger, the painter and the hit-test both read
+    /// the restyled polyline so what you see is what you can grab.
+    pub wire_straight: bool,
     /// Per-node signal levels for the live wire-level animation (WO-013 increment 4). TRANSIENT
     /// and NOT part of the undoable model: a level is a fact about the last render, not an edit.
     /// The shell refreshes it from the executor's meters (the bridge reads them); the painter maps
@@ -392,6 +415,9 @@ impl CanvasState {
             inspector: None,
             insp_scroll: 0.0,
             insp_node: None,
+            response_marker: None,
+            resp_axes: None,
+            wire_straight: false,
             levels: crate::canvas::levels::NodeLevels::new(),
             patch_changes: PatchChanges::default(),
         }
@@ -707,15 +733,68 @@ impl CanvasState {
     pub fn set_inspector(&mut self, il: Option<InspectorLayout>) {
         match &il {
             Some(l) => {
+                if self.insp_node != Some(l.node) {
+                    // A different panel: the probe marker is the OLD node's display state and
+                    // does not survive the selection change (D3 — reset, not carried).
+                    self.response_marker = None;
+                    self.resp_axes = None;
+                }
                 self.insp_node = Some(l.node);
                 self.insp_scroll = l.scroll;
             },
             None => {
                 self.insp_node = None;
                 self.insp_scroll = 0.0;
+                self.response_marker = None;
+                self.resp_axes = None;
             },
         }
         self.inspector = il;
+    }
+
+    /// Store the response axes the shell computed this frame's curve with (`None` while the
+    /// inspected module declares no curve). The marker drag maps x → frequency through THESE
+    /// axes — the same log scale the painter plots, so the readout and the pixels cannot
+    /// disagree. Called per frame beside [`Self::set_inspector`].
+    pub fn set_response_axes(&mut self, entry: Option<(NodeId, crate::canvas::response::Axes)>) {
+        self.resp_axes = entry;
+    }
+
+    /// The probe marker's frequency for `node`, clamped into the live axes' range — `None`
+    /// while no marker is placed or it belongs to a different node (the reset-on-selection-
+    /// change rule, read where it matters).
+    #[must_use]
+    pub fn response_marker(&self, node: NodeId) -> Option<f64> {
+        let (m_node, hz) = self.response_marker?;
+        if m_node != node {
+            return None;
+        }
+        Some(match self.resp_axes {
+            Some((a_node, axes)) if a_node == node => axes.clamp_freq(hz),
+            _ => hz,
+        })
+    }
+
+    /// Place the probe marker (the tap-to-place and drag paths' single door): clamped into the
+    /// declared frequency range, a non-finite ask reading the floor. Sets NO param, pushes NO
+    /// history, notes NOTHING on the live-sync ledger — the marker is a reading (D3).
+    pub fn set_response_marker(&mut self, node: NodeId, hz: f64) {
+        use crate::canvas::response::{FREQ_MAX_HZ, FREQ_MIN_HZ};
+        let hz = if hz.is_finite() { hz.clamp(FREQ_MIN_HZ, FREQ_MAX_HZ) } else { FREQ_MIN_HZ };
+        self.response_marker = Some((node, hz));
+    }
+
+    /// The frequency a screen x inside the plot well probes — the marker mapping's one door
+    /// (drag start, drag update and tap-to-place all read it). `None` when no curve axes are
+    /// live for `node` or the layout went stale: a probe with nothing to probe is refused,
+    /// never guessed.
+    fn marker_freq_at(&self, node: NodeId, x: f32) -> Option<f64> {
+        let (a_node, axes) = self.resp_axes?;
+        if a_node != node {
+            return None;
+        }
+        let plot = self.inspector.as_ref()?.plot?;
+        Some(axes.freq_of_x(plot, x))
     }
 
     /// The scroll offset to lay `node`'s panel out at: the stored one when it is the same node
@@ -764,6 +843,67 @@ impl CanvasState {
     #[must_use]
     pub fn inspector(&self) -> Option<&InspectorLayout> {
         self.inspector.as_ref()
+    }
+
+    /// Zoom to fit the graph's bounds (the toolbar's FIT — the DoubleTap intent's door, named
+    /// for the button too).
+    pub fn zoom_fit(&mut self, graph: &Graph, view: Rect) {
+        self.zoom_to_fit(graph, view);
+    }
+
+    /// The camera home (toolbar RESET): default origin and zoom, the patch where the patch
+    /// grid starts.
+    pub fn camera_home(&mut self) {
+        let cam = crate::canvas::camera::Camera::new();
+        self.camera = cam;
+        let _ = self.lod_events();
+    }
+
+    /// One zoom step about the view centre (the toolbar's − / +).
+    pub fn zoom_step(&mut self, factor: f32, view: Rect) {
+        self.camera.zoom_about(factor, view.center(), view);
+        let _ = self.lod_events();
+    }
+
+    /// Grid-arrange the whole graph as ONE undo step (the toolbar's ARRANGE, increment 6):
+    /// node-id order into rows of four on the world grid. Positions only — a Batch of
+    /// `MoveNode`s, so the live engine hears nothing (the ledger's move-rule). `None`-free:
+    /// an already-arranged graph commits nothing and says so.
+    pub fn arrange_graph(&mut self, graph: &mut Graph) -> Vec<CanvasEvent> {
+        use crate::tokens::{LAYOUT_CANVAS_NODE_WIDTH_DEFAULT, LAYOUT_SPACE_8, LAYOUT_SPACE_9};
+        let mut moves = Vec::new();
+        let ids: Vec<NodeId> = graph.nodes().iter().map(|n| n.id).collect();
+        for (i, id) in ids.iter().enumerate() {
+            let Some(from) = graph.node(*id).map(|n| n.pos) else { continue };
+            let col = (i % 4) as f32;
+            let row = (i / 4) as f32;
+            let to = Vec2::new(
+                col * (LAYOUT_CANVAS_NODE_WIDTH_DEFAULT as f32 + LAYOUT_SPACE_8 as f32),
+                row * (LAYOUT_SPACE_9 as f32 * 4.0),
+            );
+            if (from.x - to.x).abs() > f32::EPSILON || (from.y - to.y).abs() > f32::EPSILON {
+                moves.push(Op::MoveNode { id: *id, from, to });
+            }
+        }
+        if moves.is_empty() {
+            return vec![CanvasEvent::Note("arrange: the patch is already on the grid".into())];
+        }
+        let n = moves.len();
+        let op = Op::Batch(moves);
+        graph.apply(&op);
+        self.commit(op);
+        vec![CanvasEvent::Applied(format!("arranged {n} node(s) on the grid"))]
+    }
+
+    /// The wire-draw style (increment 6 toolbar): smooth béziers or straight runs. Display
+    /// state like the camera — not undoable, not the engine's business.
+    pub fn toggle_wire_style(&mut self) -> &'static str {
+        self.wire_straight = !self.wire_straight;
+        if self.wire_straight {
+            "straight"
+        } else {
+            "smooth"
+        }
     }
 
     /// Which node feeds the listener: the explicit master when set (and still present), else —
@@ -1009,6 +1149,12 @@ impl CanvasState {
             return vec![CanvasEvent::Menu(false)];
         }
 
+        // The response plot under the finger places the probe marker where you tapped
+        // (tap-to-place — the slider's tap-to-set courtesy, on a reading instead of a param).
+        if let Some(ev) = self.activate_response_plot(pos) {
+            return ev;
+        }
+
         // An inspector slider under the finger sets the value where you tapped (tap-to-set;
         // a drag from here adjusts continuously).
         if let Some(ev) = self.activate_inspector(graph, pos) {
@@ -1017,6 +1163,20 @@ impl CanvasState {
 
         let lod = self.camera.lod();
         match layout::hit_test(layout, pos, lod) {
+            Hit::Param(node, index, track) => {
+                // The node card's own slider (increment 6): tap-to-set, the inspector's rule —
+                // the row under the finger is the row you edit, and one op serves both surfaces.
+                self.selection.clear();
+                self.selection.nodes.insert(node);
+                let desc = graph.node(node).and_then(|n| n.spec.params.get(index).cloned());
+                match desc {
+                    Some(d) => {
+                        let v = inspector::value_from_x(&d, track, pos.x);
+                        self.apply_param(graph, node, index, v, false)
+                    },
+                    None => vec![CanvasEvent::Refused("no such parameter".to_string())],
+                }
+            },
             Hit::Port(pref, _) => {
                 self.selection.clear();
                 self.selection.nodes.insert(pref.node);
@@ -1125,6 +1285,26 @@ impl CanvasState {
         ]
     }
 
+    /// Tap inside the response-plot well: place the probe marker at the tapped frequency.
+    /// Returns `None` when the tap is not in the plot well (the caller continues to the slider
+    /// rows and then the canvas). A no-curve well returns `None` too — the shell routes those
+    /// taps to the chrome path, and a direct intent gets the well's own words back.
+    fn activate_response_plot(&mut self, pos: Vec2) -> Option<Vec<CanvasEvent>> {
+        let (node_id, in_plot) = self
+            .inspector
+            .as_ref()
+            .map(|il| (il.node, il.plot.is_some_and(|r| r.contains(pos))))?;
+        if !in_plot {
+            return None;
+        }
+        let hz = self.marker_freq_at(node_id, pos.x)?;
+        self.set_response_marker(node_id, hz);
+        Some(vec![CanvasEvent::Note(format!(
+            "response marker: {} (a reading — cutoff stays the slider's)",
+            crate::canvas::response::format_hz(hz)
+        ))])
+    }
+
     /// Tap on an inspector row: select the node and set the parameter at the tapped x. Returns
     /// `None` when the tap is not on the inspector (the caller continues to the canvas).
     fn activate_inspector(&mut self, graph: &mut Graph, pos: Vec2) -> Option<Vec<CanvasEvent>> {
@@ -1219,6 +1399,11 @@ impl CanvasState {
                 self.selection.clear();
                 self.selection.nodes.insert(pref.node);
                 MenuTarget::Node(pref.node)
+            },
+            Hit::Param(node, _, _) => {
+                self.selection.clear();
+                self.selection.nodes.insert(node);
+                MenuTarget::Node(node)
             },
             Hit::Empty => MenuTarget::Empty,
         };
@@ -1421,6 +1606,41 @@ impl CanvasState {
         }
         self.menu = None;
 
+        // The response plot's probe marker (WO-012 increment 5, D3): a drag inside the plot
+        // well grabs the marker and moves it horizontally. Read-only — no param, no history,
+        // no command-ring traffic (a marker that wrote cutoff would be a second door to the
+        // same param, the class of defect this project refuses). The well sits ABOVE the rows,
+        // so this branch runs before the slider's; the panel-over-panel routing inc 4 shipped.
+        if let Some((node_id, in_plot)) =
+            self.inspector.as_ref().map(|il| (il.node, il.plot.is_some_and(|r| r.contains(pos))))
+        {
+            if in_plot {
+                let has_curve = graph
+                    .node(node_id)
+                    .is_some_and(|n| crate::canvas::inset::declares_curve(&n.spec.module_id));
+                if !has_curve {
+                    ev.push(CanvasEvent::Refused(
+                        "that module declares no response curve — the well says so in words"
+                            .to_string(),
+                    ));
+                    return ev;
+                }
+                if let Some(hz) = self.marker_freq_at(node_id, pos.x) {
+                    self.set_response_marker(node_id, hz);
+                    self.interaction = Interaction::Marker { node: node_id, cursor_screen: pos };
+                    ev.push(CanvasEvent::Note(format!(
+                        "probing the response curve — the marker reads, it never writes ({})",
+                        crate::canvas::response::format_hz(hz)
+                    )));
+                } else {
+                    ev.push(CanvasEvent::Refused(
+                        "the response plot has no live axes — nothing to probe".to_string(),
+                    ));
+                }
+                return ev;
+            }
+        }
+
         // An inspector slider: the drag edits the parameter continuously (tap-to-set already
         // happened via Activate when the recogniser decided it was a tap, not a drag).
         if let Some((node_id, index, editable, track)) = self.inspector.as_ref().and_then(|il| {
@@ -1448,6 +1668,20 @@ impl CanvasState {
 
         let lod = self.camera.lod();
         match layout::hit_test(layout, pos, lod) {
+            Hit::Param(node, index, track) => {
+                // The card's slider, dragged: set at the grab x (no jump-on-move), then ride the
+                // shared Param interaction — one undo step per gesture, coalesced updates, the
+                // live ring traffic identical to the inspector's drag.
+                if let Some(n) = graph.node(node) {
+                    if let Some(d) = n.spec.params.get(index) {
+                        let v = inspector::value_from_x(d, track, pos.x);
+                        ev.extend(self.apply_param(graph, node, index, v, false));
+                    }
+                }
+                self.interaction =
+                    Interaction::Param { node, index, cursor_screen: pos, pushed: true };
+                return ev;
+            },
             Hit::Port(pref, dir) => {
                 self.interaction = Interaction::Wire(PendingWire {
                     from: pref,
@@ -1554,18 +1788,38 @@ impl CanvasState {
             Interaction::Param { node, index, cursor_screen, pushed } => {
                 *cursor_screen = Vec2::new(cursor_screen.x + delta.x, cursor_screen.y + delta.y);
                 let (node, index, x, pushed) = (*node, *index, cursor_screen.x, *pushed);
-                // Geometry comes from this frame's inspector; a stale layout (selection changed
-                // mid-drag) simply stops editing rather than guessing.
-                let track = self.inspector.as_ref().and_then(|il| {
-                    if il.node != node {
-                        return None;
-                    }
-                    il.rows.iter().find(|r| r.index == index).map(|r| r.track)
-                });
+                // Geometry comes from this frame's inspector WHEN the drag lives there; a drag
+                // that started on a node card reads its track from this frame's canvas layout
+                // (increment 6). A stale layout (selection changed mid-drag) simply stops
+                // editing rather than guessing.
+                let track = self
+                    .inspector
+                    .as_ref()
+                    .and_then(|il| {
+                        if il.node != node {
+                            return None;
+                        }
+                        il.rows.iter().find(|r| r.index == index).map(|r| r.track)
+                    })
+                    .or_else(|| {
+                        layout.nodes.iter().find(|n| n.id == node).and_then(|n| {
+                            n.param_rows.iter().find(|r| r.index == index).map(|r| r.track)
+                        })
+                    });
                 let desc = graph.node(node).and_then(|n| n.spec.params.get(index).cloned());
                 if let (Some(track), Some(d)) = (track, desc) {
                     let v = inspector::value_from_x(&d, track, x);
                     self.apply_param(graph, node, index, v, pushed);
+                }
+            },
+            Interaction::Marker { node, cursor_screen } => {
+                *cursor_screen = Vec2::new(cursor_screen.x + delta.x, cursor_screen.y + delta.y);
+                let (node, x) = (*node, cursor_screen.x);
+                // The mapping reads THIS frame's axes and plot rect; a stale layout (selection
+                // changed mid-drag) simply stops moving the marker rather than guessing — the
+                // Param arm's discipline, on a reading instead of an edit.
+                if let Some(hz) = self.marker_freq_at(node, x) {
+                    self.set_response_marker(node, hz);
                 }
             },
             Interaction::Marquee { acc_screen, .. } => {
@@ -1596,11 +1850,25 @@ impl CanvasState {
                 self.finish_repatch(graph, side, orig, pos, cancelled, layout, ctx)
             },
             Interaction::Param { node, index, .. } => self.finish_param(graph, node, index),
+            Interaction::Marker { node, .. } => self.finish_marker(node, cancelled),
             Interaction::Marquee { start_screen, acc_screen } => {
                 self.finish_marquee(graph, start_screen, acc_screen, view)
             },
             Interaction::Idle => Vec::new(),
         }
+    }
+
+    /// The marker probe lifted: one log line with the final frequency (mid-drag updates were
+    /// silent — the marker moved visibly, and the readout rode with it). NOTHING is committed
+    /// because nothing was edited: no history entry, no live-sync note, no command-ring
+    /// traffic — a cancelled probe and a finished one leave the same patch behind (D3).
+    fn finish_marker(&self, node: NodeId, cancelled: bool) -> Vec<CanvasEvent> {
+        let Some(hz) = self.response_marker(node) else { return Vec::new() };
+        vec![CanvasEvent::Note(format!(
+            "response marker {} at {}",
+            if cancelled { "released (cancelled)" } else { "rests" },
+            crate::canvas::response::format_hz(hz)
+        ))]
     }
 
     /// The slider drag committed: one log line with the final value (mid-drag updates were
@@ -3092,5 +3360,239 @@ mod tests {
         s.run_menu_action(&mut g, MenuTarget::Node(g2), MenuAction::SetMaster, Vec2::ZERO, view());
         assert_eq!(s.master, Some(g2));
         assert!(s.take_patch_changes().structural, "a master handover is structural");
+    }
+
+    // ------------------------------------------------- the response-plot marker (increment 5)
+
+    /// An `flt/svf` node with the manifest's own param order (0 cutoff · 1 resonance · 2 mode ·
+    /// 3 mod depth) — pinned against the registry manifest by a sparq-app test.
+    fn svf_node(g: &mut Graph) -> NodeId {
+        let params = vec![
+            ParamDesc {
+                id: "cutoff".into(),
+                name: "Cutoff".into(),
+                kind: ParamKind::Float,
+                unit: Some("Hz".into()),
+                min: 10.0,
+                max: 20_000.0,
+                default: 1_000.0,
+            },
+            ParamDesc {
+                id: "resonance".into(),
+                name: "Resonance".into(),
+                kind: ParamKind::Float,
+                unit: None,
+                min: 0.0,
+                max: 1.0,
+                default: 0.2,
+            },
+            ParamDesc {
+                id: "mode".into(),
+                name: "Mode".into(),
+                kind: ParamKind::Int,
+                unit: None,
+                min: 0.0,
+                max: 4.0,
+                default: 0.0,
+            },
+        ];
+        let spec = NodeSpec::new(
+            crate::canvas::inset::SVF_ID,
+            "SVF",
+            vec![
+                audio("in", Direction::In, ChannelSet::Stereo),
+                audio("out", Direction::Out, ChannelSet::Stereo),
+            ],
+        )
+        .with_params(params);
+        nid(&g.op_add_node(spec, Vec2::ZERO))
+    }
+
+    /// The inspected-svf scaffolding the marker tests share: graph, state with the inspector
+    /// and the live axes stored, and the plot rect to aim at.
+    fn svf_inspected() -> (Graph, CanvasState, NodeId, Rect) {
+        let mut g = Graph::new();
+        let id = svf_node(&mut g);
+        let mut s = CanvasState::new();
+        s.selection.nodes.insert(id);
+        let panel = Rect::from_min_size(Vec2::new(900.0, 100.0), Vec2::new(400.0, 600.0));
+        let node = g.node(id).unwrap().clone();
+        let il = inspector::compute_at(&node, panel, 0.0);
+        let plot = il.plot.expect("svf declares a curve, so the well is reserved");
+        s.set_inspector(Some(il));
+        s.set_response_axes(Some((id, crate::canvas::response::Axes::at(48_000))));
+        (g, s, id, plot)
+    }
+
+    #[test]
+    fn the_marker_probe_reads_the_curve_and_moves_no_audio() {
+        let (mut g, mut s, id, plot) = svf_inspected();
+        let cutoff_before = g.node(id).unwrap().param_value(0);
+
+        // Drag from the plot's centre to the right: the marker follows the finger in log-f.
+        let start = plot.center();
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::DragStart { pos: start },
+            &CanvasLayout::default(),
+            view(),
+            &ctx(),
+        );
+        assert!(matches!(s.interaction, Interaction::Marker { .. }), "{:?}", s.interaction);
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, CanvasEvent::Note(t) if t.contains("reads, it never writes"))),
+            "the probe says what it is: {ev:?}"
+        );
+        let at_start = s.response_marker(id).unwrap();
+        let want_start = crate::canvas::response::Axes::at(48_000).freq_of_x(plot, start.x);
+        assert!((at_start - want_start).abs() < 1e-6, "the grab maps through the plot's own axes");
+
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragUpdate { delta: Vec2::new(plot.width() / 4.0, 0.0), scale: 1.0 },
+            &CanvasLayout::default(),
+            view(),
+            &ctx(),
+        );
+        let moved = s.response_marker(id).unwrap();
+        assert!(
+            moved > at_start * 2.0,
+            "a quarter-plot right is a big log-f move: {at_start} → {moved}"
+        );
+
+        let end_pos = Vec2::new(start.x + plot.width() / 4.0, start.y);
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: end_pos, cancelled: false },
+            &CanvasLayout::default(),
+            view(),
+            &ctx(),
+        );
+        assert!(matches!(s.interaction, Interaction::Idle), "the drag is over");
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Note(t) if t.contains("response marker"))),
+            "the lift is stated in words: {ev:?}"
+        );
+
+        // The proof burden (D3): the marker moved NO audio. The patch is untouched, the history
+        // is empty, and the live-sync ledger heard nothing — no re-stage, no command-ring traffic.
+        assert_eq!(g.node(id).unwrap().param_value(0), cutoff_before, "cutoff stays the slider's");
+        assert_eq!(s.history.undo_len(), 0, "a probe is not an edit — nothing to undo");
+        assert!(s.take_patch_changes().is_empty(), "the engine hears nothing about a probe");
+        assert!(
+            !ev.iter().any(|e| matches!(e, CanvasEvent::Applied(_))),
+            "nothing was APPLIED — a reading never claims an edit"
+        );
+    }
+
+    #[test]
+    fn tap_to_place_sets_the_marker_and_the_stored_value_clamps() {
+        let (mut g, mut s, id, plot) = svf_inspected();
+        let axes = crate::canvas::response::Axes::at(48_000);
+        let tap = Vec2::new(plot.min.x + plot.width() * 0.75, plot.center().y);
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::Activate { pos: tap },
+            &CanvasLayout::default(),
+            view(),
+            &ctx(),
+        );
+        let hz = s.response_marker(id).expect("the tap placed the marker");
+        assert!((hz - axes.freq_of_x(plot, tap.x)).abs() < 1e-6, "placed at the tapped frequency");
+        assert!(
+            ev.iter().any(
+                |e| matches!(e, CanvasEvent::Note(t) if t.contains("cutoff stays the slider"))
+            ),
+            "{ev:?}"
+        );
+        assert_eq!(s.history.undo_len(), 0, "tap-to-place is display state too");
+
+        // The setter's clamp: the marker cannot leave the declared band, and a NaN reads the floor.
+        s.set_response_marker(id, 1.0e9);
+        assert_eq!(s.response_marker(id), Some(crate::canvas::response::FREQ_MAX_HZ));
+        s.set_response_marker(id, -5.0);
+        assert_eq!(s.response_marker(id), Some(crate::canvas::response::FREQ_MIN_HZ));
+        s.set_response_marker(id, f64::NAN);
+        assert_eq!(s.response_marker(id), Some(crate::canvas::response::FREQ_MIN_HZ));
+    }
+
+    #[test]
+    fn the_marker_resets_on_selection_change_and_dies_with_the_panel() {
+        let (mut g, mut s, id, plot) = svf_inspected();
+        s.set_response_marker(id, 1_234.0);
+        assert_eq!(s.response_marker(id), Some(1_234.0));
+        // A different node inspected (the shell stores the fresh layout every frame): the
+        // marker is the OLD node's display state and does not survive.
+        let other = nid(&g.op_add_node(sine(), Vec2::new(0.0, 300.0)));
+        let panel = Rect::from_min_size(Vec2::new(900.0, 100.0), Vec2::new(400.0, 600.0));
+        let il = inspector::compute_at(&g.node(other).unwrap().clone(), panel, 0.0);
+        s.set_inspector(Some(il));
+        assert_eq!(s.response_marker(id), None, "a selection change resets the probe");
+        // The same node re-inspected also starts unplaced (set_inspector saw the change).
+        s.set_response_marker(other, 900.0);
+        s.set_inspector(None);
+        assert_eq!(s.response_marker(other), None, "closing the panel clears the probe");
+        let _ = plot;
+    }
+
+    #[test]
+    fn a_no_curve_module_has_no_plot_to_probe_and_says_nothing_about_curves() {
+        // Operator ruling 2026-09-30: the no-curve description box is GONE — so there is no
+        // well rect at all, and a drag or tap where it used to be is plain panel space: no
+        // marker, no refusal sentence about curves, nothing grabbed.
+        let mut g = Graph::new();
+        let id = nid(&g.op_add_node(sine(), Vec2::ZERO));
+        let mut s = CanvasState::new();
+        let panel = Rect::from_min_size(Vec2::new(900.0, 100.0), Vec2::new(400.0, 600.0));
+        let il = inspector::compute_at(&g.node(id).unwrap().clone(), panel, 0.0);
+        assert_eq!(il.plot, None, "no curve declared: no well reserved");
+        let where_the_well_was = Vec2::new(panel.center().x, il.title.max.y + 60.0);
+        s.set_inspector(Some(il)); // no axes stored: sine declares no curve
+
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::DragStart { pos: where_the_well_was },
+            &CanvasLayout::default(),
+            view(),
+            &ctx(),
+        );
+        assert_eq!(s.response_marker(id), None, "nothing to grab, nothing placed");
+        assert!(
+            !ev.iter().any(|e| e.message().contains("response curve")),
+            "the panel no longer speaks about curves at all: {ev:?}"
+        );
+        s.on_intent(
+            &mut g,
+            GestureIntent::Activate { pos: where_the_well_was },
+            &CanvasLayout::default(),
+            view(),
+            &ctx(),
+        );
+        assert_eq!(s.response_marker(id), None, "the tap placed nothing");
+    }
+
+    #[test]
+    fn a_marker_drag_with_stale_axes_stops_instead_of_guessing() {
+        let (mut g, mut s, id, plot) = svf_inspected();
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragStart { pos: plot.center() },
+            &CanvasLayout::default(),
+            view(),
+            &ctx(),
+        );
+        let at_start = s.response_marker(id).unwrap();
+        // The shell stops supplying axes mid-drag (selection changed elsewhere): the marker
+        // holds its last honest value — the Param arm's stale-layout discipline.
+        s.set_response_axes(None);
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragUpdate { delta: Vec2::new(60.0, 0.0), scale: 1.0 },
+            &CanvasLayout::default(),
+            view(),
+            &ctx(),
+        );
+        assert_eq!(s.response_marker(id), Some(at_start), "no axes, no move — never a guess");
     }
 }

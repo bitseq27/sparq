@@ -145,13 +145,16 @@ impl TempoFollower {
 pub struct Sine {
     phase: f64,
     rate: u32,
+    /// The amplitude the LAST block ended at (NaN until the first block primes it) — the
+    /// ramp's start point (defect #85: an amplitude edit must glide, not step).
+    applied_amp: f32,
 }
 
 impl Sine {
     /// A fresh oscillator at phase zero.
     #[must_use]
     pub fn new() -> Self {
-        Self { phase: 0.0, rate: 48_000 }
+        Self { phase: 0.0, rate: 48_000, applied_amp: f32::NAN }
     }
 }
 
@@ -184,18 +187,26 @@ impl Module for Sine {
 
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
         let freq = f64::from(ctx.param(0));
-        let amp = ctx.param(1);
+        let target = ctx.param(1);
         let inc = freq / f64::from(self.rate);
         let block_frames = ctx.frames();
         let out = ctx.output();
         let frames = block_frames.min(out.len());
+        // Defect #85, third round: the amplitude GLIDES with a one-pole chase (25 ms tau) —
+        // per sample, so a fast drag produces a smooth envelope with no staircase kinks at the
+        // block or UI rate. Static params keep g exactly at the target (primed, zero distance),
+        // which is the constant multiply the goldens pin; the snap lands settled edits exactly.
+        let k = crate::dsp::core::glide_k(self.rate, 1);
+        let mut g = crate::dsp::core::primed(self.applied_amp, target);
         for s in out.iter_mut().take(frames) {
-            *s = ((self.phase * std::f64::consts::TAU).sin() * f64::from(amp)) as f32;
+            g = crate::dsp::core::glide(g, target, k);
+            *s = ((self.phase * std::f64::consts::TAU).sin() * f64::from(g)) as f32;
             self.phase += inc;
             if self.phase >= 1.0 {
                 self.phase -= 1.0;
             }
         }
+        self.applied_amp = g;
         BlockStatus::Ok
     }
 
@@ -221,13 +232,16 @@ pub fn create_sine() -> Box<dyn Module> {
 #[derive(Clone, Debug)]
 pub struct Gain {
     gain: f32,
+    /// Sample rate from `prepare` — the glide's time base (defect #85, third round).
+    rate: u32,
 }
 
 impl Gain {
-    /// A fresh gain at unity.
+    /// A fresh gain, its coefficient un-primed: the first block runs constant at whatever the
+    /// params say (defect #85's prime rule — no fade-in from a guessed unity).
     #[must_use]
     pub fn new() -> Self {
-        Self { gain: 1.0 }
+        Self { gain: f32::NAN, rate: 48_000 }
     }
 }
 
@@ -256,25 +270,35 @@ impl Module for Gain {
         if resources.block_frames == 0 {
             return Err(ModuleError::Resources("block_frames must be at least 1"));
         }
+        self.rate = resources.sample_rate;
         Ok(())
     }
 
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
-        self.gain = ctx.param(0);
+        let target = ctx.param(0);
         if !ctx.has_input() {
             // An unconnected input is an explicit signal, never silence-by-accident: the status
             // says so, and the buffer is still written.
             for s in ctx.output().iter_mut() {
                 *s = 0.0;
             }
+            self.gain = target;
             return BlockStatus::Silenced;
         }
         // Contract v1 borrow discipline: the input view escapes with the context's lifetime, so
         // taking it before the output borrow is not a workaround — it is the documented two-step.
+        // Defect #85, third round: a one-pole glide per SAMPLE of the interleaved buffer (the
+        // glide is time-based, so channel count only slices it finer — it cannot change how far
+        // it travels). Static params keep g exactly at the target: the constant multiply,
+        // bit-exact, which is the golden's property.
         let input = ctx.input();
+        let k = crate::dsp::core::glide_k(self.rate, 1);
+        let mut g = crate::dsp::core::primed(self.gain, target);
         for (o, i) in ctx.output().iter_mut().zip(input.iter()) {
-            *o = *i * self.gain;
+            g = crate::dsp::core::glide(g, target, k);
+            *o = *i * g;
         }
+        self.gain = g;
         BlockStatus::Ok
     }
 
@@ -674,6 +698,34 @@ pub fn create_svf() -> Box<dyn Module> {
 /// narrower — a shape the executor's edge rules already forbid, handled rather than trusted) and
 /// transformed by `tick(ch, v)` with the channel's own state (`ch` clamped to the module's two
 /// states). No scratch, no allocation, no shape assumptions beyond the interleaving.
+/// [`stereo_tick`] with the frame index handed to the closure, so a per-frame coefficient ramp
+/// (defect #85) advances once per frame and every channel of a frame shares one coefficient —
+/// a glide without a stereo-image wobble inside the frame.
+fn stereo_tick_f<F: FnMut(usize, f32, usize) -> f32>(
+    ctx: &mut AudioCtx<'_>,
+    mut tick: F,
+) -> BlockStatus {
+    let frames = ctx.frames();
+    if frames == 0 {
+        return BlockStatus::Ok;
+    }
+    let input = ctx.input();
+    let output = ctx.output();
+    let in_ch = (input.len() / frames).max(1);
+    let out_ch = (output.len() / frames).max(1);
+    for f in 0..frames {
+        for c in 0..out_ch {
+            let src = f * in_ch + c.min(in_ch - 1);
+            let v = input.get(src).copied().unwrap_or(0.0);
+            let y = tick(c.min(1), v, f);
+            if let Some(slot) = output.get_mut(f * out_ch + c) {
+                *slot = y;
+            }
+        }
+    }
+    BlockStatus::Ok
+}
+
 fn stereo_tick<F: FnMut(usize, f32) -> f32>(ctx: &mut AudioCtx<'_>, mut tick: F) -> BlockStatus {
     let frames = ctx.frames();
     if frames == 0 {
@@ -933,13 +985,24 @@ pub fn create_bitcrush() -> Box<dyn Module> {
 /// like every other v0 parameter. A stereo BALANCE mode (stereo input) waits for the multi-port
 /// `AudioCtx`; the mono port declaration makes that absence structural, not a silent gap.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Panner;
+pub struct Panner {
+    /// The law coefficients the last block ended at (NaN until primed) — defect #85's glide
+    /// starts; a pan drag glides both ears together instead of stepping them.
+    gl_applied: f32,
+    gr_applied: f32,
+    /// Per-frame glide coefficient, from `prepare`.
+    k_frame: f32,
+}
 
 impl Panner {
-    /// A fresh centred panner.
+    /// A fresh centred panner, its coefficients un-primed.
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self {
+            gl_applied: f32::NAN,
+            gr_applied: f32::NAN,
+            k_frame: crate::dsp::core::glide_k(48_000, 64),
+        }
     }
 }
 
@@ -959,6 +1022,8 @@ impl Module for Panner {
         if resources.sample_rate == 0 {
             return Err(ModuleError::Resources("sample_rate must be non-zero"));
         }
+        self.k_frame =
+            crate::dsp::core::glide_k(resources.sample_rate, resources.block_frames.max(1));
         Ok(())
     }
 
@@ -980,15 +1045,26 @@ impl Module for Panner {
         let frames = ctx.frames();
         let input = ctx.input();
         let output = ctx.output();
+        // Defect #85: both law coefficients glide once per frame; zero step when the pan did
+        // not move keeps the static path a constant multiply, bit-exact.
+        let k = self.k_frame;
+        let mut xl = crate::dsp::core::primed(self.gl_applied, gl);
+        let mut xr = crate::dsp::core::primed(self.gr_applied, gr);
         for f in 0..frames {
+            if f > 0 {
+                xl = crate::dsp::core::glide(xl, gl, k);
+                xr = crate::dsp::core::glide(xr, gr, k);
+            }
             let v = input.get(f).copied().unwrap_or(0.0); // declared mono: one sample per frame
             if let Some(l) = output.get_mut(f * 2) {
-                *l = v * gl;
+                *l = v * xl;
             }
             if let Some(r) = output.get_mut(f * 2 + 1) {
-                *r = v * gr;
+                *r = v * xr;
             }
         }
+        self.gl_applied = xl;
+        self.gr_applied = xr;
         BlockStatus::Ok
     }
 
@@ -1327,13 +1403,24 @@ pub fn create_env_ad() -> Box<dyn Module> {
 /// v0 state is empty and says so: the matrix IS the parameter snapshot, which the project
 /// already saves.
 #[derive(Clone, Copy, Debug)]
-pub struct Mixer;
+pub struct Mixer {
+    /// The cell gains and output trims the last block ended at (NaN until primed) — defect
+    /// #85's ramp starts, so a fader drag on any of the twenty coefficients glides.
+    applied_cells: [f32; 16],
+    applied_trims: [f32; 4],
+    /// Per-frame glide coefficient, from `prepare`.
+    k_frame: f32,
+}
 
 impl Mixer {
-    /// The matrix is stateless; the constructor exists for the factory shape.
+    /// A fresh matrix, its coefficients un-primed (the first block runs constant at the params).
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self {
+            applied_cells: [f32::NAN; 16],
+            applied_trims: [f32::NAN; 4],
+            k_frame: crate::dsp::core::glide_k(48_000, 64),
+        }
     }
 }
 
@@ -1361,6 +1448,7 @@ impl Module for Mixer {
         if resources.block_frames == 0 {
             return Err(ModuleError::Resources("block_frames must be at least 1"));
         }
+        self.k_frame = crate::dsp::core::glide_k(resources.sample_rate, resources.block_frames);
         Ok(())
     }
 
@@ -1369,7 +1457,7 @@ impl Module for Mixer {
         // pattern the author guide documents: two reborrow accessors cannot coexist, two taken
         // views can.
         let ins = [ctx.audio_in(0), ctx.audio_in(1), ctx.audio_in(2), ctx.audio_in(3)];
-        let outs = [
+        let mut outs = [
             ctx.take_audio_out(0),
             ctx.take_audio_out(1),
             ctx.take_audio_out(2),
@@ -1421,25 +1509,56 @@ impl Module for Mixer {
             }
             return BlockStatus::Silenced;
         }
-        for (m, out) in outs.into_iter().enumerate() {
-            let Some(out) = out else { continue };
-            for f in 0..frames {
+        // Defect #85: the twenty coefficients glide once per frame. The frame loop is the
+        // OUTSIDE one now (the pre-fix code looped outputs outside, which would have ramped
+        // four times); every output of a frame shares the frame's coefficients. Zero steps
+        // when nothing moved: the static path stays a constant multiply, bit-exact.
+        // Defect #85, third round: every one of the twenty coefficients glides with the shared
+        // one-pole chase, once per frame; zero distance means the exact constant multiply.
+        let k = self.k_frame;
+        let mut applied_cells = [0.0f32; 16];
+        let mut applied_trims = [0.0f32; 4];
+        for n in 0..4 {
+            for m in 0..4 {
+                applied_cells[n * 4 + m] =
+                    crate::dsp::core::primed(self.applied_cells[n * 4 + m], cells[n][m]);
+            }
+        }
+        for m in 0..4 {
+            applied_trims[m] = crate::dsp::core::primed(self.applied_trims[m], trims[m]);
+        }
+        for f in 0..frames {
+            if f > 0 {
+                for n in 0..4 {
+                    for m in 0..4 {
+                        applied_cells[n * 4 + m] =
+                            crate::dsp::core::glide(applied_cells[n * 4 + m], cells[n][m], k);
+                    }
+                }
+                for m in 0..4 {
+                    applied_trims[m] = crate::dsp::core::glide(applied_trims[m], trims[m], k);
+                }
+            }
+            for (m, out) in outs.iter_mut().enumerate() {
+                let Some(out) = out else { continue };
                 for ch in 0..2 {
                     let idx = f * 2 + ch;
                     let mut acc = 0.0f64;
                     for n in 0..4 {
                         if let Some(inp) = ins[n] {
                             if let Some(&v) = inp.get(idx) {
-                                acc += f64::from(cells[n][m]) * f64::from(v);
+                                acc += f64::from(applied_cells[n * 4 + m]) * f64::from(v);
                             }
                         }
                     }
                     if let Some(slot) = out.get_mut(idx) {
-                        *slot = (acc * f64::from(trims[m])) as f32;
+                        *slot = (acc * f64::from(applied_trims[m])) as f32;
                     }
                 }
             }
         }
+        self.applied_cells = applied_cells;
+        self.applied_trims = applied_trims;
         BlockStatus::Ok
     }
 
@@ -1999,13 +2118,19 @@ pub fn create_scope() -> Box<dyn Module> {
 /// the MASTER badge never lies: when an `out/main` is in the patch, IT is the master, explicitly.
 /// v0 state is empty and says so — the trim is the parameter snapshot the project already saves.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct OutMain;
+pub struct OutMain {
+    /// The trim the last block ended at (NaN until primed) — defect #85's glide start. Mute is
+    /// NOT glided: a stage cut writes exact zeros immediately, by design.
+    trim_applied: f32,
+    /// Per-frame glide coefficient, from `prepare` (25 ms tau at the negotiated rate/block).
+    k_frame: f32,
+}
 
 impl OutMain {
-    /// A fresh master output at unity.
+    /// A fresh master output, its trim un-primed (the first block runs constant at the param).
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self { trim_applied: f32::NAN, k_frame: crate::dsp::core::glide_k(48_000, 64) }
     }
 }
 
@@ -2027,6 +2152,7 @@ impl Module for OutMain {
         if resources.block_frames == 0 {
             return Err(ModuleError::Resources("block_frames must be at least 1"));
         }
+        self.k_frame = crate::dsp::core::glide_k(resources.sample_rate, resources.block_frames);
         Ok(())
     }
 
@@ -2041,10 +2167,23 @@ impl Module for OutMain {
             }
             return BlockStatus::Silenced;
         }
-        // Per-channel pass with the trim; `stereo_tick` maps a narrower input by holding its
+        // Per-channel pass with the trim; `stereo_tick_f` maps a narrower input by holding its
         // last channel (mono → both outs) and a wider one by taking the first `out_ch`, which is
-        // the device-shape conversion the master render performs anyway.
-        stereo_tick(ctx, |_c, v| v * trim)
+        // the device-shape conversion the master render performs anyway. The trim GLIDES once
+        // per frame (defect #85, third round: one-pole chase, 25 ms tau — no staircase kinks
+        // under a fast drag), and the glide advances ONCE PER FRAME on the frame's first
+        // channel: the closure runs per channel per frame, and device channel count must not
+        // change how far a glide travels (the second round's fix, still in force).
+        let k = self.k_frame;
+        let mut g = crate::dsp::core::primed(self.trim_applied, trim);
+        let status = stereo_tick_f(ctx, |c, v, f| {
+            if f > 0 && c == 0 {
+                g = crate::dsp::core::glide(g, trim, k);
+            }
+            v * g
+        });
+        self.trim_applied = g;
+        status
     }
 
     fn message(&mut self, _payload: &[u8]) -> Result<(), ModuleError> {
@@ -2437,13 +2576,36 @@ mod tests {
             g.process(&mut a);
         }
         assert_eq!(out, input, "unity gain must be bit-exact");
+        // Defect #85 contract: the block in which a coefficient CHANGES is a glide — it starts
+        // at the old coefficient and ends at the new one; the step between consecutive samples
+        // of the ratio is the ramp's, not the jump's. The block AFTER is the constant multiply
+        // again, bit-exact at the new value.
         let half = ParamSet::new(2, &[0.5]).unwrap();
         {
             let mut a = AudioCtx::single(&ctx, &half, &input, &mut out);
             g.process(&mut a);
         }
+        let ratio_first = out[0] / input[0];
+        let ratio_last = out[out.len() - 1] / input[input.len() - 1];
+        assert!(
+            (ratio_first - 1.0).abs() < 0.02,
+            "the change block STARTS at the old coefficient: {ratio_first}"
+        );
+        // The glide moves a declared fraction per block (25 ms tau): after one 64-frame block
+        // it has travelled a few percent of the distance — strictly between old and new, never
+        // past either (no overshoot, no staircase).
+        assert!(
+            ratio_last < 1.0 && ratio_last > 0.5 && ratio_last < 1.0 - 0.01,
+            "the glide is strictly between the coefficients and moving: {ratio_last}"
+        );
+        // Settled: the snap lands the coefficient EXACTLY, and the settled block is the
+        // constant multiply again, bit-exact — the golden's property, after any edit.
+        for _ in 0..400 {
+            let mut a = AudioCtx::single(&ctx, &half, &input, &mut out);
+            g.process(&mut a);
+        }
         for (o, i) in out.iter().zip(input.iter()) {
-            assert!((f64::from(*o) - f64::from(*i) * 0.5).abs() < 1e-6);
+            assert!(*o == *i * 0.5, "settled block bit-exact at the target");
         }
         // State + message paths.
         g.configure(&0.25f32.to_le_bytes()).unwrap();

@@ -6,6 +6,14 @@
 //! thin line, but the **touch target is the full row height** — the port-capture trick applied to
 //! sliders, so a finger-sized grab never needs pixel aim.
 //!
+//! The response-plot well (WO-012 increment 5, D3) joins the fixed header block WHEN the
+//! selected module declares a curve: [`compute_at`] reserves [`PLOT_HEIGHT`] between the title
+//! and the first row for it. A module with no curve gets NO well at all — the operator's
+//! 2026-09-30 ruling retired increment 5's no-curve description box ("remove this box and
+//! description"): an inspector that describes itself is chrome pretending to be a reading, and
+//! the rows start right under the port strip, as before the increment. Like the title, the well
+//! does not scroll — it is a reading of the selection, not a row of it.
+//!
 //! Scrolling (increment 5): [`compute_at`] lays the rows out under a scroll offset, clamped into
 //! `[0, max_scroll]`; the title row is a FIXED header and the rows slide under it. The honesty
 //! rule survives the offset in both directions: a row clipped at the panel bottom is touchable
@@ -22,8 +30,14 @@
 use crate::canvas::model::{Node, NodeId, ParamDesc};
 use crate::geom::{Rect, Vec2};
 use crate::tokens::{
-    LAYOUT_SPACE_1, LAYOUT_SPACE_4, LAYOUT_SPACE_PADDING_PANEL, LAYOUT_TOUCH_ROW_HEIGHT_LIST,
+    LAYOUT_SPACE_1, LAYOUT_SPACE_2, LAYOUT_SPACE_4, LAYOUT_SPACE_9, LAYOUT_SPACE_PADDING_PANEL,
+    LAYOUT_TOUCH_ROW_HEIGHT_LIST,
 };
+
+/// The response-plot well's height (WO-012 increment 5): the space scale's largest step — a
+/// curve needs room to read, and 96 px keeps the first rows visible in the shortest panel the
+/// breakpoint matrix allows.
+pub const PLOT_HEIGHT: f32 = LAYOUT_SPACE_9 as f32;
 
 /// One parameter's row, laid out inside the panel.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,6 +63,13 @@ pub struct InspectorLayout {
     pub rect: Rect,
     /// The title row (node title + module id). FIXED under scrolling: the rows slide under it.
     pub title: Rect,
+    /// The response-plot well (WO-012 increment 5), between the title's port strip and the
+    /// first row — `Some` only when the selected module DECLARES a curve (the registry's
+    /// `Well::Curve`); `None` otherwise, and then the rows start right under the strip and
+    /// nothing about a curve is drawn or said. FIXED like the title; [`PLOT_HEIGHT`] tall,
+    /// content-width. The painter draws the curve inside it; the gesture path routes marker
+    /// probes on it; the audit measures the marker's capture inside it.
+    pub plot: Option<Rect>,
     /// One row per parameter, in manifest order, at their SCROLLED positions.
     pub rows: Vec<ParamRow>,
     /// The scroll offset these rows were laid out at, px, clamped into `[0, max_scroll]`.
@@ -82,16 +103,28 @@ pub fn compute_at(node: &Node, rect: Rect, scroll: f32) -> InspectorLayout {
 
     let title =
         Rect::from_min_size(Vec2::new(content_x, rect.min.y + pad), Vec2::new(content_w, row_h));
+    // The plot well sits under the title's port-dot strip (the strip is LAYOUT_SPACE_4 of
+    // dots, drawn by the painter in the gap) and above the rows, with token gaps on both
+    // sides — one fixed header block: title, strip, plot. A module with no curve gets no
+    // well: the rows then start right under the strip, exactly as before the increment
+    // (operator ruling 2026-09-30 — no description box, no words about a missing curve).
+    let plot = crate::canvas::inset::declares_curve(&node.spec.module_id).then(|| {
+        Rect::from_min_size(
+            Vec2::new(content_x, title.max.y + LAYOUT_SPACE_4 as f32),
+            Vec2::new(content_w, PLOT_HEIGHT),
+        )
+    });
+    let rows_top = plot.map_or(title.max.y, |p| p.max.y + LAYOUT_SPACE_2 as f32);
 
     let n = node.spec.params.len();
     // The content hangs this far below the panel when it is longer than the panel is.
-    let content_bottom = title.max.y + n as f32 * row_h;
+    let content_bottom = rows_top + n as f32 * row_h;
     let max_scroll = (content_bottom - rect.max.y).max(0.0);
     let scroll = if scroll.is_finite() { scroll.clamp(0.0, max_scroll) } else { 0.0 };
 
     let mut rows = Vec::with_capacity(n);
     for (i, desc) in node.spec.params.iter().enumerate() {
-        let y = title.max.y + i as f32 * row_h - scroll;
+        let y = rows_top + i as f32 * row_h - scroll;
         let row = Rect::from_min_size(Vec2::new(content_x, y), Vec2::new(content_w, row_h));
         rows.push(ParamRow {
             index: i,
@@ -107,27 +140,37 @@ pub fn compute_at(node: &Node, rect: Rect, scroll: f32) -> InspectorLayout {
             editable: desc.editable(),
         });
     }
-    InspectorLayout { node: node.id, rect, title, rows, scroll, max_scroll }
+    InspectorLayout { node: node.id, rect, title, plot, rows, scroll, max_scroll }
 }
 
 impl InspectorLayout {
     /// The row a screen point lands on, if any. Rows (or parts of rows) outside the panel rect do
     /// not count — an invisible control must not be touchable. A row scrolled under the fixed
-    /// title is invisible too, so it is refused by the same rule.
+    /// header block (title, port strip, plot well) is invisible too, so it is refused by the
+    /// same rule — and a point INSIDE the plot well is never a row: the well is a reading (its
+    /// own control, the marker, is routed separately).
     #[must_use]
     pub fn row_at(&self, pos: Vec2) -> Option<usize> {
-        if !self.rect.contains(pos) || pos.y < self.title.max.y {
+        let header_bottom = self.header_bottom();
+        if !self.rect.contains(pos) || pos.y < header_bottom {
             return None;
         }
         self.rows.iter().position(|r| r.track.contains(pos) || r.label.contains(pos))
     }
 
-    /// Whether a row is drawn at all: fully under the fixed title or fully past the panel bottom
-    /// means the painter skips it. The painter and the hit-test read the same rule — what you
-    /// cannot see you cannot touch, and what you can see (even a sliver) you can.
+    /// Whether a row is drawn at all: fully under the fixed header block or fully past the panel
+    /// bottom means the painter skips it. The painter and the hit-test read the same rule — what
+    /// you cannot see you cannot touch, and what you can see (even a sliver) you can.
     #[must_use]
     pub fn row_visible(&self, row: &ParamRow) -> bool {
-        row.track.min.y >= self.title.max.y && row.track.min.y < self.rect.max.y
+        row.track.min.y >= self.header_bottom() && row.track.min.y < self.rect.max.y
+    }
+
+    /// The bottom of the fixed header block: the plot well's bottom when the module declares a
+    /// curve, the title's bottom otherwise. Rows slide under BOTH; neither is a row.
+    #[must_use]
+    pub fn header_bottom(&self) -> f32 {
+        self.plot.map_or(self.title.max.y, |p| p.max.y)
     }
 
     /// The rows a screen point can reach, in order — the painter's loop bound and the audit's
@@ -145,7 +188,7 @@ impl InspectorLayout {
             return None;
         }
         let w = LAYOUT_SPACE_1 as f32;
-        let track_top = self.title.max.y;
+        let track_top = self.header_bottom();
         let track_h = (self.rect.max.y - track_top).max(1.0);
         let content_h = track_h + self.max_scroll;
         let thumb_h = (track_h * track_h / content_h).max(LAYOUT_SPACE_4 as f32).min(track_h);
@@ -293,9 +336,12 @@ mod tests {
     fn the_part_of_a_row_below_the_panel_bottom_is_not_touchable() {
         let n = node_with_params();
         // Panel bottom at y=190: title (116..160) fully visible, row 0 (160..204) clipped.
+        // (A sine declares no curve, so no plot well shifts the rows — the pre-increment
+        // geometry, exactly.)
         let clipped = Rect::from_min_size(panel().min, Vec2::new(400.0, 90.0));
         let il = compute(&n, clipped);
         assert_eq!(il.rows.len(), 3, "rows are computed…");
+        assert_eq!(il.plot, None, "a no-curve module gets NO well");
         let x = il.rows[0].track.center().x;
         assert_eq!(
             il.row_at(Vec2::new(x, 165.0)),
@@ -308,6 +354,62 @@ mod tests {
             "the clipped-away part of the row is NOT — an invisible control must not be hittable"
         );
         assert_eq!(il.row_at(il.rows[1].track.center()), None, "row 1 is entirely below the clip");
+    }
+
+    /// An `flt/svf`-shaped node: the registry's curve module, so the inspector reserves the well.
+    fn curve_node() -> Node {
+        let spec = NodeSpec::new(crate::canvas::inset::SVF_ID, "SVF", vec![]).with_params(vec![
+            ParamDesc {
+                id: "cutoff".into(),
+                name: "cutoff".into(),
+                kind: ParamKind::Float,
+                unit: Some("Hz".into()),
+                min: 10.0,
+                max: 20_000.0,
+                default: 1_000.0,
+            },
+        ]);
+        let mut g = Graph::new();
+        g.op_add_node(spec, Vec2::ZERO);
+        g.nodes()[0].clone()
+    }
+
+    #[test]
+    fn the_plot_well_is_fixed_header_geometry_the_rows_clear() {
+        let n = curve_node();
+        let il = compute(&n, panel());
+        let plot = il.plot.expect("a curve module reserves the well");
+        // The well sits under the title's port strip, token gaps on both sides, token height.
+        assert_eq!(plot.min.y, il.title.max.y + LAYOUT_SPACE_4 as f32);
+        assert_eq!(plot.height(), PLOT_HEIGHT);
+        assert_eq!(plot.width(), il.title.width(), "content-width like every row");
+        // The rows start below the well — the fixed header block is title + strip + plot.
+        assert_eq!(il.rows[0].track.min.y, plot.max.y + LAYOUT_SPACE_2 as f32);
+        assert_eq!(il.header_bottom(), plot.max.y);
+        // A point inside the well is never a row (the well is a reading; its marker routes
+        // separately), and the well does not scroll: it is the same rect at every offset.
+        let probe = Vec2::new(plot.center().x, plot.center().y);
+        assert_eq!(il.row_at(probe), None, "the plot well is not a row");
+        let scrolled = compute_at(&n, panel(), 10.0);
+        assert_eq!(scrolled.plot, il.plot, "the well is fixed; the rows slide under it");
+        // The scrollable content grew by the well: max_scroll accounts for it exactly.
+        let content_bottom = plot.max.y + LAYOUT_SPACE_2 as f32 + 1.0 * 44.0;
+        assert_eq!(il.max_scroll, (content_bottom - panel().max.y).max(0.0));
+        // A row scrolled under the well is refused — the header-hides-what-it-covers rule now
+        // covers the well too.
+        let many = node_with_many(20);
+        let il2 = compute_at(&many, short_panel(), il.max_scroll.max(1.0) + 40.0);
+        let hidden = il2.rows.first().expect("row 0 exists");
+        assert!(hidden.track.min.y < il2.header_bottom(), "row 0 is under the header block");
+        assert_eq!(il2.row_at(Vec2::new(hidden.track.center().x, il2.header_bottom() - 2.0)), None);
+        assert!(!il2.row_visible(hidden), "…and the painter skips it by the same rule");
+        // A no-curve module gets NO well and NO description box (operator ruling): the rows
+        // start right under the title's strip, as before the increment.
+        let sine = node_with_params();
+        let il3 = compute(&sine, panel());
+        assert_eq!(il3.plot, None);
+        assert_eq!(il3.header_bottom(), il3.title.max.y);
+        assert_eq!(il3.rows[0].track.min.y, il3.title.max.y);
     }
 
     #[test]
@@ -424,7 +526,7 @@ mod tests {
         let n = node_with_many(20);
         let top = compute_at(&n, short_panel(), 0.0);
         let thumb_top = top.thumb().expect("a scrollable panel draws its thumb");
-        assert!((thumb_top.min.y - top.title.max.y).abs() < 1e-3, "at the top of the content");
+        assert!((thumb_top.min.y - top.header_bottom()).abs() < 1e-3, "at the top of the content");
         assert!(thumb_top.height() < (top.rect.max.y - top.title.max.y));
         assert!(thumb_top.height() >= LAYOUT_SPACE_4 as f32, "the thumb stays touch-visible");
 

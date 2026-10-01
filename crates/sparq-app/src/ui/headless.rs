@@ -13,7 +13,6 @@ use std::time::Instant;
 
 use sparq_ui::gesture::GestureIntent;
 use sparq_ui::pointer::{PointerEvent, PointerKind, PointerPhase};
-use sparq_ui::shell::ShellMode;
 
 use crate::ui::adapter::{self, ThemeChoice};
 use crate::ui::shell_ui::{FrameInput, ShellUi};
@@ -126,13 +125,13 @@ pub fn run_frames(opts: &UiOptions) -> i32 {
     );
     if let Some(l) = layout {
         println!(
-            "layout        : canvas {:.0}x{:.0} · rail {} · inspector {} · dock {} · refused {} · forced {:?}",
+            "layout        : canvas {:.0}x{:.0} · rail {} · inspector {} · dock {} · small-viewport {} · forced {:?}",
             l.canvas.width(),
             l.canvas.height(),
             l.rail.is_some(),
             l.inspector.is_some(),
             l.dock.is_some(),
-            l.design_refused,
+            l.below_breakpoint,
             l.forced
         );
     }
@@ -151,85 +150,92 @@ pub fn run_frames(opts: &UiOptions) -> i32 {
 pub fn run_audit(_opts: &UiOptions) -> i32 {
     let mut failures: Vec<String> = Vec::new();
     println!("sparq ui · layout audit (WO-012 gate)");
-    println!("matrix: {} viewports x {} DPI scales x 2 modes; every interactive element measured against its touch class", VIEWPORTS.len(), SCALES.len());
+    println!("matrix: {} viewports x {} DPI scales x 1 mode (Design — Perform removed by operator ruling); every interactive element measured against its touch class", VIEWPORTS.len(), SCALES.len());
 
     // ------------------------------------------------------------ matrix
+    // One mode now (Design — operator ruling 2026-09-30 removed Perform): the matrix is
+    // viewports × DPI scales, and every scale must decide IDENTICALLY — the layout model works
+    // in logical px, so DPI must not change what is decided or where it lands. That is the
+    // machine-checkable half of the per-monitor-DPI acceptance criterion.
     for &(w, h, label) in &VIEWPORTS {
-        // Per (viewport, mode): the results at every scale must be IDENTICAL — the layout model
-        // works in logical px, so DPI must not change what is decided or where it lands. That is
-        // the machine-checkable half of the per-monitor-DPI acceptance criterion.
-        for &mode in &[ShellMode::Design, ShellMode::Perform] {
-            let mut baseline: Option<(usize, usize, usize, String, bool)> = None;
-            let mut scale_results: Vec<String> = Vec::new();
-            for &scale in &SCALES {
-                let ctx = egui::Context::default();
-                ctx.set_pixels_per_point(scale);
-                adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
-                let mut shell = ShellUi::new();
-                shell.set_mode(mode);
-                // Two frames: the first builds the registry, the second is what the audit reads.
-                step(&mut shell, &ctx, w, h, 0.0, 0, &[]);
-                step(&mut shell, &ctx, w, h, 1.0 / 60.0, 16, &[]);
-                let report = shell.audit_report();
-                let refused = shell.last_layout.as_ref().is_some_and(|l| l.design_refused)
-                    || shell.state.mode != mode;
-                let key = (report.checked, report.violations.len(), report.dense_badges.len());
-                let lay = format!(
-                    "{:?}",
-                    shell.last_layout.as_ref().map(|l| (
-                        l.canvas.min,
-                        l.canvas.max,
-                        l.rail.is_some(),
-                        l.inspector.is_some(),
-                        l.dock.is_some()
-                    ))
-                );
-                if baseline.is_none() {
-                    baseline = Some((key.0, key.1, key.2, lay.clone(), refused));
-                } else if let Some(b) = &baseline {
-                    if (b.0, b.1, b.2) != key || b.3 != lay {
-                        failures.push(format!("{label} @{scale:.2} {mode:?}: DPI variance — {key:?} vs baseline {b:?}"));
-                    }
-                }
-                for v in &report.violations {
+        let mut baseline: Option<(usize, usize, usize, String)> = None;
+        let mut scale_results: Vec<String> = Vec::new();
+        for &scale in &SCALES {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
+            let mut shell = ShellUi::new();
+            // Two frames: the first builds the registry, the second is what the audit reads.
+            step(&mut shell, &ctx, w, h, 0.0, 0, &[]);
+            step(&mut shell, &ctx, w, h, 1.0 / 60.0, 16, &[]);
+            let report = shell.audit_report();
+            let small = shell.last_layout.as_ref().is_some_and(|l| l.below_breakpoint);
+            let key = (report.checked, report.violations.len(), report.dense_badges.len());
+            let lay = format!(
+                "{:?}",
+                shell.last_layout.as_ref().map(|l| (
+                    l.canvas.min,
+                    l.canvas.max,
+                    l.rail.is_some(),
+                    l.inspector.is_some(),
+                    l.dock.is_some()
+                ))
+            );
+            if baseline.is_none() {
+                baseline = Some((key.0, key.1, key.2, lay.clone()));
+            } else if let Some(b) = &baseline {
+                if *b != (key.0, key.1, key.2, lay.clone()) {
                     failures.push(format!(
-                        "{label} @{scale:.2} {mode:?}: {} needs {:.0}px, measured {:.0}px ({})",
-                        v.id, v.required, v.actual, v.reason
+                        "{label} @{scale:.2}: DPI variance — {key:?} vs baseline {b:?}"
                     ));
                 }
-                scale_results.push(format!(
-                    "@{:.2}: {} elements, {} violations, {} dense{}",
-                    scale,
-                    report.checked,
-                    report.violations.len(),
-                    report.dense_badges.len(),
-                    if refused { ", REFUSED->PERFORM" } else { "" }
+            }
+            for v in &report.violations {
+                failures.push(format!(
+                    "{label} @{scale:.2}: {} needs {:.0}px, measured {:.0}px ({})",
+                    v.id, v.required, v.actual, v.reason
                 ));
             }
-            let verdict = if failures.is_empty() { "PASS" } else { "FAIL" };
-            println!("[{verdict}] {label} · {mode:?} — {}", scale_results.join(" | "));
+            scale_results.push(format!(
+                "@{:.2}: {} elements, {} violations, {} dense{}",
+                scale,
+                report.checked,
+                report.violations.len(),
+                report.dense_badges.len(),
+                if small { ", SMALL-REFLOW" } else { "" }
+            ));
         }
+        let verdict = if failures.is_empty() { "PASS" } else { "FAIL" };
+        println!("[{verdict}] {label} · Design — {}", scale_results.join(" | "));
     }
     println!(
         "[{}] dpi-invariance — every viewport produced identical layout+audit at 100/125/150/200%",
         if failures.iter().any(|f| f.contains("DPI variance")) { "FAIL" } else { "PASS" }
     );
 
-    // The below-breakpoint viewport must have been refused in Design mode (the matrix cells
-    // above show REFUSED->PERFORM; assert it explicitly so a regression cannot hide in a label).
+    // The below-breakpoint viewport must REFLOW in Design (the matrix cell above shows
+    // SMALL-REFLOW; assert it explicitly so a regression cannot hide in a label): the shell
+    // loads into Design, says the small-viewport sentence once, and collapses what the canvas
+    // floor needs — never a refusal, never a second mode.
     {
         let ctx = egui::Context::default();
         adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
         let mut shell = ShellUi::new();
         step(&mut shell, &ctx, 1024.0, 700.0, 0.0, 0, &[]);
-        let ok = shell.state.mode == ShellMode::Perform
-            && shell.log().iter().any(|l| l.contains("DESIGN MODE REFUSED"));
-        let refused_run = shell.last_layout.as_ref().is_some_and(|l| l.canvas.width() > 0.0);
-        if ok && refused_run {
-            println!("[PASS] below-breakpoint — Design refused, Perform reflowed and rendered");
+        let lay = shell.last_layout.clone();
+        let ok = lay.as_ref().is_some_and(|l| {
+            l.below_breakpoint
+                && l.canvas.width() > 0.0
+                && l.inspector.is_none()
+                && l.forced.contains(&sparq_ui::shell::ForcedCollapse::Inspector)
+        }) && shell.log().iter().any(|l| l.contains("tablet breakpoint"));
+        if ok {
+            println!(
+                "[PASS] below-breakpoint — Design reflowed (inspector yielded), said in words"
+            );
         } else {
-            failures.push("below-breakpoint viewport did not refuse Design mode".to_string());
-            println!("[FAIL] below-breakpoint — Design was not refused");
+            failures.push("below-breakpoint viewport did not reflow Design".to_string());
+            println!("[FAIL] below-breakpoint — Design did not reflow");
         }
     }
 
@@ -258,6 +264,12 @@ pub fn run_audit(_opts: &UiOptions) -> i32 {
     // ------------------------------------------------------------ mouse + meter smokes
     println!("mouse + meter smoke (WO-012 inc 4: right-click, wheel, hover silence, master bars):");
     run_mouse_and_meter_smokes(&mut failures);
+
+    // ------------------------------------------------------------ response plot + inset wells
+    println!(
+        "response + inset smoke (WO-012 inc 5: wells on every audio node, the svf curve, the probe marker):"
+    );
+    run_response_smokes(&mut failures);
 
     println!(
         "ui audit: {} ({} failure(s))",
@@ -349,34 +361,20 @@ fn run_gesture_smoke(failures: &mut Vec<String>) {
         failures,
     );
 
-    // 2. tap mode → Perform: chrome gone, XL pads present, audit clean; tap back → Design.
-    let Some(mode_btn) = must_rect(&shell, "topbar/mode", failures) else {
-        return;
-    };
-    let c = mode_btn.center();
-    now += 400;
-    frame!([finger(3, c.x, c.y, PointerPhase::Down, now)]);
-    now += 80;
-    frame!([finger(3, c.x, c.y, PointerPhase::Up, now)]);
-    let perform_ok = shell.state.mode == ShellMode::Perform
-        && shell
-            .last_layout
-            .as_ref()
-            .is_some_and(|l| l.rail.is_none() && l.inspector.is_none() && l.dock.is_none())
-        && shell.audit_report().is_clean()
-        && shell.rect_of("perform/panic").is_some();
-    check("mode tap → Perform: chrome unhit-testable, XL pads audited clean", perform_ok, failures);
-    let Some(back) = must_rect(&shell, "perform/mode", failures) else {
-        return;
-    };
-    let c = back.center();
-    now += 400;
-    frame!([finger(4, c.x, c.y, PointerPhase::Down, now)]);
-    now += 80;
-    frame!([finger(4, c.x, c.y, PointerPhase::Up, now)]);
+    // 2. The app LOADS into Design and there is no door out (operator ruling 2026-09-30:
+    //    Perform mode removed from the runtime, Design is the one surface): no mode toggle in
+    //    the top bar or the rail, no perform pads anywhere, and the Design chrome the rest of
+    //    this suite drives is registered from the first frame.
+    let no_mode_door = shell.rect_of("topbar/mode").is_none()
+        && shell.rect_of("rail/mode/toggle").is_none()
+        && shell.rect_of("perform/play").is_none()
+        && shell.rect_of("perform/mode").is_none();
     check(
-        "Perform mode tap → back to Design with chrome restored",
-        shell.state.mode == ShellMode::Design && shell.rect_of("rail/transport/play").is_some(),
+        "the shell loads straight into Design: no mode toggle, no perform pads, chrome registered",
+        no_mode_door
+            && shell.rect_of("rail/transport/play").is_some()
+            && shell.rect_of("topbar/theme").is_some()
+            && shell.audit_report().is_clean(),
         failures,
     );
 
@@ -415,8 +413,10 @@ fn run_gesture_smoke(failures: &mut Vec<String>) {
 
     // Demo node order: 0 sine (mono out) · 1 gain (stereo in/out) · 2 rms (stereo in, cv out) ·
     // 3 gain again (FREE stereo in — the connect target).
+    /// The grab point for BODY gestures (move, menu): the header band — since increment 6 the
+    /// card centre is parameter rows, and a finger there edits, exactly like the reference.
     fn node_center(l: &CanvasLayout, idx: usize) -> Option<SpVec2> {
-        l.nodes.get(idx).map(|n| n.screen.center())
+        l.nodes.get(idx).map(|n| n.header_screen.center())
     }
     fn node_id(l: &CanvasLayout, idx: usize) -> Option<NodeId> {
         l.nodes.get(idx).map(|n| n.id)
@@ -1024,7 +1024,10 @@ fn run_inc5_smokes(failures: &mut Vec<String>) {
     //     a hidden row becomes touchable and the camera stays put.
     let ctx2 = egui::Context::default();
     adapter::apply_style(&ctx2, ThemeChoice::PhosphorDark);
-    let (w2, h2) = (1280.0_f32, 800.0_f32);
+    // 1920: at tablet-min the reflow rule yields the INSPECTOR first (params live on the node
+    // cards now; the library keeps the column) — this smoke is about the inspector's scroll,
+    // so it runs where the inspector lives.
+    let (w2, h2) = (1920.0_f32, 1080.0_f32);
     let mut sh2 = ShellUi::new();
     let mut t2 = 0.0_f64;
     let mut now2 = 0_u64;
@@ -1047,7 +1050,12 @@ fn run_inc5_smokes(failures: &mut Vec<String>) {
         };
         let _ = frame2!([]);
         // tap the node → the inspector computes for it
-        let nc = sh2.canvas_layout().nodes.iter().find(|n| n.id == mid).map(|n| n.screen.center());
+        let nc = sh2
+            .canvas_layout()
+            .nodes
+            .iter()
+            .find(|n| n.id == mid)
+            .map(|n| n.header_screen.center());
         if let Some(nc) = nc {
             now2 += 400;
             frame2!([finger(50, nc.x, nc.y, PointerPhase::Down, now2)]);
@@ -1264,14 +1272,17 @@ fn run_live_smokes(failures: &mut Vec<String>) {
     let swaps_before = shell.live.as_ref().map(|s| s.stats().swap.swaps).unwrap_or(u64::MAX);
     shell.canvas.param_edit(&mut shell.graph, sine, 1, 0.05);
     frame!([]); // the op→sync door
+                // The coefficient GLIDES (defect #85: 25 ms tau), so the level follows with a fader's lag:
+                // pump past two time constants before asking whether it arrived — the thing under test is
+                // the ring path and the absence of swaps, not the glide's speed (param_ramp gates that).
     if let Some(s) = shell.live.as_mut() {
-        let _ = s.pump_manual(8);
+        let _ = s.pump_manual(48);
     }
     frame!([]);
     let after = shell.canvas.levels.get(sine);
     let swaps_after = shell.live.as_ref().map(|s| s.stats().swap.swaps).unwrap_or(0);
     check(
-        "a param edit while live crosses the command ring — the level FOLLOWS the signal, zero boundary swaps",
+        "a param edit while live crosses the command ring — the level FOLLOWS the signal (through the glide), zero boundary swaps",
         after > 0.0 && after < before * 0.5 && swaps_after == swaps_before,
         failures,
     );
@@ -1512,7 +1523,7 @@ fn run_mouse_and_meter_smokes(failures: &mut Vec<String>) {
 
     // 35. Right-click is the mouse's long-press: over a node it opens THAT node's menu; an
     //     outside tap closes it with nothing applied.
-    let node_c = shell.canvas_layout().nodes.first().map(|n| n.screen.center());
+    let node_c = shell.canvas_layout().nodes.first().map(|n| n.header_screen.center());
     let mut menu_open = false;
     if let Some(c) = node_c {
         frame_x!([], [GestureIntent::Context { pos: c }]);
@@ -1538,7 +1549,10 @@ fn run_mouse_and_meter_smokes(failures: &mut Vec<String>) {
         shell.canvas.catalog().iter().position(|i| i.spec.module_id == "sparq/util/mixer");
     let mut sel = false;
     if let Some(mi) = mixer_idx {
-        let card_id = format!("dock/card/{mi}");
+        // The library's search is the door now: type the name, the ranking leaves one card.
+        shell.library_entry = sparq_ui::canvas::entry::TextEntry::new("mixer");
+        frame!([]);
+        let card_id = format!("library/card/{mi}");
         if let Some(card) = shell.rect_of(&card_id) {
             let c = card.center();
             now += 400;
@@ -1547,6 +1561,7 @@ fn run_mouse_and_meter_smokes(failures: &mut Vec<String>) {
             frame!([finger(91, c.x, c.y, PointerPhase::Up, now)]);
             sel = shell.canvas.selection.nodes.len() == 1;
         }
+        shell.library_entry = sparq_ui::canvas::entry::TextEntry::new("");
     }
     let sel_id = shell.canvas.selection.nodes.iter().next().copied();
     frame!([]); // the inspector geometry lands
@@ -1634,7 +1649,65 @@ pub fn run_svg(opts: &UiOptions) -> i32 {
     ctx.set_pixels_per_point(opts.scale);
     adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
     let mut shell = ShellUi::new();
-    let frames = opts.headless_frames.max(1);
+    // --review: the slice-B convergence state (WO-012 increment 5) — the wells' showcase
+    // modules spawned beside the demo chain, the svf selected, and a pumped manual-null
+    // session so the meter wells read LIVE (the rings' half of "live where they carry it").
+    let frames =
+        if opts.review { opts.headless_frames.max(4) } else { opts.headless_frames.max(1) };
+    let mut review_svf: Option<sparq_ui::canvas::model::NodeId> = None;
+    if opts.review {
+        use sparq_ui::canvas::model::{NodeSpec, Op};
+        let nid = |op: Op| match op {
+            Op::AddNode(n) => n.id,
+            _ => u32::MAX,
+        };
+        for (id, x, y) in [
+            ("sparq/env/ad", 0.0f32, 400.0f32),
+            ("sparq/mod/lfo", 0.0, 640.0),
+            ("sparq/flt/svf", 800.0, 400.0),
+            // A BARE required-input node on purpose: the review sheet shows the light-red
+            // unfinished flag the operator's 2026-09-30 ruling introduced (flag, not refuse).
+            ("sparq/util/delay", 1_040.0, 640.0),
+        ] {
+            if let Some(spec) = shell.modules.get(id).map(|r| NodeSpec::from_manifest(r.manifest()))
+            {
+                let spawned = nid(shell.graph.op_add_node(spec, sparq_ui::geom::Vec2::new(x, y)));
+                if id == "sparq/flt/svf" {
+                    review_svf = Some(spawned);
+                }
+            }
+        }
+        if let Some(id) = review_svf {
+            // Wire the svf into the demo chain (gain.out → svf.in): a bare svf is an illegal
+            // live patch (its audio input is required), and a WIRED one hands the master
+            // badge over — the review sheet shows the filter rendering hot, meters live.
+            if let Some(gain) = shell
+                .graph
+                .nodes()
+                .iter()
+                .find(|n| n.spec.module_id == "sparq/util/gain")
+                .map(|n| n.id)
+            {
+                use sparq_module_api::port::Phase;
+                use sparq_ui::canvas::connect::ConnectContext;
+                use sparq_ui::canvas::model::PortRef;
+                let cctx = ConnectContext::no_adapters(Phase::Zero);
+                shell.canvas.connect_ports(
+                    &mut shell.graph,
+                    PortRef::new(gain, 1),
+                    PortRef::new(id, 0),
+                    &cctx,
+                );
+            }
+            shell.canvas.selection.clear();
+            shell.canvas.selection.nodes.insert(id);
+        }
+        shell.start_live_with(crate::ui::live::LiveOptions {
+            backend: Some(sparq_kernel::hal::BackendKind::Null),
+            paced: false,
+            capture_frames: 0,
+        });
+    }
     let mut skipped = 0usize;
     let mut svg = String::new();
     for f in 0..frames {
@@ -1649,6 +1722,17 @@ pub fn run_svg(opts: &UiOptions) -> i32 {
             );
         });
         out.textures_delta.clear();
+        if opts.review && f == 0 {
+            // After the first frame the inspector geometry (and with it the plot's axes) is
+            // live: place the probe marker at the mockup's own frequency and pump the null
+            // session so the next frames drain hot meters into the wells.
+            if let Some(id) = review_svf {
+                shell.canvas.set_response_marker(id, 1_240.0);
+            }
+            if let Some(s) = shell.live.as_mut() {
+                let _ = s.pump_manual(16);
+            }
+        }
         if f + 1 == frames {
             svg = shapes_to_svg(&out.shapes, opts.width, opts.height, &mut skipped);
         }
@@ -1744,7 +1828,12 @@ fn shapes_to_svg(
                         pt.y
                     ));
                 }
-                d.push('Z');
+                // Only a CLOSED path gets the Z: an open stroke (a scope trace, a response
+                // curve) must not grow a closing segment back to its first point — the well
+                // would show a diagonal that was never drawn (instrument fix, WO-012 inc 5).
+                if ps.closed {
+                    d.push('Z');
+                }
                 let (fc, fa) = col(fill);
                 let (sc, sa) = col(path_col(stroke));
                 o.push_str(&format!("<path d=\"{d}\""));
@@ -1810,6 +1899,572 @@ fn shapes_to_svg(
     o
 }
 
+// ------------------------------------------------------------------ response plot + inset well smokes
+
+/// One frame through the shell, keeping the two shape families the slice-B smokes assert on:
+/// the drawn TEXTS (the honest-words half) and the open PATHS (the well/curve polyline half).
+/// The pixel-side instrument for "the painter really drew it" — state assertions alone would
+/// pass with a painter that never runs.
+fn frame_collect(
+    shell: &mut ShellUi,
+    ctx: &egui::Context,
+    w: f32,
+    h: f32,
+    t: f64,
+    now: u64,
+) -> (Vec<String>, Vec<egui::epaint::PathShape>, Vec<(egui::Rect, egui::Color32)>) {
+    let mut out = ctx.run_ui(raw_input(w, h, t), |ui| {
+        shell.frame(ui, FrameInput { pointers: &[], now_ms: now, extras: &[] });
+    });
+    out.textures_delta.clear();
+    let mut texts = Vec::new();
+    let mut paths = Vec::new();
+    let mut fills = Vec::new();
+    for cs in &out.shapes {
+        match &cs.shape {
+            egui::Shape::Text(ts) => texts.push(ts.galley.text().to_string()),
+            egui::Shape::Path(ps) => paths.push(ps.clone()),
+            egui::Shape::Rect(rs) if rs.fill.a() > 0 => fills.push((rs.rect, rs.fill)),
+            _ => {},
+        }
+    }
+    (texts, paths, fills)
+}
+
+/// WO-012 increment 5 smokes (convergence slice B): the meter wells go live on EVERY
+/// audio-output node (the ring already carried them), the inspector shows the svf curve from
+/// the filter's own `magnitude_at`, the probe marker is a READING (dragging it moves the
+/// readout and writes no param — the patch stays byte-identical), a no-curve module says so in
+/// words, and the svf node thumbnail draws its curve.
+fn run_response_smokes(failures: &mut Vec<String>) {
+    use crate::ui::live::LiveOptions;
+    use sparq_kernel::hal::BackendKind;
+    use sparq_module_api::port::Phase;
+    use sparq_ui::canvas::connect::ConnectContext;
+    use sparq_ui::canvas::inset;
+    use sparq_ui::canvas::model::{NodeSpec, Op, PortRef};
+    use sparq_ui::canvas::response;
+    use sparq_ui::geom::Vec2 as SpVec2;
+    use sparq_ui::gesture::GestureIntent;
+
+    let ctx = egui::Context::default();
+    adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
+    let (w, h) = (1920.0_f32, 1080.0_f32);
+    let mut shell = ShellUi::new();
+    let mut t = 0.0_f64;
+    let mut now = 0_u64;
+    macro_rules! frame {
+        ($pts:expr) => {{
+            t += 1.0 / 60.0;
+            step(&mut shell, &ctx, w, h, t, now, &$pts)
+        }};
+    }
+    macro_rules! frame_x {
+        ($pts:expr, $extras:expr) => {{
+            t += 1.0 / 60.0;
+            step_x(&mut shell, &ctx, w, h, t, now, &$pts, &$extras)
+        }};
+    }
+    frame!([]);
+
+    fn find_id(shell: &ShellUi, m: &str) -> Option<u32> {
+        shell.graph.nodes().iter().find(|n| n.spec.module_id == m).map(|n| n.id)
+    }
+    let (gain, rms, sine) = (
+        find_id(&shell, "sparq/util/gain"),
+        find_id(&shell, "sparq/ana/rms"),
+        find_id(&shell, "sparq/syn/sine"),
+    );
+    let nid = |op: Op| match op {
+        Op::AddNode(n) => n.id,
+        _ => u32::MAX,
+    };
+
+    // 38. Meter bars are `out/main`'s ALONE (operator ruling 2026-09-30): wire gain → out/main,
+    //     PLAY + pump on the manual null, and the DATA-class bar fills appear inside out/main's
+    //     body and inside NO other node's — the ring still carries every port's peaks (the
+    //     session's map), but the painter spends them on the one meter the patch has. At rest
+    //     the wells are empty.
+    let rest_empty = shell.live.is_none();
+    let out_main = find_id(&shell, "sparq/out/main");
+    if let (Some(g), Some(o)) = (gain, out_main) {
+        let cctx = ConnectContext::no_adapters(Phase::Zero);
+        let _ = shell.canvas.connect_ports(
+            &mut shell.graph,
+            PortRef::new(g, 1),
+            PortRef::new(o, 0),
+            &cctx,
+        );
+    }
+    shell.start_live_with(LiveOptions {
+        backend: Some(BackendKind::Null),
+        paced: false,
+        capture_frames: 0,
+    });
+    if let Some(s) = shell.live.as_mut() {
+        let _ = s.pump_manual(8);
+    }
+    let (_, _, fills) = {
+        t += 1.0 / 60.0;
+        frame_collect(&mut shell, &ctx, w, h, t, now)
+    };
+    let body_of =
+        |id: u32| shell.canvas_layout().nodes.iter().find(|n| n.id == id).map(|n| n.screen);
+    let data = adapter::Palette::for_theme(ThemeChoice::PhosphorDark).data;
+    let bars_in = |id: Option<u32>| -> usize {
+        body_of(id.unwrap_or(u32::MAX)).map_or(0, |b| {
+            fills
+                .iter()
+                .filter(|(r, c)| {
+                    *c == data
+                        && r.min.x >= b.min.x - 1.0
+                        && r.max.x <= b.max.x + 1.0
+                        && r.min.y >= b.min.y - 1.0
+                        && r.max.y <= b.max.y + 1.0
+                })
+                .count()
+        })
+    };
+    let main_bars = bars_in(out_main);
+    let other_bars = bars_in(gain) + bars_in(rms) + bars_in(sine);
+    let main_hot = out_main
+        .and_then(|o| shell.live.as_ref().and_then(|s| s.meters().get(&(o, 1)).copied()))
+        .is_some_and(|m| m.l > 0.3 && m.r > 0.3 && m.hold_l >= m.l && m.hold_r >= m.r);
+    check(
+        "meter bars are out/main's alone (hot stereo wells there, none on any other node; empty at rest)",
+        rest_empty && main_hot && main_bars >= 2 && other_bars == 0,
+        failures,
+    );
+    if let Some(s) = shell.live.take() {
+        s.stop("STOP", &mut Vec::new());
+    }
+
+    // The showcase modules for the wells: env/ad (Envelope), mod/lfo (Sparkline), flt/svf
+    // (Curve) — spawned AFTER smoke 38's session on purpose: a BARE svf has an unwired
+    // required audio input, which is an illegal live patch (WO-008 inc 7's host-side
+    // enforcement would refuse the whole build — the session must not carry nodes the
+    // executor refuses). Bare here changes no master: unwired nodes are excluded everywhere.
+    let spawn = |shell: &mut ShellUi,
+                 id: &str,
+                 x: f32,
+                 y: f32|
+     -> Option<sparq_ui::canvas::model::NodeId> {
+        let spec = shell.modules.get(id).map(|r| NodeSpec::from_manifest(r.manifest()))?;
+        Some(nid(shell.graph.op_add_node(spec, SpVec2::new(x, y))))
+    };
+    let env_id = spawn(&mut shell, "sparq/env/ad", 100.0, 640.0);
+    let lfo_id = spawn(&mut shell, "sparq/mod/lfo", 340.0, 640.0);
+    let svf_id = spawn(&mut shell, "sparq/flt/svf", 580.0, 640.0);
+    frame!([]);
+
+    // 39. The inspector shows the svf curve (the filter's own math, on the fixed grid) and a
+    //     tap on the plot places the probe marker: the readout answers in Hz and dB, and the
+    //     marker's capture band joins the audit — measured, not hoped.
+    let Some(svf) = svf_id else {
+        failures.push("the registry is missing flt/svf for the response smokes".to_string());
+        return;
+    };
+    shell.canvas.selection.clear();
+    shell.canvas.selection.nodes.insert(svf);
+    frame!([]); // the inspector geometry and the curve cache land
+    let curve_ok = shell
+        .curves
+        .get(&svf)
+        .map(|f| {
+            f.freqs.len() == response::GRID_POINTS
+                && f.mags.len() == response::GRID_POINTS
+                && f.mags.iter().all(|m| m.is_finite() && *m >= 0.0)
+                && f.mags[0] > f.mags[response::GRID_POINTS - 1] * 10.0
+        })
+        .unwrap_or(false);
+    let plot = shell.canvas.inspector().and_then(|il| il.plot);
+    let (mut readout_ok, mut audited) = (false, false);
+    if let Some(plot) = plot {
+        let before = shell.audit_report().checked;
+        frame_x!([], [GestureIntent::Activate { pos: plot.center() }]);
+        let report = shell.audit_report();
+        audited = report.checked > before && report.violations.is_empty();
+        readout_ok = shell
+            .response_readout()
+            .is_some_and(|(n, hz, db)| n == svf && hz > 100.0 && hz < 5_000.0 && db.is_finite());
+    }
+    check(
+        "the inspector shows the svf curve and the tap-placed marker reads a frequency + dB (capture audited)",
+        curve_ok && readout_ok && audited,
+        failures,
+    );
+
+    // 40. Dragging the marker moves the readout and writes NO param: the patch is
+    //     byte-identical after, the history is empty and the live-sync ledger heard nothing.
+    let g0 = shell.graph.clone();
+    let undo0 = shell.canvas.history.undo_len();
+    let hz0 = shell.response_readout().map(|(_, hz, _)| hz);
+    let mut moved = false;
+    if let Some(plot) = shell.canvas.inspector().and_then(|il| il.plot) {
+        let grab = SpVec2::new(plot.min.x + plot.width() * 0.75, plot.center().y);
+        frame_x!([], [GestureIntent::DragStart { pos: grab }]);
+        frame_x!([], [GestureIntent::DragUpdate { delta: SpVec2::new(-40.0, 0.0), scale: 1.0 }]);
+        frame_x!(
+            [],
+            [GestureIntent::DragEnd { pos: SpVec2::new(grab.x - 40.0, grab.y), cancelled: false }]
+        );
+        moved = match (hz0, shell.response_readout().map(|(_, hz, _)| hz)) {
+            (Some(a), Some(b)) => (b - a).abs() > 1.0,
+            _ => false,
+        };
+    }
+    let ledger_quiet = shell.canvas.take_patch_changes().is_empty();
+    let idle = matches!(shell.canvas.interaction, sparq_ui::canvas::interact::Interaction::Idle);
+    check(
+        "dragging the marker moves the readout, writes no param and rings no command (the patch is byte-identical)",
+        moved
+            && shell.graph == g0
+            && ledger_quiet
+            && shell.canvas.history.undo_len() == undo0
+            && idle,
+        failures,
+    );
+
+    // 41. A module that declares no curve gets NO box and NO description (operator ruling
+    //     2026-09-30 retired increment 5's no-curve words): the inspector shows the port strip
+    //     and the rows, nothing about a curve is drawn or said, and the probe marker did not
+    //     survive the selection change.
+    let mut no_curve_clean = false;
+    if let Some(sine_id) = sine {
+        shell.canvas.selection.clear();
+        shell.canvas.selection.nodes.insert(sine_id);
+        t += 1.0 / 60.0;
+        let (texts, _, _) = frame_collect(&mut shell, &ctx, w, h, t, now);
+        let rows_under_title = shell.canvas.inspector().is_some_and(|il| {
+            il.plot.is_none()
+                && !il.rows.is_empty()
+                && (il.rows[0].track.min.y - il.title.max.y).abs() < 1e-3
+        });
+        no_curve_clean = !shell.curves.contains_key(&sine_id)
+            && shell.canvas.response_marker(sine_id).is_none()
+            && rows_under_title
+            && !texts.iter().any(|t| t.contains("NO RESPONSE CURVE"))
+            && !texts.iter().any(|t| t == "RESPONSE");
+    }
+    check(
+        "a no-curve module shows no response box and no description (rows start under the strip)",
+        no_curve_clean,
+        failures,
+    );
+
+    // 42. The node thumbnails draw: the svf well plots the response grid, the env/ad well its
+    //     declared triangle, the lfo well its one-period outline — polylines INSIDE their node
+    //     bodies, at the model's own point counts (the registry dispatched, the painter drew).
+    let mut thumbs = (false, false, false);
+    if let (Some(env), Some(lfo)) = (env_id, lfo_id) {
+        t += 1.0 / 60.0;
+        let (_, paths, _) = frame_collect(&mut shell, &ctx, w, h, t, now);
+        let body_of = |id: sparq_ui::canvas::model::NodeId| {
+            shell.canvas_layout().nodes.iter().find(|n| n.id == id).map(|n| n.screen)
+        };
+        let inside = |id: sparq_ui::canvas::model::NodeId, want: usize| -> bool {
+            body_of(id).is_some_and(|body| {
+                paths.iter().any(|ps| {
+                    ps.points.len() == want
+                        && ps.points.iter().all(|p| body.contains(SpVec2::new(p.x, p.y)))
+                })
+            })
+        };
+        thumbs = (
+            inside(env, 2 * inset::ENVELOPE_POINTS),
+            inside(lfo, inset::LFO_PERIOD_POINTS),
+            inside(svf, response::GRID_POINTS),
+        );
+    }
+    check(
+        "the inset wells draw their param shapes (envelope triangle, lfo period, svf curve thumbnail)",
+        thumbs.0 && thumbs.1 && thumbs.2,
+        failures,
+    );
+
+    // 43. Playback is NOT blocked by a bare module (operator ruling 2026-09-30): the spawned
+    //     svf still has no wire into its required `in`, and PLAY starts anyway — the executor
+    //     flags it, the module renders silenced, and the canvas paints the light-red
+    //     "unfinished" highlight (tint fill inside the body + the NO IN word at Full LOD).
+    shell.start_live_with(LiveOptions {
+        backend: Some(BackendKind::Null),
+        paced: false,
+        capture_frames: 0,
+    });
+    let playing =
+        shell.live.as_ref().is_some_and(|s| s.health() == sparq_kernel::hal::StreamState::Running);
+    let flagged = shell.graph.missing_required_inputs().contains(&(svf, 0));
+    if let Some(s) = shell.live.as_mut() {
+        let _ = s.pump_manual(4);
+    }
+    let pal = adapter::Palette::for_theme(ThemeChoice::PhosphorDark);
+    let tint = egui::Color32::from_rgba_unmultiplied(
+        pal.error.r(),
+        pal.error.g(),
+        pal.error.b(),
+        (0.12f32 * 255.0).round() as u8,
+    );
+    let (texts43, _, fills43) = {
+        t += 1.0 / 60.0;
+        frame_collect(&mut shell, &ctx, w, h, t, now)
+    };
+    let svf_body = shell.canvas_layout().nodes.iter().find(|n| n.id == svf).map(|n| n.screen);
+    let tinted = svf_body.is_some_and(|b| {
+        fills43.iter().any(|(r, c)| {
+            *c == tint
+                && r.min.x >= b.min.x - 1.0
+                && r.max.x <= b.max.x + 1.0
+                && r.min.y >= b.min.y - 1.0
+                && r.max.y <= b.max.y + 1.0
+        })
+    });
+    check(
+        "PLAY runs with a bare required input present: flagged (light-red tint + NO IN), silenced, not refused",
+        playing && flagged && tinted && texts43.iter().any(|t| t == "NO IN"),
+        failures,
+    );
+    if let Some(s) = shell.live.take() {
+        s.stop("STOP", &mut Vec::new());
+    }
+
+    // 44. The log lives under the dock's LOG tab (operator ruling): with MODULES open no log
+    //     line is on screen; a tap on LOG puts the tail there; a tap back clears it. The canvas
+    //     band is gone.
+    let last_line = shell.log().last().cloned().unwrap_or_default();
+    // LOG is the dock's DEFAULT tab now (the palette moved to the library sidebar): with the
+    // dock open the tail line is on screen, in the dock; collapse the dock and the line leaves
+    // the frame entirely — the canvas band that used to carry it is gone for good.
+    let (texts_open, _, _) = {
+        t += 1.0 / 60.0;
+        frame_collect(&mut shell, &ctx, w, h, t, now)
+    };
+    let on_log_tab = !last_line.is_empty()
+        && shell.state.dock_tab == crate::ui::shell_ui::LOG_TAB
+        && texts_open.contains(&last_line);
+    let mut back_off = false;
+    if let Some(dc) = shell.rect_of("dock/collapse") {
+        let mc = dc.center();
+        now += 400;
+        frame!([finger(94, mc.x, mc.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(94, mc.x, mc.y, PointerPhase::Up, now)]);
+        t += 1.0 / 60.0;
+        let (texts_closed, _, _) = frame_collect(&mut shell, &ctx, w, h, t, now);
+        back_off = shell.state.dock_collapsed && !texts_closed.contains(&last_line);
+        now += 400;
+        frame!([finger(95, mc.x, mc.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(95, mc.x, mc.y, PointerPhase::Up, now)]); // reopen for later smokes
+    }
+    check(
+        "the log lives under the dock's LOG tab (on screen with the dock, gone with it, never on the canvas)",
+        on_log_tab && back_off,
+        failures,
+    );
+
+    // 45. The NODE LIBRARY is a real door: the search narrows with the browser's own ranking,
+    //     the category cycle filters, the wheel scrolls the card list, and the count word says
+    //     what the filter left — the sidebar cannot offer what the registry lacks (#58).
+    use sparq_ui::canvas::entry::TextEntry;
+    shell.library_entry = TextEntry::new("sine");
+    let (texts45, _, _) = {
+        t += 1.0 / 60.0;
+        frame_collect(&mut shell, &ctx, w, h, t, now)
+    };
+    let sine_idx = shell.canvas.catalog().iter().position(|i| i.spec.module_id == "sparq/syn/sine");
+    let n_sine = shell.library_items().len();
+    let searched = sine_idx.is_some_and(|si| shell.library_items().first() == Some(&si))
+        && n_sine < shell.canvas.catalog_len()
+        && texts45.contains(&format!("{n_sine} NODES"));
+    shell.library_entry = TextEntry::new("");
+    frame!([]);
+    let all = shell.library_items().len() == shell.canvas.catalog_len();
+    let mut cycled = false;
+    if let Some(cat) = shell.rect_of("library/cat") {
+        let c = cat.center();
+        now += 400;
+        frame!([finger(96, c.x, c.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(96, c.x, c.y, PointerPhase::Up, now)]);
+        cycled = shell.library_cat == 1
+            && shell.library_items().len() < shell.canvas.catalog_len()
+            && shell.library_items().iter().all(|&i| {
+                shell.canvas.catalog()[i].spec.module_id.split('/').nth(1).unwrap_or("?")
+                    == shell.library_cat_word()
+            });
+        now += 400;
+        frame!([finger(97, c.x, c.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(97, c.x, c.y, PointerPhase::Up, now)]); // back to ALL
+    }
+    shell.library_cat = 0; // back to ALL: a filtered two-card list has nothing to scroll
+    shell.library_scroll = 0.0;
+    frame!([]);
+    let scroll0 = shell.library_scroll;
+    if let Some(lib) = shell.last_layout.as_ref().and_then(|l| l.library) {
+        frame_x!(
+            [],
+            [GestureIntent::Pan {
+                delta: SpVec2::new(0.0, -200.0),
+                center: SpVec2::new(lib.center().x, lib.center().y),
+            }]
+        );
+    }
+    let scrolled = shell.library_scroll > scroll0 + 1.0;
+    check(
+        "the NODE LIBRARY searches, filters, scrolls and counts in words (one ranking, two surfaces)",
+        searched && all && cycled && scrolled,
+        failures,
+    );
+    shell.library_scroll = 0.0;
+    frame!([]);
+
+    // 46. An inline slider on a node card is the inspector's slider: drag edits the param
+    //     (one undo step), and one three-finger undo restores the value the finger found.
+    let gain_id = find_id(&shell, "sparq/util/gain");
+    let row = shell
+        .canvas_layout()
+        .nodes
+        .iter()
+        .find(|n| n.id == gain_id.unwrap_or(u32::MAX))
+        .and_then(|n| n.param_rows.first().copied());
+    let (mut edited, mut undone) = (false, false);
+    if let (Some(g), Some(row)) = (gain_id, row) {
+        let before = shell.graph.node(g).and_then(|n| n.param_value(0));
+        frame_x!([], [GestureIntent::DragStart { pos: row.track.center() }]);
+        frame_x!([], [GestureIntent::DragUpdate { delta: SpVec2::new(40.0, 0.0), scale: 1.0 }]);
+        frame_x!(
+            [],
+            [GestureIntent::DragEnd {
+                pos: SpVec2::new(row.track.center().x + 40.0, row.track.center().y),
+                cancelled: false
+            }]
+        );
+        let after = shell.graph.node(g).and_then(|n| n.param_value(0));
+        edited = before.is_some_and(|b| after.is_some_and(|a| (a - b).abs() > 1e-3));
+        frame_x!([], [GestureIntent::Undo]);
+        undone = shell.graph.node(g).and_then(|n| n.param_value(0)) == before;
+    }
+    check(
+        "an inline node slider edits its param (one undo step) and one undo restores it",
+        edited && undone,
+        failures,
+    );
+
+    // 47. ARRANGE grid-arranges the patch as ONE undo step; one undo puts every node back.
+    let pos0: Vec<(u32, SpVec2)> = shell.graph.nodes().iter().map(|n| (n.id, n.pos)).collect();
+    if let Some(b) = shell.rect_of("toolbar/arrange") {
+        let c = b.center();
+        now += 400;
+        frame!([finger(98, c.x, c.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(98, c.x, c.y, PointerPhase::Up, now)]);
+    }
+    let arranged = shell
+        .graph
+        .nodes()
+        .iter()
+        .any(|n| pos0.iter().find(|(id, _)| *id == n.id).is_some_and(|(_, p)| *p != n.pos));
+    frame_x!([], [GestureIntent::Undo]);
+    let pos1: Vec<(u32, SpVec2)> = shell.graph.nodes().iter().map(|n| (n.id, n.pos)).collect();
+    check(
+        "ARRANGE grids the patch in one undo step; one undo restores every position",
+        arranged && pos1 == pos0,
+        failures,
+    );
+
+    // 48. The zoom step buttons move the camera percent; RESET takes it home.
+    let z0 = shell.canvas.camera.zoom;
+    if let Some(b) = shell.rect_of("toolbar/zoom-in") {
+        let c = b.center();
+        now += 400;
+        frame!([finger(99, c.x, c.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(99, c.x, c.y, PointerPhase::Up, now)]);
+    }
+    let zin = shell.canvas.camera.zoom > z0 + 1e-3;
+    if let Some(b) = shell.rect_of("toolbar/reset") {
+        let c = b.center();
+        now += 400;
+        frame!([finger(100, c.x, c.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(100, c.x, c.y, PointerPhase::Up, now)]);
+    }
+    check(
+        "the toolbar zoom steps move the camera percent and RESET takes it home",
+        zin && (shell.canvas.camera.zoom - 1.0).abs() < 1e-6,
+        failures,
+    );
+
+    // 49. The wire-style select is a display option with teeth: straight wires are two-point
+    //     runs (grab points included), smooth wires are sampled beziers — and the hit-test
+    //     restyles with the painter, so what you see is what you can grab.
+    let straight_before =
+        shell.canvas_layout().wires.iter().filter(|w| w.points.len() == 2).count();
+    if let Some(b) = shell.rect_of("toolbar/wire-style") {
+        let c = b.center();
+        now += 400;
+        frame!([finger(101, c.x, c.y, PointerPhase::Down, now)]);
+        now += 80;
+        frame!([finger(101, c.x, c.y, PointerPhase::Up, now)]);
+    }
+    let straight_after = shell.canvas_layout().wires.iter().filter(|w| w.points.len() == 2).count();
+    let wires = shell.graph.wire_count();
+    check(
+        "the wire-style select restyles painter AND hit-test (beziers <-> straight runs)",
+        wires > 0 && straight_before == 0 && straight_after == wires,
+        failures,
+    );
+
+    // 50. The right-edge master strip reads the ring: empty wells at rest, hot fills after
+    //     PLAY + pump (OUT from the master's output port, IN from the port feeding it).
+    let Some(canvas_r) = shell.last_layout.as_ref().map(|l| l.canvas) else {
+        failures.push("no canvas rect for the master-strip smoke".to_string());
+        return;
+    };
+    let strip = sparq_ui::geom::Rect::new(
+        SpVec2::new(canvas_r.max.x - 40.0, canvas_r.min.y),
+        SpVec2::new(canvas_r.max.x - 8.0, canvas_r.max.y),
+    );
+    let (_, _, fills_rest) = {
+        t += 1.0 / 60.0;
+        frame_collect(&mut shell, &ctx, w, h, t, now)
+    };
+    let in_strip = |fills: &Vec<(egui::Rect, egui::Color32)>| {
+        fills
+            .iter()
+            .filter(|(r, c)| {
+                *c == pal.data
+                    && r.min.x >= strip.min.x - 1.0
+                    && r.max.x <= strip.max.x + 1.0
+                    && r.height() > 1.0
+            })
+            .count()
+    };
+    let rest_empty_strip = in_strip(&fills_rest) == 0;
+    shell.start_live_with(LiveOptions {
+        backend: Some(BackendKind::Null),
+        paced: false,
+        capture_frames: 0,
+    });
+    if let Some(ss) = shell.live.as_mut() {
+        let _ = ss.pump_manual(8);
+    }
+    let (_, _, fills_hot) = {
+        t += 1.0 / 60.0;
+        frame_collect(&mut shell, &ctx, w, h, t, now)
+    };
+    let hot = in_strip(&fills_hot) >= 2;
+    check(
+        "the right-edge master strip reads the ring (empty at rest, hot IN and OUT while playing)",
+        rest_empty_strip && hot,
+        failures,
+    );
+    if let Some(ss) = shell.live.take() {
+        ss.stop("STOP", &mut Vec::new());
+    }
+}
+
 // ------------------------------------------------------------------ chrome conformance smokes
 
 /// WO-012 increment 3 smokes: the mockup-convergence chrome is not decoration — the dock's
@@ -1836,7 +2491,7 @@ fn run_chrome_smokes(failures: &mut Vec<String>) {
     //     the same story.
     let nodes_before = shell.graph.node_count();
     let mut spawned = false;
-    if let Some(card) = shell.rect_of("dock/card/0") {
+    if let Some(card) = shell.rect_of("library/card/0") {
         let c = card.center();
         now += 400;
         frame!([finger(80, c.x, c.y, PointerPhase::Down, now)]);
@@ -1877,7 +2532,12 @@ fn run_chrome_smokes(failures: &mut Vec<String>) {
     }
     let before = shell.graph.node_count();
     if let Some(cr) = shell.last_layout.as_ref().map(|l| l.canvas) {
-        let outside = sparq_ui::geom::Vec2::new(cr.min.x + 30.0, cr.min.y + 30.0);
+        // Below the toolbar band (chrome since increment 6) and clear of every node: an
+        // outside tap is a tap the canvas owns.
+        let outside = sparq_ui::geom::Vec2::new(
+            cr.min.x + 30.0,
+            cr.min.y + sparq_ui::tokens::LAYOUT_SHELL_TOOLBAR_HEIGHT as f32 + 30.0,
+        );
         now += 400;
         frame!([finger(85, outside.x, outside.y, PointerPhase::Down, now)]);
         now += 80;

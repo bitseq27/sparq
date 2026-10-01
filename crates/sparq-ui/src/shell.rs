@@ -11,8 +11,11 @@
 //!
 //! # Reflow rules (§14.2, in the order the tokens state them)
 //!
-//! 1. Below `tablet_min` (1280×800 logical), **Design mode is refused** (`design_refused`);
-//!    Perform mode still runs, reflowed. The refusal is a returned fact, never a silent squeeze.
+//! 1. There is ONE mode: Design (operator ruling 2026-09-30 — Perform mode is removed from the
+//!    runtime "for now", and the app loads straight into Design at every viewport). Below
+//!    `tablet_min` (1280×800 logical) the old rule refused Design and offered Perform; with
+//!    Perform gone, the refusal is gone too — the reflow rule below IS the small-viewport
+//!    answer, and it is reported, never a silent squeeze.
 //! 2. The canvas always keeps **≥ 60 % of the viewport width**. When panels would starve it,
 //!    the rail and the inspector collapse first (in that order) and each forced collapse is
 //!    reported in [`ShellLayout::forced`] — a reflow the user did not ask for must be visible.
@@ -24,45 +27,43 @@ use crate::tokens::{
     LAYOUT_BREAKPOINT_TABLET_MIN_H, LAYOUT_BREAKPOINT_TABLET_MIN_W, LAYOUT_CANVAS_SNAP,
     LAYOUT_SHELL_DOCK_HEIGHT, LAYOUT_SHELL_DOCK_HEIGHT_MAX, LAYOUT_SHELL_DOCK_HEIGHT_MIN,
     LAYOUT_SHELL_INSPECTOR_WIDTH, LAYOUT_SHELL_INSPECTOR_WIDTH_MAX,
-    LAYOUT_SHELL_INSPECTOR_WIDTH_MIN, LAYOUT_SHELL_RAIL_WIDTH, LAYOUT_SHELL_TOP_BAR_HEIGHT,
+    LAYOUT_SHELL_INSPECTOR_WIDTH_MIN, LAYOUT_SHELL_LIBRARY_WIDTH, LAYOUT_SHELL_RAIL_WIDTH,
+    LAYOUT_SHELL_TOP_BAR_HEIGHT,
 };
 
-/// Which application mode the shell is in. The layout differs (Perform hides Design chrome);
-/// the *audit* differs more (see `audit.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ShellMode {
-    /// Patching, browsing, wiring: dense chrome allowed.
-    Design,
-    /// Playing: nothing below touch class L is interactive (plan §14.3).
-    Perform,
-}
-
-/// The user-controllable part of the shell state. Everything else is derived.
+/// The user-controllable part of the shell state. Everything else is derived. There is no mode
+/// field: the shell IS the Design surface (operator ruling 2026-09-30 removed Perform mode from
+/// the runtime; perform-mode.svg stays the parked convergence target in LATER.md).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShellState {
-    /// Current mode.
-    pub mode: ShellMode,
     /// The left rail is hidden.
     pub rail_collapsed: bool,
     /// The right inspector is hidden.
     pub inspector_collapsed: bool,
     /// The bottom dock is hidden.
     pub dock_collapsed: bool,
+    /// The left NODE LIBRARY sidebar is hidden (increment 6; the top bar's LIB button).
+    pub library_collapsed: bool,
     /// Requested inspector width (clamped + snapped by `compute`).
     pub inspector_width: f32,
     /// Requested dock height (clamped + snapped by `compute`).
     pub dock_height: f32,
+    /// The dock's open tab (WO-012 increment 5b, operator ruling 2026-09-30): 0 = MODULES (the
+    /// palette), 5 = LOG (the intent/diagnostic log, moved here from the canvas band). Only
+    /// tabs whose subsystem exists are selectable; the index is view state, not project state.
+    pub dock_tab: usize,
 }
 
 impl Default for ShellState {
     fn default() -> Self {
         Self {
-            mode: ShellMode::Design,
             rail_collapsed: false,
             inspector_collapsed: false,
             dock_collapsed: false,
+            library_collapsed: false,
             inspector_width: LAYOUT_SHELL_INSPECTOR_WIDTH as f32,
             dock_height: LAYOUT_SHELL_DOCK_HEIGHT as f32,
+            dock_tab: 0,
         }
     }
 }
@@ -74,15 +75,20 @@ pub struct ShellLayout {
     pub top_bar: Rect,
     /// Left rail; `None` when collapsed (by the user or by reflow).
     pub rail: Option<Rect>,
+    /// The NODE LIBRARY sidebar (increment 6); `None` when collapsed. Sits between the rail and
+    /// the canvas, full height like the rail.
+    pub library: Option<Rect>,
     /// The canvas — the only panel that never disappears.
     pub canvas: Rect,
     /// Right inspector; `None` when collapsed.
     pub inspector: Option<Rect>,
     /// Bottom dock; `None` when collapsed.
     pub dock: Option<Rect>,
-    /// Viewport is below `tablet_min` and the mode is Design: the app must refuse Design mode
-    /// (and offer Perform). Reported, never silently ignored.
-    pub design_refused: bool,
+    /// Viewport is below `tablet_min` (1280×800): the small-viewport fact, reported in words by
+    /// the shell (operator ruling 2026-09-30: with Perform gone the old Design refusal is gone
+    /// too — the reflow rule collapses panels instead, and this flag says the viewport is the
+    /// small one). Never a silent squeeze.
+    pub below_breakpoint: bool,
     /// Reflows the layout forced (panel collapse the user did not request), for diagnostics.
     pub forced: Vec<ForcedCollapse>,
 }
@@ -92,6 +98,8 @@ pub struct ShellLayout {
 pub enum ForcedCollapse {
     /// The inspector gave up its width.
     Inspector,
+    /// The library sidebar gave up its width.
+    Library,
     /// The rail gave up its width.
     Rail,
     /// The dock gave up its height (extreme aspect ratios).
@@ -111,6 +119,7 @@ pub fn compute(viewport: Rect, state: &ShellState) -> ShellLayout {
     let top_h = LAYOUT_SHELL_TOP_BAR_HEIGHT as f32;
 
     let mut rail_w = if state.rail_collapsed { 0.0 } else { LAYOUT_SHELL_RAIL_WIDTH as f32 };
+    let mut lib_w = if state.library_collapsed { 0.0 } else { LAYOUT_SHELL_LIBRARY_WIDTH as f32 };
     // Clamping is unconditional; SNAPPING applies to user-resized values only. The token
     // defaults are the designed numbers and win verbatim — the dock default (260) is not on the
     // 8 px grid, and rounding a token to fit a rule would quietly redesign the shell. (The rule
@@ -152,13 +161,21 @@ pub fn compute(viewport: Rect, state: &ShellState) -> ShellLayout {
     // (Order from §14.2: "Rail and inspector collapse first"; between the two width panels the
     // inspector goes first because it is the widest and the rail carries the transport.)
     let floor = vw * CANVAS_MIN_WIDTH_FRACTION;
-    if vw - rail_w - insp_w < floor && insp_w > 0.0 {
+    if vw - rail_w - lib_w - insp_w < floor && insp_w > 0.0 {
         insp_w = 0.0;
         if !state.inspector_collapsed {
             forced.push(ForcedCollapse::Inspector);
         }
     }
-    if vw - rail_w - insp_w < floor && rail_w > 0.0 {
+    // The library yields after the inspector and before the rail (increment 6): it is the
+    // widest of the leftovers, and the rail carries the transport.
+    if vw - rail_w - lib_w - insp_w < floor && lib_w > 0.0 {
+        lib_w = 0.0;
+        if !state.library_collapsed {
+            forced.push(ForcedCollapse::Library);
+        }
+    }
+    if vw - rail_w - lib_w - insp_w < floor && rail_w > 0.0 {
         rail_w = 0.0;
         if !state.rail_collapsed {
             forced.push(ForcedCollapse::Rail);
@@ -186,7 +203,10 @@ pub fn compute(viewport: Rect, state: &ShellState) -> ShellLayout {
     let col_h = (vh - top_h).max(0.0);
     let rail = (rail_w > 0.0)
         .then(|| Rect::new(Vec2::new(x0, mid_y0), Vec2::new(x0 + rail_w, mid_y0 + col_h)));
-    let canvas_x0 = x0 + rail_w;
+    let library = (lib_w > 0.0).then(|| {
+        Rect::new(Vec2::new(x0 + rail_w, mid_y0), Vec2::new(x0 + rail_w + lib_w, mid_y0 + col_h))
+    });
+    let canvas_x0 = x0 + rail_w + lib_w;
     let canvas_x1 = x0 + vw - insp_w;
     let canvas = Rect::new(
         Vec2::new(canvas_x0, mid_y0),
@@ -202,11 +222,10 @@ pub fn compute(viewport: Rect, state: &ShellState) -> ShellLayout {
         )
     });
 
-    let design_refused = state.mode == ShellMode::Design
-        && (vw < LAYOUT_BREAKPOINT_TABLET_MIN_W as f32
-            || vh < LAYOUT_BREAKPOINT_TABLET_MIN_H as f32);
+    let below_breakpoint =
+        vw < LAYOUT_BREAKPOINT_TABLET_MIN_W as f32 || vh < LAYOUT_BREAKPOINT_TABLET_MIN_H as f32;
 
-    ShellLayout { top_bar, rail, canvas, inspector, dock, design_refused, forced }
+    ShellLayout { top_bar, rail, library, canvas, inspector, dock, below_breakpoint, forced }
 }
 
 #[cfg(test)]
@@ -222,7 +241,7 @@ mod tests {
     #[test]
     fn default_desktop_layout_matches_the_tokens_exactly() {
         let l = compute(vp(1920.0, 1080.0), &ShellState::default());
-        assert!(!l.design_refused);
+        assert!(!l.below_breakpoint);
         assert!(l.forced.is_empty());
         // top bar: full width, token height
         assert_eq!(l.top_bar.width(), 1920.0);
@@ -237,14 +256,19 @@ mod tests {
         assert_eq!(insp.width(), LAYOUT_SHELL_INSPECTOR_WIDTH as f32);
         assert_eq!(insp.max.x, 1920.0);
         assert_eq!(insp.max.y, 1080.0);
+        // library: token width between rail and canvas, full height (increment 6)
+        let lib = l.library.unwrap();
+        assert_eq!(lib.width(), LAYOUT_SHELL_LIBRARY_WIDTH as f32);
+        assert_eq!(lib.min.x, rail.max.x);
+        assert_eq!(lib.max.y, 1080.0);
         // dock: token height at the bottom of the CANVAS column only
         let dock = l.dock.unwrap();
         assert_eq!(dock.height(), LAYOUT_SHELL_DOCK_HEIGHT as f32);
         assert_eq!(dock.max.y, 1080.0);
-        assert_eq!(dock.min.x, LAYOUT_SHELL_RAIL_WIDTH as f32);
+        assert_eq!(dock.min.x, lib.max.x);
         assert_eq!(dock.max.x, 1920.0 - LAYOUT_SHELL_INSPECTOR_WIDTH as f32);
         // canvas: what remains, and panels never overlap it
-        assert_eq!(l.canvas.min.x, rail.max.x);
+        assert_eq!(l.canvas.min.x, lib.max.x);
         assert_eq!(l.canvas.max.x, insp.min.x);
         assert_eq!(l.canvas.min.y, l.top_bar.max.y);
         assert_eq!(l.canvas.max.y, dock.min.y);
@@ -252,11 +276,15 @@ mod tests {
 
     #[test]
     fn canvas_keeps_at_least_sixty_percent_of_the_width() {
-        // 1024 px wide: rail 56 + inspector 400 = 456 chrome → canvas 568 = 55 % → the rules
-        // must collapse the inspector (first) to restore the floor.
+        // 1024 px wide: rail 56 + library 240 + inspector 400 = 696 chrome → canvas 328 = 32 %
+        // → the rules collapse the inspector first, then the library, to restore the floor.
         let l = compute(vp(1024.0, 900.0), &ShellState::default());
         assert!(l.canvas.width() >= 1024.0 * CANVAS_MIN_WIDTH_FRACTION - 0.001);
         assert!(l.inspector.is_none(), "inspector collapses first");
+        assert!(
+            l.library.is_some(),
+            "the library survives at 1024: 728 px of canvas clears the floor"
+        );
         assert!(
             l.forced.contains(&ForcedCollapse::Inspector),
             "and the forced collapse is reported"
@@ -271,21 +299,30 @@ mod tests {
         // At 300: floor=180; 300-56=244 ≥ 180 → rail still survives. At 200: floor=120;
         // 200-56=144 ≥ 120 → survives. At 120: floor=72; 120-56=64 < 72 → rail collapses too.
         let l = compute(vp(120.0, 800.0), &ShellState::default());
-        assert!(l.rail.is_none() && l.inspector.is_none());
-        assert_eq!(l.forced, vec![ForcedCollapse::Inspector, ForcedCollapse::Rail]);
+        assert!(l.rail.is_none() && l.inspector.is_none() && l.library.is_none());
+        assert_eq!(
+            l.forced,
+            vec![ForcedCollapse::Inspector, ForcedCollapse::Library, ForcedCollapse::Rail]
+        );
         assert!(l.canvas.width() >= 120.0 * CANVAS_MIN_WIDTH_FRACTION - 0.001);
     }
 
     #[test]
-    fn design_mode_is_refused_below_the_tablet_breakpoint_and_perform_is_not() {
+    fn below_the_tablet_breakpoint_design_reflows_and_reports_instead_of_refusing() {
+        // Operator ruling 2026-09-30: Perform mode is gone and the app loads into Design at
+        // every viewport, so the old refusal (Design refused below tablet_min, Perform offered)
+        // has no subject. The small viewport now gets the reflow rule — panels collapse to keep
+        // the canvas floor — and the layout SAYS it is the small viewport, loudly.
         let small = vp(1024.0, 700.0);
-        let design = compute(small, &ShellState::default());
-        assert!(design.design_refused, "below tablet_min, Design must be refused — loudly");
-        let perform =
-            compute(small, &ShellState { mode: ShellMode::Perform, ..ShellState::default() });
-        assert!(!perform.design_refused, "Perform still runs, reflowed");
-        // exactly at the breakpoint is fine
-        assert!(!compute(vp(1280.0, 800.0), &ShellState::default()).design_refused);
+        let l = compute(small, &ShellState::default());
+        assert!(l.below_breakpoint, "the small viewport is reported");
+        assert!(l.canvas.width() >= 1024.0 * CANVAS_MIN_WIDTH_FRACTION - 0.001, "and reflowed");
+        assert!(l.inspector.is_none(), "the inspector yields its width first");
+        assert!(l.rail.is_some(), "the rail carries the transport at 1024");
+        // exactly at the breakpoint is not below it
+        assert!(!compute(vp(1280.0, 800.0), &ShellState::default()).below_breakpoint);
+        // ...and a tall-but-narrow viewport is below it on width alone
+        assert!(compute(vp(1000.0, 1400.0), &ShellState::default()).below_breakpoint);
     }
 
     #[test]

@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2560 1600" width="2560" height="1600" font-family="ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace">
 <defs>
   <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
-    <circle cx="1" cy="1" r="1" fill="#E8F1F8" fill-opacity="0.08"/>
+    <circle cx="1" cy="1" r="1" fill="#F0E6D8" fill-opacity="0.08"/>
   </pattern>
   <pattern id="hatch8" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-    <line x1="0" y1="0" x2="0" y2="8" stroke="#6B7C8C" stroke-opacity="0.35" stroke-width="1"/>
+    <line x1="0" y1="0" x2="0" y2="8" stroke="#8B7F70" stroke-opacity="0.35" stroke-width="1"/>
   </pattern>
   <filter id="glowA" x="-60%" y="-60%" width="220%" height="220%">
     <feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
@@ -13,32 +13,32 @@
     <feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
   </filter>
   <style>
-    .hb{stroke:#E8F1F8;stroke-opacity:.10;stroke-width:1;fill:none}
-    .hr{stroke:#E8F1F8;stroke-opacity:.25;stroke-width:1;fill:none}
-    .hs{stroke:#E8F1F8;stroke-opacity:.60;stroke-width:1;fill:none}
-    .t1{fill:#E8F1F8}.t2{fill:#9FB0C0}.t3{fill:#6B7C8C}.t4{fill:#454F59}
+    .hb{stroke:#F0E6D8;stroke-opacity:.10;stroke-width:1;fill:none}
+    .hr{stroke:#F0E6D8;stroke-opacity:.25;stroke-width:1;fill:none}
+    .hs{stroke:#F0E6D8;stroke-opacity:.60;stroke-width:1;fill:none}
+    .t1{fill:#F0E6D8}.t2{fill:#B9AC9C}.t3{fill:#8B7F70}.t4{fill:#5A5248}
     .xs{font-size:10px}.s{font-size:11px}.m{font-size:13px}.l{font-size:15px}.xl{font-size:18px}
-    .lbl{font-size:10px;letter-spacing:.06em;fill:#6B7C8C}
-    .num{font-size:13px;fill:#E8F1F8}
-    .unit{font-size:11px;fill:#6B7C8C}
-    .np{fill:#0C1015;stroke:#E8F1F8;stroke-opacity:.25;stroke-width:1}
-    .sel{fill:none;stroke:#E8F1F8;stroke-opacity:.9;stroke-width:2}
+    .lbl{font-size:10px;letter-spacing:.06em;fill:#8B7F70}
+    .num{font-size:13px;fill:#F0E6D8}
+    .unit{font-size:11px;fill:#8B7F70}
+    .np{fill:#151210;stroke:#F0E6D8;stroke-opacity:.25;stroke-width:1}
+    .sel{fill:none;stroke:#F0E6D8;stroke-opacity:.9;stroke-width:2}
     .wA{stroke:#FFB347;stroke-width:2;fill:none}
     .wC{stroke:#4FD8E8;stroke-width:1;fill:none}
     .wE{stroke:#FF5FA2;stroke-width:2;fill:none;stroke-dasharray:6 3}
     .wD{stroke:#8BE36A;stroke-width:2;fill:none;stroke-dasharray:2 4}
-    .trk{stroke:#E8F1F8;stroke-opacity:.18;stroke-width:2}
+    .trk{stroke:#F0E6D8;stroke-opacity:.18;stroke-width:2}
     .fil{stroke:#4FD8E8;stroke-width:2}
   </style>
 </defs>
 
 <!-- ============================ ground ============================ -->
-<rect width="2560" height="1600" fill="#07090C"/>
-<rect x="56" y="48" width="2024" height="1292" fill="#05070A"/>
+<rect width="2560" height="1600" fill="#0B0A08"/>
+<rect x="56" y="48" width="2024" height="1292" fill="#070605"/>
 <rect x="56" y="48" width="2024" height="1292" fill="url(#grid)"/>
 
 <!-- ============================ top bar ============================ -->
-<rect x="0" y="0" width="2560" height="48" fill="#0C1015"/>
+<rect x="0" y="0" width="2560" height="48" fill="#151210"/>
 <line x1="0" y1="48" x2="2560" y2="48" class="hr"/>
 <!-- spark mark -->
 <g stroke="#FFB347" stroke-width="2" fill="none">
@@ -74,14 +74,14 @@
 <text x="2492" y="30" class="s t4">⌘</text>
 
 <!-- ============================ left rail ============================ -->
-<rect x="0" y="48" width="56" height="1552" fill="#0C1015"/>
+<rect x="0" y="48" width="56" height="1552" fill="#151210"/>
 <line x1="56" y1="48" x2="56" y2="1600" class="hr"/>
 <!-- transport -->
 <g stroke-width="2" fill="none">
   <rect x="6" y="64" width="44" height="44" class="hr"/>
   <path d="M22 76 L22 96 M34 76 L34 96" stroke="#8BE36A" stroke-width="3"/>
   <rect x="6" y="116" width="44" height="44" class="hr"/>
-  <rect x="20" y="130" width="16" height="16" stroke="#9FB0C0"/>
+  <rect x="20" y="130" width="16" height="16" stroke="#B9AC9C"/>
   <rect x="6" y="168" width="44" height="44" class="hr"/>
   <circle cx="28" cy="190" r="8" stroke="#FF3B30"/>
 </g>
@@ -89,18 +89,18 @@
 <line x1="12" y1="244" x2="44" y2="244" class="hb"/>
 <!-- modes -->
 <g stroke-width="1" fill="none">
-  <rect x="6" y="256" width="44" height="44" fill="#10151C" stroke="#E8F1F8" stroke-opacity=".6"/>
-  <circle cx="20" cy="272" r="4" stroke="#4FD8E8"/><circle cx="36" cy="272" r="4" stroke="#E8F1F8" stroke-opacity=".35"/>
-  <path d="M20 272 L36 272 M20 288 L28 288" stroke="#E8F1F8" stroke-opacity=".45"/>
+  <rect x="6" y="256" width="44" height="44" fill="#1C1815" stroke="#F0E6D8" stroke-opacity=".6"/>
+  <circle cx="20" cy="272" r="4" stroke="#4FD8E8"/><circle cx="36" cy="272" r="4" stroke="#F0E6D8" stroke-opacity=".35"/>
+  <path d="M20 272 L36 272 M20 288 L28 288" stroke="#F0E6D8" stroke-opacity=".45"/>
   <rect x="6" y="308" width="44" height="44" class="hr"/>
-  <rect x="16" y="320" width="24" height="20" stroke="#9FB0C0"/><path d="M22 344 L34 344" stroke="#9FB0C0"/>
+  <rect x="16" y="320" width="24" height="20" stroke="#B9AC9C"/><path d="M22 344 L34 344" stroke="#B9AC9C"/>
   <rect x="6" y="360" width="44" height="44" class="hr"/>
-  <rect x="18" y="372" width="20" height="20" stroke="#9FB0C0"/><path d="M28 366 L28 372 M28 392 L28 398" stroke="#9FB0C0"/>
+  <rect x="18" y="372" width="20" height="20" stroke="#B9AC9C"/><path d="M28 366 L28 372 M28 392 L28 398" stroke="#B9AC9C"/>
 </g>
 
 <line x1="12" y1="436" x2="44" y2="436" class="hb"/>
 <!-- browsers -->
-<g stroke-width="1" fill="none" stroke="#9FB0C0">
+<g stroke-width="1" fill="none" stroke="#B9AC9C">
   <rect x="6" y="448" width="44" height="44" class="hr"/>
   <rect x="16" y="462" width="10" height="16"/><rect x="30" y="456" width="10" height="22"/>
   <rect x="6" y="500" width="44" height="44" class="hr"/>
@@ -115,7 +115,7 @@
 
 <line x1="12" y1="732" x2="44" y2="732" class="hb"/>
 <!-- views -->
-<g stroke-width="1" fill="none" stroke="#9FB0C0">
+<g stroke-width="1" fill="none" stroke="#B9AC9C">
   <rect x="6" y="744" width="44" height="44" class="hr"/>
   <path d="M28 756 v20 M18 766 h20"/><circle cx="28" cy="766" r="11"/>
   <rect x="6" y="796" width="44" height="44" class="hr"/>
@@ -130,9 +130,9 @@
   <text x="10" y="1476" class="lbl">FPS</text><text x="46" y="1476" class="t2" text-anchor="end">120</text>
   <text x="10" y="1500" class="lbl">JIT</text><text x="46" y="1500" class="t2" text-anchor="end">38µs</text>
 </g>
-<rect x="10" y="1520" width="36" height="4" fill="#10151C" stroke="none"/>
+<rect x="10" y="1520" width="36" height="4" fill="#1C1815" stroke="none"/>
 <rect x="10" y="1520" width="5" height="4" fill="#8BE36A" stroke="none"/>
-<g stroke="#E8F1F8" stroke-opacity=".25" stroke-width="1">
+<g stroke="#F0E6D8" stroke-opacity=".25" stroke-width="1">
   <rect x="6" y="1544" width="44" height="44" fill="none"/>
   <path d="M20 1566 h16 M28 1558 v16" stroke="#FF5FA2"/>
 </g>
@@ -155,7 +155,7 @@
 
 <!-- signal-class legend (canvas overlay, top-right) -->
 <g transform="translate(1620,72)">
-  <rect x="0" y="0" width="392" height="104" fill="#0C1015" fill-opacity=".92" stroke="#E8F1F8" stroke-opacity=".25"/>
+  <rect x="0" y="0" width="392" height="104" fill="#151210" fill-opacity=".92" stroke="#F0E6D8" stroke-opacity=".25"/>
   <text x="12" y="20" class="lbl">SIGNAL CLASSES</text>
   <g stroke-width="2" fill="none">
     <line x1="12" y1="38" x2="52" y2="38" stroke="#FFB347"/>
@@ -188,9 +188,9 @@
   <g class="s t2" text-anchor="end"><text x="360" y="262">52.0 Hz</text><text x="360" y="282">180 ms</text><text x="360" y="302">+4.0 dB</text></g>
   <g class="trk"><line x1="372" y1="258" x2="412" y2="258"/><line x1="372" y1="278" x2="412" y2="278"/><line x1="372" y1="298" x2="412" y2="298"/></g>
   <g stroke="#FFB347" stroke-width="2"><line x1="372" y1="258" x2="392" y2="258"/><line x1="372" y1="278" x2="404" y2="278"/><line x1="372" y1="298" x2="384" y2="298"/></g>
-  <circle cx="184" cy="264" r="6" fill="#05070A" stroke="#FF5FA2" stroke-width="2"/>
+  <circle cx="184" cy="264" r="6" fill="#070605" stroke="#FF5FA2" stroke-width="2"/>
   <text x="196" y="268" class="xs t4">trig</text>
-  <circle cx="424" cy="264" r="6" fill="#FFB347" stroke="#05070A"/>
+  <circle cx="424" cy="264" r="6" fill="#FFB347" stroke="#070605"/>
 </g>
 
 <!-- syn/polyblep -->
@@ -203,9 +203,9 @@
   <g class="s t2" text-anchor="end"><text x="360" y="454">saw</text><text x="360" y="474">220.0 Hz</text><text x="360" y="494">0.500</text></g>
   <g class="trk"><line x1="372" y1="470" x2="412" y2="470"/><line x1="372" y1="490" x2="412" y2="490"/></g>
   <g stroke="#FFB347" stroke-width="2"><line x1="372" y1="470" x2="398" y2="470"/><line x1="372" y1="490" x2="390" y2="490"/></g>
-  <circle cx="184" cy="456" r="6" fill="#05070A" stroke="#4FD8E8"/>
+  <circle cx="184" cy="456" r="6" fill="#070605" stroke="#4FD8E8"/>
   <text x="196" y="460" class="xs t4">cv f</text>
-  <circle cx="424" cy="456" r="6" fill="#FFB347" stroke="#05070A"/>
+  <circle cx="424" cy="456" r="6" fill="#FFB347" stroke="#070605"/>
 </g>
 
 <!-- mod/lfo -->
@@ -218,7 +218,7 @@
   <g class="s t2" text-anchor="end"><text x="360" y="614">sine</text><text x="360" y="634">0.250 Hz</text><text x="360" y="654">0.620</text></g>
   <path d="M372 630 q5 -8 10 0 t10 0 t10 0 t10 0" stroke="#4FD8E8" stroke-width="1" fill="none"/>
   <path d="M372 650 q5 -8 10 0 t10 0 t10 0 t10 0" stroke="#4FD8E8" stroke-width="1" fill="none" stroke-opacity=".5"/>
-  <circle cx="424" cy="616" r="6" fill="#4FD8E8" stroke="#05070A"/>
+  <circle cx="424" cy="616" r="6" fill="#4FD8E8" stroke="#070605"/>
 </g>
 
 <!-- syn/noise -->
@@ -232,14 +232,14 @@
   <g stroke="#FFB347" stroke-width="1" opacity=".8">
     <path d="M372 826 l3 -6 3 9 3 -11 3 7 3 -4 3 8 3 -9 3 6"/>
   </g>
-  <circle cx="424" cy="792" r="6" fill="#FFB347" stroke="#05070A"/>
+  <circle cx="424" cy="792" r="6" fill="#FFB347" stroke="#070605"/>
 </g>
 
 <!-- flt/svf (SELECTED) -->
 <g>
-  <rect x="600" y="336" width="240" height="128" class="np" fill="#10151C"/>
+  <rect x="600" y="336" width="240" height="128" class="np" fill="#1C1815"/>
   <rect x="596" y="332" width="248" height="136" class="sel"/>
-  <g stroke="#E8F1F8" stroke-width="2" fill="none" stroke-opacity=".9">
+  <g stroke="#F0E6D8" stroke-width="2" fill="none" stroke-opacity=".9">
     <path d="M596 344 v-12 h12 M832 344 v-12 h-12 M596 456 v12 h12 M832 456 v12 h-12"/>
   </g>
   <line x1="600" y1="368" x2="840" y2="368" class="hb"/>
@@ -249,12 +249,12 @@
   <g class="s t2" text-anchor="end"><text x="776" y="390">1 240.0 Hz</text><text x="776" y="410">0.710</text><text x="776" y="430">lowpass</text><text x="776" y="450">+2.0 dB</text></g>
   <g class="trk"><line x1="788" y1="386" x2="828" y2="386"/><line x1="788" y1="406" x2="828" y2="406"/><line x1="788" y1="446" x2="828" y2="446"/></g>
   <g stroke="#4FD8E8" stroke-width="2"><line x1="788" y1="386" x2="816" y2="386"/><line x1="788" y1="406" x2="806" y2="406"/><line x1="788" y1="446" x2="798" y2="446"/></g>
-  <circle cx="600" cy="384" r="6" fill="#FFB347" stroke="#05070A"/>
-  <circle cx="600" cy="416" r="6" fill="#FFB347" stroke="#05070A"/>
-  <circle cx="600" cy="448" r="6" fill="#4FD8E8" stroke="#05070A"/>
-  <circle cx="600" cy="468" r="6" fill="#4FD8E8" stroke="#05070A"/>
+  <circle cx="600" cy="384" r="6" fill="#FFB347" stroke="#070605"/>
+  <circle cx="600" cy="416" r="6" fill="#FFB347" stroke="#070605"/>
+  <circle cx="600" cy="448" r="6" fill="#4FD8E8" stroke="#070605"/>
+  <circle cx="600" cy="468" r="6" fill="#4FD8E8" stroke="#070605"/>
   <text x="612" y="472" class="xs t4">cv</text>
-  <circle cx="840" cy="400" r="6" fill="#FFB347" stroke="#05070A"/>
+  <circle cx="840" cy="400" r="6" fill="#FFB347" stroke="#070605"/>
 </g>
 
 <!-- env/ad -->
@@ -266,8 +266,8 @@
   <g class="s t3"><text x="712" y="614">attack</text><text x="712" y="634">decay</text><text x="712" y="654">curve</text></g>
   <g class="s t2" text-anchor="end"><text x="876" y="614">2.00 ms</text><text x="876" y="634">240.0 ms</text><text x="876" y="654">exp −2.0</text></g>
   <path d="M888 654 l6 -22 8 22 z" stroke="#4FD8E8" stroke-width="1" fill="none"/>
-  <circle cx="700" cy="616" r="6" fill="#05070A" stroke="#FF5FA2" stroke-width="2"/>
-  <circle cx="940" cy="616" r="6" fill="#4FD8E8" stroke="#05070A"/>
+  <circle cx="700" cy="616" r="6" fill="#070605" stroke="#FF5FA2" stroke-width="2"/>
+  <circle cx="940" cy="616" r="6" fill="#4FD8E8" stroke="#070605"/>
 </g>
 
 <!-- util/gain -->
@@ -277,10 +277,10 @@
   <text x="988" y="374" class="m t1">util/gain</text>
   <g class="s t3"><text x="988" y="406">gain</text><text x="988" y="426">pan</text></g>
   <g class="s t2" text-anchor="end"><text x="1120" y="406">−3.5 dB</text><text x="1120" y="426">0.000</text></g>
-  <circle cx="976" cy="400" r="6" fill="#FFB347" stroke="#05070A"/>
-  <circle cx="976" cy="432" r="6" fill="#4FD8E8" stroke="#05070A"/>
-  <circle cx="1176" cy="400" r="6" fill="#FFB347" stroke="#05070A"/>
-  <circle cx="1176" cy="432" r="6" fill="#FFB347" stroke="#05070A" opacity=".45"/>
+  <circle cx="976" cy="400" r="6" fill="#FFB347" stroke="#070605"/>
+  <circle cx="976" cy="432" r="6" fill="#4FD8E8" stroke="#070605"/>
+  <circle cx="1176" cy="400" r="6" fill="#FFB347" stroke="#070605"/>
+  <circle cx="1176" cy="432" r="6" fill="#FFB347" stroke="#070605" opacity=".45"/>
 </g>
 
 <!-- ana/rms -->
@@ -292,10 +292,10 @@
   <g class="s t3"><text x="1340" y="614">window</text><text x="1340" y="634">ballistics</text></g>
   <g class="s t2" text-anchor="end"><text x="1476" y="614">10.0 ms</text><text x="1476" y="634">fast</text></g>
   <text x="1340" y="660" class="lbl">RMS</text><text x="1476" y="660" class="m" fill="#8BE36A" text-anchor="end">−14.2 dB</text>
-  <rect x="1488" y="600" width="68" height="58" fill="#04060A" stroke="#E8F1F8" stroke-opacity=".10"/>
+  <rect x="1488" y="600" width="68" height="58" fill="#050403" stroke="#F0E6D8" stroke-opacity=".10"/>
   <path d="M1492 646 q8 -22 16 -8 t16 -18 16 12" stroke="#8BE36A" stroke-width="1" fill="none"/>
-  <circle cx="1328" cy="616" r="6" fill="#FFB347" stroke="#05070A"/>
-  <circle cx="1568" cy="616" r="6" fill="#4FD8E8" stroke="#05070A"/>
+  <circle cx="1328" cy="616" r="6" fill="#FFB347" stroke="#070605"/>
+  <circle cx="1568" cy="616" r="6" fill="#4FD8E8" stroke="#070605"/>
 </g>
 
 <!-- fx/bitcrush (BYPASSED - demonstrates state pattern encoding) -->
@@ -303,12 +303,12 @@
   <rect x="1328" y="688" width="240" height="112" class="np"/>
   <rect x="1328" y="688" width="240" height="112" fill="url(#hatch8)" stroke="none"/>
   <line x1="1328" y1="720" x2="1568" y2="720" class="hb"/>
-  <text x="1340" y="710" class="m" fill="#9FB0C0">fx/bitcrush</text>
-  <text x="1556" y="710" class="xs" fill="#6B7C8C" text-anchor="end">bypassed</text>
+  <text x="1340" y="710" class="m" fill="#B9AC9C">fx/bitcrush</text>
+  <text x="1556" y="710" class="xs" fill="#8B7F70" text-anchor="end">bypassed</text>
   <g class="s t4"><text x="1340" y="742">depth</text><text x="1340" y="762">rate div</text></g>
   <g class="s t4" text-anchor="end"><text x="1500" y="742">8 bit</text><text x="1500" y="762">÷ 4</text></g>
-  <circle cx="1328" cy="744" r="6" fill="#05070A" stroke="#6B7C8C" stroke-width="2"/>
-  <circle cx="1568" cy="744" r="6" fill="#6B7C8C" stroke="#05070A"/>
+  <circle cx="1328" cy="744" r="6" fill="#070605" stroke="#8B7F70" stroke-width="2"/>
+  <circle cx="1568" cy="744" r="6" fill="#8B7F70" stroke="#070605"/>
 </g>
 
 <!-- dsp/scope -->
@@ -317,10 +317,10 @@
   <line x1="1752" y1="1032" x2="1992" y2="1032" class="hb"/>
   <text x="1764" y="1022" class="m t1">dsp/scope</text>
   <text x="1980" y="1022" class="xs t4" text-anchor="end">mode xy</text>
-  <rect x="1764" y="1040" width="216" height="60" fill="#04060A" stroke="#E8F1F8" stroke-opacity=".10"/>
-  <g stroke="#E8F1F8" stroke-opacity=".10"><line x1="1872" y1="1040" x2="1872" y2="1100"/><line x1="1764" y1="1070" x2="1980" y2="1070"/></g>
+  <rect x="1764" y="1040" width="216" height="60" fill="#050403" stroke="#F0E6D8" stroke-opacity=".10"/>
+  <g stroke="#F0E6D8" stroke-opacity=".10"><line x1="1872" y1="1040" x2="1872" y2="1100"/><line x1="1764" y1="1070" x2="1980" y2="1070"/></g>
   <path d="M1780 1088 q22 -34 44 -6 t44 -30 44 22 44 -18" stroke="#FFB347" stroke-width="2" fill="none" filter="url(#glowA)"/>
-  <circle cx="1752" cy="1056" r="6" fill="#FFB347" stroke="#05070A"/>
+  <circle cx="1752" cy="1056" r="6" fill="#FFB347" stroke="#070605"/>
 </g>
 
 <!-- out/main -->
@@ -330,11 +330,11 @@
   <text x="1764" y="726" class="m t1">out/main</text>
   <text x="1980" y="726" class="xs t4" text-anchor="end">ch 1-2</text>
   <g class="lbl"><text x="1764" y="758">L</text><text x="1764" y="778">R</text></g>
-  <rect x="1792" y="750" width="180" height="6" fill="#04060A"/><rect x="1792" y="770" width="180" height="6" fill="#04060A"/>
+  <rect x="1792" y="750" width="180" height="6" fill="#050403"/><rect x="1792" y="770" width="180" height="6" fill="#050403"/>
   <rect x="1792" y="750" width="118" height="6" fill="#8BE36A"/><rect x="1792" y="770" width="104" height="6" fill="#8BE36A"/>
   <rect x="1912" y="750" width="16" height="6" fill="#FFB347"/><rect x="1900" y="770" width="12" height="6" fill="#FFB347"/>
-  <text x="1764" y="802" class="s t3">peak <tspan fill="#E8F1F8">−2.1 dB</tspan> · lupfs <tspan fill="#E8F1F8">−9.4</tspan></text>
-  <circle cx="1752" cy="760" r="6" fill="#FFB347" stroke="#05070A"/>
+  <text x="1764" y="802" class="s t3">peak <tspan fill="#F0E6D8">−2.1 dB</tspan> · lupfs <tspan fill="#F0E6D8">−9.4</tspan></text>
+  <circle cx="1752" cy="760" r="6" fill="#FFB347" stroke="#070605"/>
 </g>
 
 <!-- scale reference + zoom readout (canvas overlay, bottom-right) -->
@@ -346,9 +346,9 @@
 </g>
 
 <!-- ============================ inspector ============================ -->
-<rect x="2080" y="48" width="480" height="1292" fill="#0C1015"/>
+<rect x="2080" y="48" width="480" height="1292" fill="#151210"/>
 <line x1="2080" y1="48" x2="2080" y2="1340" class="hr"/>
-<rect x="2080" y="48" width="480" height="40" fill="#10151C"/>
+<rect x="2080" y="48" width="480" height="40" fill="#1C1815"/>
 <line x1="2080" y1="88" x2="2560" y2="88" class="hr"/>
 <text x="2096" y="74" class="lbl">INSPECTOR · MODULE</text>
 <text x="2544" y="74" class="xs t4" text-anchor="end">esc</text>
@@ -388,7 +388,7 @@
   <!-- mode -->
   <text x="2096" y="580" class="s t2">mode</text>
   <g class="s">
-    <rect x="2192" y="562" width="80" height="32" fill="#10151C" stroke="#E8F1F8" stroke-opacity=".6"/><text x="2232" y="583" class="t1" text-anchor="middle">lowpass</text>
+    <rect x="2192" y="562" width="80" height="32" fill="#1C1815" stroke="#F0E6D8" stroke-opacity=".6"/><text x="2232" y="583" class="t1" text-anchor="middle">lowpass</text>
     <rect x="2276" y="562" width="64" height="32" class="hr"/><text x="2308" y="583" class="t3" text-anchor="middle">high</text>
     <rect x="2344" y="562" width="64" height="32" class="hr"/><text x="2376" y="583" class="t3" text-anchor="middle">band</text>
     <rect x="2412" y="562" width="64" height="32" class="hr"/><text x="2444" y="583" class="t3" text-anchor="middle">notch</text>
@@ -404,12 +404,12 @@
 <line x1="2096" y1="700" x2="2544" y2="700" class="hb"/>
 <text x="2096" y="724" class="lbl">MODULATION</text>
 <g class="s">
-  <rect x="2096" y="738" width="448" height="44" fill="#10151C" stroke="#E8F1F8" stroke-opacity=".25"/>
+  <rect x="2096" y="738" width="448" height="44" fill="#1C1815" stroke="#F0E6D8" stroke-opacity=".25"/>
   <circle cx="2118" cy="760" r="5" fill="#4FD8E8"/>
   <text x="2134" y="764" class="t2">cutoff</text><text x="2208" y="764" class="t4">←</text><text x="2228" y="764" class="t2">ana/rms · out</text>
   <text x="2440" y="764" class="num" text-anchor="end">+72</text><text x="2464" y="764" class="unit">%</text>
   <text x="2500" y="764" class="t3">±</text>
-  <rect x="2096" y="790" width="448" height="44" fill="#10151C" stroke="#E8F1F8" stroke-opacity=".25"/>
+  <rect x="2096" y="790" width="448" height="44" fill="#1C1815" stroke="#F0E6D8" stroke-opacity=".25"/>
   <circle cx="2118" cy="812" r="5" fill="#4FD8E8"/>
   <text x="2134" y="816" class="t2">reso</text><text x="2208" y="816" class="t4">←</text><text x="2228" y="816" class="t2">mod/lfo · out</text>
   <text x="2440" y="816" class="num" text-anchor="end">+25</text><text x="2464" y="816" class="unit">%</text>
@@ -419,8 +419,8 @@
 
 <line x1="2096" y1="876" x2="2544" y2="876" class="hb"/>
 <text x="2096" y="900" class="lbl">RESPONSE</text>
-<rect x="2096" y="912" width="448" height="180" fill="#04060A" stroke="#E8F1F8" stroke-opacity=".10"/>
-<g stroke="#E8F1F8" stroke-opacity=".10">
+<rect x="2096" y="912" width="448" height="180" fill="#050403" stroke="#F0E6D8" stroke-opacity=".10"/>
+<g stroke="#F0E6D8" stroke-opacity=".10">
   <line x1="2096" y1="957" x2="2544" y2="957"/><line x1="2096" y1="1002" x2="2544" y2="1002"/><line x1="2096" y1="1047" x2="2544" y2="1047"/>
   <line x1="2208" y1="912" x2="2208" y2="1092"/><line x1="2320" y1="912" x2="2320" y2="1092"/><line x1="2432" y1="912" x2="2432" y2="1092"/>
 </g>
@@ -430,7 +430,7 @@
   <text x="2100" y="1106">20 Hz</text><text x="2200" y="1106">100</text><text x="2312" y="1106">1 k</text><text x="2424" y="1106">10 k</text><text x="2516" y="1106">20 k</text>
   <text x="2540" y="926" text-anchor="end">0 dB</text><text x="2540" y="1090" text-anchor="end">−48 dB</text>
 </g>
-<circle cx="2392" cy="936" r="4" fill="#E8F1F8"/>
+<circle cx="2392" cy="936" r="4" fill="#F0E6D8"/>
 <text x="2400" y="930" class="xs t2">1 240.0 Hz · Q 3.2</text>
 
 <line x1="2096" y1="1124" x2="2544" y2="1124" class="hb"/>
@@ -455,17 +455,17 @@
 </g>
 
 <!-- ============================ dock ============================ -->
-<rect x="56" y="1340" width="2504" height="260" fill="#0C1015"/>
+<rect x="56" y="1340" width="2504" height="260" fill="#151210"/>
 <line x1="56" y1="1340" x2="2560" y2="1340" class="hr"/>
 <g class="s">
-  <text x="80" y="1372" class="t1">MODULES</text><line x1="80" y1="1384" x2="152" y2="1384" stroke="#E8F1F8" stroke-opacity=".6" stroke-width="2"/>
+  <text x="80" y="1372" class="t1">MODULES</text><line x1="80" y1="1384" x2="152" y2="1384" stroke="#F0E6D8" stroke-opacity=".6" stroke-width="2"/>
   <text x="184" y="1372" class="t3">LIBRARY</text>
   <text x="272" y="1372" class="t3">STREAMS</text>
   <text x="368" y="1372" class="t3">SCENES</text>
   <text x="456" y="1372" class="t3">JOURNAL</text>
   <text x="544" y="1372" class="t3">DIAGNOSTICS</text>
 </g>
-<rect x="2080" y="1350" width="456" height="32" fill="#04060A" stroke="#E8F1F8" stroke-opacity=".25"/>
+<rect x="2080" y="1350" width="456" height="32" fill="#050403" stroke="#F0E6D8" stroke-opacity=".25"/>
 <text x="2092" y="1371" class="s t4">search modules, samples, presets, actions…</text>
 <text x="2520" y="1371" class="xs t4" text-anchor="end">2-finger tap</text>
 
@@ -489,40 +489,40 @@
 
 <!-- module chips (6 x 2) -->
 <g class="s">
-  <g><rect x="424" y="1404" width="248" height="80" fill="#10151C" stroke="#E8F1F8" stroke-opacity=".6"/>
+  <g><rect x="424" y="1404" width="248" height="80" fill="#1C1815" stroke="#F0E6D8" stroke-opacity=".6"/>
      <circle cx="444" cy="1428" r="5" fill="#FFB347"/><text x="460" y="1432" class="t1">syn/membrane</text>
      <text x="444" y="1462" class="xs t3">drum membrane model · impulse + resonator</text></g>
-  <g><rect x="688" y="1404" width="248" height="80" class="hr" fill="#0C1015"/>
+  <g><rect x="688" y="1404" width="248" height="80" class="hr" fill="#151210"/>
      <circle cx="708" cy="1428" r="5" fill="#FFB347"/><text x="724" y="1432" class="t2">syn/polyblep</text>
      <text x="708" y="1462" class="xs t3">bandlimited saw/square/pulse · blamp</text></g>
-  <g><rect x="952" y="1404" width="248" height="80" class="hr" fill="#0C1015"/>
+  <g><rect x="952" y="1404" width="248" height="80" class="hr" fill="#151210"/>
      <circle cx="972" cy="1428" r="5" fill="#FFB347"/><text x="988" y="1432" class="t2">syn/noise</text>
      <text x="972" y="1462" class="xs t3">white/pink/brown · dust · seeded</text></g>
-  <g><rect x="1216" y="1404" width="248" height="80" class="hr" fill="#0C1015"/>
+  <g><rect x="1216" y="1404" width="248" height="80" class="hr" fill="#151210"/>
      <circle cx="1236" cy="1428" r="5" fill="#4FD8E8"/><text x="1252" y="1432" class="t2">flt/svf</text>
      <text x="1236" y="1462" class="xs t3">state variable · zdf · 4 modes</text></g>
-  <g><rect x="1480" y="1404" width="248" height="80" class="hr" fill="#0C1015"/>
+  <g><rect x="1480" y="1404" width="248" height="80" class="hr" fill="#151210"/>
      <circle cx="1500" cy="1428" r="5" fill="#4FD8E8"/><text x="1516" y="1432" class="t2">env/ad</text>
      <text x="1500" y="1462" class="xs t3">attack/decay · loopable · curve</text></g>
-  <g><rect x="1744" y="1404" width="248" height="80" class="hr" fill="#0C1015"/>
+  <g><rect x="1744" y="1404" width="248" height="80" class="hr" fill="#151210"/>
      <circle cx="1764" cy="1428" r="5" fill="#4FD8E8"/><text x="1780" y="1432" class="t2">mod/lfo</text>
      <text x="1764" y="1462" class="xs t3">6 shapes · sync · phase reset</text></g>
-  <g><rect x="424" y="1496" width="248" height="80" class="hr" fill="#0C1015"/>
+  <g><rect x="424" y="1496" width="248" height="80" class="hr" fill="#151210"/>
      <circle cx="444" cy="1520" r="5" fill="#4FD8E8"/><text x="460" y="1524" class="t2">mod/clk-div</text>
      <text x="444" y="1554" class="xs t3">divide/multiply · probability gate</text></g>
-  <g><rect x="688" y="1496" width="248" height="80" class="hr" fill="#0C1015"/>
+  <g><rect x="688" y="1496" width="248" height="80" class="hr" fill="#151210"/>
      <circle cx="708" cy="1520" r="5" fill="#FFB347"/><text x="724" y="1524" class="t2">fx/bitcrush</text>
      <text x="708" y="1554" class="xs t3">depth + rate reduction · antialias opt</text></g>
-  <g><rect x="952" y="1496" width="248" height="80" class="hr" fill="#0C1015"/>
+  <g><rect x="952" y="1496" width="248" height="80" class="hr" fill="#151210"/>
      <circle cx="972" cy="1520" r="5" fill="#8BE36A"/><text x="988" y="1524" class="t2">ana/rms</text>
      <text x="972" y="1554" class="xs t3">rms/peak → cv + data · analysis as source</text></g>
-  <g><rect x="1216" y="1496" width="248" height="80" class="hr" fill="#0C1015"/>
+  <g><rect x="1216" y="1496" width="248" height="80" class="hr" fill="#151210"/>
      <circle cx="1236" cy="1520" r="5" fill="#8BE36A"/><text x="1252" y="1524" class="t2">ana/tap</text>
      <text x="1236" y="1554" class="xs t3">generic signal tap for displays</text></g>
-  <g><rect x="1480" y="1496" width="248" height="80" class="hr" fill="#0C1015"/>
+  <g><rect x="1480" y="1496" width="248" height="80" class="hr" fill="#151210"/>
      <circle cx="1500" cy="1520" r="5" fill="#A98CFF"/><text x="1516" y="1524" class="t2">dsp/scope</text>
      <text x="1500" y="1554" class="xs t3">waveform · xy · persistence</text></g>
-  <g><rect x="1744" y="1496" width="248" height="80" class="hr" fill="#0C1015"/>
+  <g><rect x="1744" y="1496" width="248" height="80" class="hr" fill="#151210"/>
      <circle cx="1764" cy="1520" r="5" fill="#A98CFF"/><text x="1780" y="1524" class="t2">util/mixer</text>
      <text x="1764" y="1554" class="xs t3">N×M matrix · per-cell gain</text></g>
 </g>
@@ -532,8 +532,8 @@
   <text x="2040" y="1416">DRAG A CHIP ONTO THE CANVAS TO INSERT</text>
   <text x="2040" y="1440">LONG-PRESS FOR DOCS · EXAMPLE PATCH · GOLDEN RENDER</text>
   <text x="2040" y="1476">UNSIGNED MODULES ARE DISABLED IN PERFORM MODE</text>
-  <text x="2040" y="1500" fill="#6B7C8C">registry: local · 17 modules · api v1.0-rc</text>
+  <text x="2040" y="1500" fill="#8B7F70">registry: local · 17 modules · api v1.0-rc</text>
 </g>
-<rect x="2040" y="1520" width="480" height="44" fill="#04060A" stroke="#E8F1F8" stroke-opacity=".25"/>
+<rect x="2040" y="1520" width="480" height="44" fill="#050403" stroke="#F0E6D8" stroke-opacity=".25"/>
 <text x="2056" y="1547" class="s t3">touch targets in this dock: min 44 px · chips 248 × 80 · audit pass</text>
 </svg>

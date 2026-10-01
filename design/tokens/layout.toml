@@ -75,6 +75,9 @@ dock_height_min     = 120
 dock_height_max     = 520
 dock_card_w         = 112      # the module palette tile (increment 4: smaller, grouped, coloured
 dock_card_h         = 56       # class M floor (56 px shorter side); two rows fit the default dock
+library_width       = 240      # the NODE LIBRARY sidebar (PN convergence, inc 6)
+library_card_h      = 128      # one library preview card (miniature node + name + port counts)
+toolbar_height      = 32       # the canvas toolbar row (fit/arrange/zoom/wire style/counts)
 inspector_width     = 400
 inspector_width_min = 320
 inspector_width_max = 560
@@ -93,6 +96,10 @@ node_width_min      = 160
 node_width_max      = 480
 node_header_height  = 32
 node_port_row       = 48       # >= 2 x touch.port_capture_radius, so capture circles on one edge never overlap
+node_param_row      = 32       # inline parameter row on the node card (PN convergence, inc 6);
+                               # the dense touch floor exactly, at zoom 1 — badged, non-destructive
+node_param_rows_max = 8        # rows drawn on the card before the "+N MORE" word (the inspector keeps all)
+node_well_height    = 48       # the inset display band (scope, meters, envelope, sparkline, curve)
 node_radius         = 2
 zoom_min            = 0.25
 zoom_max            = 4.0

@@ -44,6 +44,12 @@ pub struct UiOptions {
     /// Dump the final headless frame's vector shapes to an SVG file (the visual-regression
     /// instrument: a screenshot without a GPU — WO-012 increment 3).
     pub svg_out: Option<String>,
+    /// With `svg_out`: dump the convergence-review state instead of the bare demo patch —
+    /// slice B's own showcase (WO-012 increment 5): an `env/ad`, a `mod/lfo` and an `flt/svf`
+    /// spawned beside the demo chain, the svf SELECTED with its probe marker at the mockup's
+    /// own 1 240.0 Hz, and a pumped manual-null session so the meter wells read live. The
+    /// instrument for `design/mockups/convergence-wo012-inc5.png`.
+    pub review: bool,
 }
 
 impl Default for UiOptions {
@@ -52,6 +58,7 @@ impl Default for UiOptions {
             headless_frames: 0,
             audit: false,
             svg_out: None,
+            review: false,
             width: 1920.0,
             height: 1080.0,
             scale: 1.0,

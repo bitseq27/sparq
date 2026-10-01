@@ -309,6 +309,56 @@ pub fn node_levels(
     Ok(levels)
 }
 
+/// The per-module response-curve contract dispatch (WO-012 increment 5, D2): module id + param
+/// snapshot + negotiated sample rate + a frequency grid → linear magnitudes over that grid.
+/// This is the ONLY layer that sees both the display model (`sparq_ui::canvas::response`, which
+/// CONSUMES magnitudes) and the DSP that owns the math — `SvfFilter::magnitude_at` computes
+/// them from the filter's own cached coefficients, pinned to the sine sweep by a `sparq-audio`
+/// test, so the display cannot drift from the DSP (the single-source guarantee, tested).
+///
+/// `svf` is first and is the reference implementation. The curve is the BASE-param response at
+/// the declared cutoff: the `cutoff-mod` input moves the audible cutoff per block when it is
+/// connected, and the plot shows the param snapshot, not the modulated one — declared, the same
+/// way the scope shows its binding rather than guessing one. A module that declares no curve
+/// returns `None` → the inspector's honest no-curve state, never a faked flat line. Adding a
+/// second curve module later is one arm here plus its own DSP method; the display model and the
+/// contract shape do not change.
+#[must_use]
+pub fn response_curve(
+    module_id: &str,
+    params: &[f32],
+    sample_rate: u32,
+    freqs: &[f64],
+) -> Option<Vec<f64>> {
+    use sparq_audio::dsp::filter::{SvfFilter, SvfMode};
+    if module_id != sparq_ui::canvas::inset::SVF_ID || sample_rate == 0 {
+        return None;
+    }
+    // The svf MODULE's own param mapping, mirrored (manifest order, pinned by the test below):
+    // clamped into the declared ranges, a non-finite param sanitised to the manifest default.
+    let at = |i: usize, default: f32, lo: f32, hi: f32| -> f32 {
+        let v = params.get(i).copied().unwrap_or(default);
+        if v.is_finite() {
+            v.clamp(lo, hi)
+        } else {
+            default
+        }
+    };
+    let cutoff = f64::from(at(0, 1_000.0, 10.0, 20_000.0));
+    let reso = at(1, 0.2, 0.0, 1.0);
+    let mode = at(2, 0.0, 0.0, 4.0).round() as i32;
+    let mut f = SvfFilter::new(cutoff, reso);
+    f.mode = match mode {
+        1 => SvfMode::HighPass,
+        2 => SvfMode::BandPass,
+        3 => SvfMode::Notch,
+        4 => SvfMode::Peak,
+        _ => SvfMode::LowPass,
+    };
+    f.prepare(sample_rate);
+    Some(freqs.iter().map(|&hz| f.magnitude_at(hz)).collect())
+}
+
 /// Render the canvas patch to a WAV file. Returns the evidence line for the shell log.
 ///
 /// # Errors
@@ -377,6 +427,76 @@ mod tests {
         let peak = out.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
         assert!((peak - 0.5).abs() < 1e-3, "peak {peak}");
         assert!(ex.memory_budget_bytes() > 0);
+    }
+
+    #[test]
+    fn the_svf_param_order_the_display_reads_is_pinned_against_the_registry_manifest() {
+        // The scope.rs discipline, on the curve side: the display's param indices are the
+        // manifest's own order. If a param is ever inserted before `mode`, THIS fails — loudly,
+        // here, instead of silently plotting resonance where cutoff belongs.
+        let reg = registry();
+        let reg_svf = reg.get(sparq_ui::canvas::inset::SVF_ID).expect("svf is a built-in");
+        let spec = NodeSpec::from_manifest(reg_svf.manifest());
+        let ids: Vec<&str> = spec.params.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, vec!["cutoff", "resonance", "mode", "mod"], "manifest order moved");
+    }
+
+    #[test]
+    fn the_curve_dispatch_is_the_filters_own_math_and_nothing_else() {
+        use sparq_ui::canvas::inset::SVF_ID;
+        use sparq_ui::canvas::response::{grid, Axes};
+        let axes = Axes::at(48_000);
+        let freqs = grid(&axes);
+
+        // The default lowpass: unity-ish below the cutoff, down above it, all finite.
+        let mags = response_curve(SVF_ID, &[1_000.0, 0.2, 0.0, 0.0], 48_000, &freqs)
+            .expect("svf declares a curve");
+        assert_eq!(mags.len(), freqs.len());
+        assert!(mags.iter().all(|m| m.is_finite() && *m >= 0.0));
+        // Nearest grid index (the grid is log-spaced; a probe frequency is rarely ON a point).
+        let db = |f: f64| {
+            let i = freqs
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| (*a - f).abs().total_cmp(&(*b - f).abs()))
+                .map(|(i, _)| i)
+                .unwrap();
+            20.0 * mags[i].log10()
+        };
+        let (lo, hi) = (db(100.0), db(10_000.0));
+        assert!(lo.abs() < 1.0, "100 Hz passes a 1 kHz lowpass: {lo} dB");
+        assert!(hi < -20.0, "10 kHz is well down: {hi} dB");
+
+        // Mode 1 flips it (the dispatch mirrors the MODULE's mode mapping, not a guess).
+        let hp = response_curve(SVF_ID, &[1_000.0, 0.2, 1.0, 0.0], 48_000, &freqs).unwrap();
+        assert!(20.0 * hp[0].log10() < -20.0, "a highpass rejects the floor");
+        assert!(
+            20.0 * hp[hp.len() / 2..].iter().fold(0.0f64, |a, &m| a.max(m)).log10() > -3.0,
+            "…and passes the top"
+        );
+
+        // The dispatch is EXACTLY the filter's own method — one source, no second copy: the
+        // same params through `SvfFilter::magnitude_at` give the same numbers, bit for bit.
+        use sparq_audio::dsp::filter::SvfFilter;
+        let mut f = SvfFilter::new(1_000.0, 0.2);
+        f.prepare(48_000);
+        let direct: Vec<f64> = freqs.iter().map(|&hz| f.magnitude_at(hz)).collect();
+        assert_eq!(direct, mags, "the dispatch IS magnitude_at — bit-identical");
+
+        // A non-finite param sanitises to the manifest default; a truncated snapshot too.
+        let nan = response_curve(SVF_ID, &[f32::NAN, 0.2, 0.0, 0.0], 48_000, &freqs).unwrap();
+        let dflt = response_curve(SVF_ID, &[1_000.0, 0.2, 0.0, 0.0], 48_000, &freqs).unwrap();
+        assert_eq!(nan, dflt, "NaN cutoff reads the default, never a NaN curve");
+        let short = response_curve(SVF_ID, &[], 48_000, &freqs).unwrap();
+        assert_eq!(short, response_curve(SVF_ID, &[1_000.0, 0.2, 0.0], 48_000, &freqs).unwrap());
+
+        // The honest refusals: a module with no curve, and a rate that was never negotiated.
+        assert!(response_curve("sparq/syn/sine", &[], 48_000, &freqs).is_none());
+        assert!(
+            response_curve("sparq/util/delay", &[], 48_000, &freqs).is_none(),
+            "a future comb response must register its own arm first"
+        );
+        assert!(response_curve(SVF_ID, &[1_000.0, 0.2, 0.0, 0.0], 0, &freqs).is_none());
     }
 
     #[test]

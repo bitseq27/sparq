@@ -18,22 +18,21 @@ use sparq_ui::audit::{InteractiveElement, TouchClass};
 use sparq_ui::canvas::browser;
 use sparq_ui::canvas::camera::Lod;
 use sparq_ui::canvas::connect::{self, ConnectContext, Preview};
+use sparq_ui::canvas::inset::{self, Well};
 use sparq_ui::canvas::interact::{CanvasState, Interaction};
 use sparq_ui::canvas::layout::{CanvasLayout, NodeLayout, SignalClass, WireEndSide};
 use sparq_ui::canvas::levels::LiveMeters;
 use sparq_ui::canvas::model::{Graph, Node, NodeId};
+use sparq_ui::canvas::response::{self, Curves};
 use sparq_ui::canvas::scope::{self, ScopeTraces, ScopeView};
-use sparq_ui::canvas::{OUT_MAIN_ID, SCOPE_ID};
 use sparq_ui::geom::{Rect, Vec2};
 use sparq_ui::tokens::*;
 
 use crate::ui::adapter::{c32, egui_rect, font_s, font_xs, sp_rect, Palette};
 
-/// The port-label character budget the scope display's left inset clears (a count, not a
-/// visual size — the `LOG_LINES` convention): the labels are the port id uppercased plus the
-/// class letter ("X C"), and the monospace advance is the space scale (`MenuState::width`'s
-/// documented convention).
-const SCOPE_LABEL_CHARS: usize = 6;
+/// The unfinished-flag body tint: the error token at a LIGHT alpha — a highlight over the
+/// panel fill, readable as "waiting", never as a filled state.
+const FLAG_TINT_ALPHA: f32 = 0.12;
 
 /// Paint the whole canvas for one frame. `view` is the canvas rect (screen px); `audit` collects
 /// the touch targets the layout audit measures.
@@ -48,6 +47,7 @@ pub fn draw(
     ctx: &ConnectContext<'_>,
     traces: &ScopeTraces,
     meters: &LiveMeters,
+    curves: &Curves,
     audit: &mut Vec<InteractiveElement>,
 ) {
     draw_grid(p, pal, canvas, view);
@@ -57,7 +57,12 @@ pub fn draw(
     // The resolved master (explicit or the documented default rule) wears a MASTER badge: the
     // user must be able to see which node the render will carry, in words, before asking.
     let master_id = canvas.resolve_master(graph);
-    draw_nodes(p, pal, graph, canvas, layout, master_id, traces, meters, audit);
+    // The light-red "unfinished" flags (operator ruling 2026-09-30): required inputs with no
+    // wire. The canvas reads them from the graph per frame — the same truth the executor's
+    // build flags on the audio side — so the highlight is there at rest AND while playing,
+    // and clears the frame the wire lands.
+    let missing = graph.missing_required_inputs();
+    draw_nodes(p, pal, graph, canvas, layout, master_id, traces, meters, curves, &missing, audit);
     draw_marquee(p, pal, canvas);
     draw_menu(p, pal, canvas, view, audit);
     draw_browser(p, pal, canvas, view, audit);
@@ -409,25 +414,30 @@ fn draw_nodes(
     master_id: Option<NodeId>,
     traces: &ScopeTraces,
     meters: &LiveMeters,
+    curves: &Curves,
+    missing: &[(NodeId, usize)],
     audit: &mut Vec<InteractiveElement>,
 ) {
     for nl in &layout.nodes {
         let Some(node) = graph.node(nl.id) else { continue };
         let selected = canvas.selection.nodes.contains(&nl.id);
         let is_master = master_id == Some(nl.id);
+        let flagged = missing.iter().any(|(id, _)| *id == nl.id);
         match layout.lod {
-            Lod::Dot => draw_node_dot(p, pal, node, nl, selected, is_master),
-            Lod::Simplified => {
-                draw_node_box(p, pal, node, nl, selected, is_master, false, traces, meters, audit)
-            },
-            Lod::Full => {
-                draw_node_box(p, pal, node, nl, selected, is_master, true, traces, meters, audit)
-            },
+            Lod::Dot => draw_node_dot(p, pal, node, nl, selected, is_master, flagged),
+            Lod::Simplified => draw_node_box(
+                p, pal, node, nl, selected, is_master, false, traces, meters, curves, flagged,
+                audit,
+            ),
+            Lod::Full => draw_node_box(
+                p, pal, node, nl, selected, is_master, true, traces, meters, curves, flagged, audit,
+            ),
         }
     }
 }
 
-fn dominant_class(node: &Node) -> SignalClass {
+#[allow(clippy::too_many_arguments)]
+pub fn dominant_class(node: &Node) -> SignalClass {
     use sparq_module_api::port::Direction;
     let pick = |dir: Direction| {
         node.spec
@@ -455,17 +465,8 @@ fn draw_scope_display(
     full: bool,
     traces: &ScopeTraces,
 ) {
-    let body = egui_rect(nl.screen);
-    let header = egui_rect(nl.header_screen);
-    let inset = LAYOUT_SPACE_2 as f32;
-    // The left inset clears the port circles AND their labels, so the trace never runs under a
-    // word (the label budget is token-derived: circle radius + gap + the monospace advance).
-    let label_budget =
-        LAYOUT_TOUCH_PORT_RADIUS as f32 + inset + SCOPE_LABEL_CHARS as f32 * LAYOUT_SPACE_2 as f32;
-    let disp = egui::Rect::from_min_max(
-        Pos2::new(body.min.x + label_budget, header.max.y + inset),
-        Pos2::new(body.max.x - inset, body.max.y - inset),
-    );
+    let Some(band) = nl.well_band else { return };
+    let disp = egui_rect(band).shrink(LAYOUT_SPACE_2 as f32);
     if disp.width() <= 0.0 || disp.height() <= 0.0 {
         return; // a collapsed viewport is not a scope's problem to solve
     }
@@ -535,6 +536,7 @@ fn draw_node_dot(
     nl: &NodeLayout,
     selected: bool,
     master: bool,
+    flagged: bool,
 ) {
     let c = pos(nl.screen.center());
     let r = LAYOUT_SPACE_2 as f32;
@@ -560,6 +562,16 @@ fn draw_node_dot(
             Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, pal.selected),
         );
     }
+    if flagged {
+        // The Dot-LOD half of the unfinished flag: an error-colour ring (the bypass ring's
+        // radius, the flag's own colour — colour plus the box LOD's tint and word, never
+        // colour alone).
+        p.circle_stroke(
+            c,
+            r + LAYOUT_SPACE_1 as f32 * 0.5,
+            Stroke::new(LAYOUT_STROKE_HAIRLINE as f32, pal.error),
+        );
+    }
     if selected {
         p.circle_stroke(
             c,
@@ -580,6 +592,8 @@ fn draw_node_box(
     full: bool,
     traces: &ScopeTraces,
     meters: &LiveMeters,
+    curves: &Curves,
+    flagged: bool,
     audit: &mut Vec<InteractiveElement>,
 ) {
     let body = egui_rect(nl.screen);
@@ -587,6 +601,24 @@ fn draw_node_box(
     let dimmed = node.flags.bypassed || node.flags.muted;
     let fill = if dimmed { pal.ground_panel.gamma_multiply(0.6) } else { pal.ground_panel };
     p.rect_filled(body, corner, fill);
+
+    // The light-red "unfinished" highlight (operator ruling 2026-09-30): a required input has
+    // no wire. A LIGHT tint of the error token over the body fill — a highlight, not a state
+    // pattern: the node is not bypassed or muted, it is WAITING for a wire, and playback still
+    // runs with its module silenced. The border and (at Full LOD) the `NO IN` word carry the
+    // same fact redundantly, per the look-board's pattern-first rule.
+    if flagged {
+        p.rect_filled(body, corner, with_alpha(pal.error, FLAG_TINT_ALPHA));
+    }
+
+    // The card's left stripe (increment 6, the PN convergence): the node's DOMINANT SIGNAL
+    // CLASS at emphasis weight — sparq's §4 rule (colour says what the module carries) read in
+    // the reference's category-stripe position.
+    let stripe = egui::Rect::from_min_size(
+        body.left_top(),
+        egui::vec2(LAYOUT_STROKE_EMPHASIS as f32, body.height()),
+    );
+    p.rect_filled(stripe, LAYOUT_CORNER_NONE as u8, class_colour(dominant_class(node), pal));
 
     // State patterns (increment 5, look-board §4 "pattern first — colour is redundant"): the
     // shapes survive the LOD reduction AND the monochrome test, which words and tints do not.
@@ -601,6 +633,8 @@ fn draw_node_box(
     // because "which node am I editing" beats "which node is silent" at the border's one job).
     let border = if selected {
         Stroke::new(LAYOUT_STROKE_EMPHASIS as f32, pal.selected)
+    } else if flagged {
+        Stroke::new(LAYOUT_STROKE_SIGNAL as f32, pal.error)
     } else {
         pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32)
     };
@@ -650,17 +684,36 @@ fn draw_node_box(
         );
     }
 
+    // The header's right side (increment 6, PN's anatomy): the category word and the node id,
+    // dim — what the card is and which instance of it, before any state word competes.
+    let mut cat_w = 0.0f32;
+    if full {
+        let top = node.spec.module_id.split('/').nth(1).unwrap_or("");
+        let cat = format!("{top} · {}", nl.id);
+        cat_w = cat.len() as f32 * LAYOUT_SPACE_2 as f32;
+        p.text(
+            header.right_center() - egui::vec2(LAYOUT_SPACE_2 as f32, 0.0),
+            Align2::RIGHT_CENTER,
+            cat,
+            font_xs(),
+            pal.text_disabled,
+        );
+    }
+
     // Flag badges, in WORDS — at Full LOD only (increment 5: the Simplified contract is "node
     // box, coloured ports, NO TEXT", and the patterns above are what carries the states down
     // there). At Full the word rides ON TOP of the pattern: redundant encoding, never either
-    // alone — the mockup shows exactly this pairing for bypass (hatch + "bypassed").
+    // alone — the mockup shows exactly this pairing for bypass (hatch + "bypassed"). The badges
+    // start LEFT of the category word: a state outranks a label for the right edge.
     if full {
-        let mut badge_x = header.right_center().x - LAYOUT_SPACE_2 as f32;
+        let mut badge_x =
+            header.right_center().x - LAYOUT_SPACE_2 as f32 - cat_w - LAYOUT_SPACE_2 as f32;
         for (on, label, col) in [
             (master, "MASTER", pal.selected),
             (node.flags.locked, "LOCK", pal.text_tertiary),
             (node.flags.muted, "MUTE", pal.text_disabled),
             (node.flags.bypassed, "BYPASS", pal.warning),
+            (flagged, "NO IN", pal.error),
         ] {
             if !on {
                 continue;
@@ -673,16 +726,85 @@ fn draw_node_box(
         }
     }
 
-    // The scope display (WO-013 increment 6): the well and its grid draw under the ports at
-    // Full AND Simplified; the TRACE is a Full-LOD reading only (D8 of the increment plan).
-    if node.spec.module_id == SCOPE_ID {
-        draw_scope_display(p, pal, node, nl, full, traces);
+    // Inline parameter rows (increment 6, the PN card anatomy): label left in xs tertiary
+    // uppercase, value right in the node's dominant class colour, a round knob on a thin track
+    // below — and the SAME op path as the inspector (Hit::Param → Interaction::Param), so one
+    // door serves both surfaces and the live ring cannot hear a difference. Full LOD only: the
+    // Simplified contract is ports, wells and patterns, no text.
+    if full {
+        let col = class_colour(dominant_class(node), pal);
+        for pr in &nl.param_rows {
+            let Some(desc) = node.spec.params.get(pr.index) else { continue };
+            let value = node.param_value(pr.index).unwrap_or(desc.default as f32);
+            let row = egui_rect(pr.row);
+            let label_y = row.min.y + row.height() * 0.30;
+            // The value owns the right edge; the label takes what is left and truncates with
+            // an ellipsis rather than colliding (a number without its unit is a bug, so the
+            // VALUE is never the thing that gets cut — look-board §5).
+            let value_s = sparq_ui::canvas::inspector::value_text(desc, value);
+            let char_w = LAYOUT_SPACE_2 as f32;
+            let avail = row.width() - char_w * 3.0 - value_s.len() as f32 * char_w;
+            let max_chars = (avail / char_w).floor().max(4.0) as usize;
+            let name = desc.name.to_uppercase();
+            let label_s = if name.len() > max_chars {
+                format!("{}…", &name[..max_chars.saturating_sub(1)])
+            } else {
+                name
+            };
+            p.text(
+                egui::pos2(row.min.x + LAYOUT_SPACE_2 as f32, label_y),
+                Align2::LEFT_CENTER,
+                label_s,
+                font_xs(),
+                pal.text_tertiary,
+            );
+            p.text(
+                egui::pos2(row.max.x - LAYOUT_SPACE_2 as f32, label_y),
+                Align2::RIGHT_CENTER,
+                value_s,
+                font_xs(),
+                col,
+            );
+            let tr = egui_rect(pr.track);
+            let mid_y = tr.center().y;
+            p.line_segment(
+                [egui::pos2(tr.min.x, mid_y), egui::pos2(tr.max.x, mid_y)],
+                pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32),
+            );
+            let kx = sparq_ui::canvas::inspector::knob_x(desc, pr.track, value);
+            p.line_segment(
+                [egui::pos2(tr.min.x, mid_y), egui::pos2(kx, mid_y)],
+                Stroke::new(LAYOUT_STROKE_SIGNAL as f32, col),
+            );
+            p.circle_filled(egui::pos2(kx, mid_y), LAYOUT_SPACE_1 as f32, col);
+        }
+        if let Some((more, r)) = nl.param_overflow {
+            p.text(
+                egui_rect(r).center(),
+                Align2::CENTER_CENTER,
+                format!("+{more} MORE - INSPECTOR"),
+                font_xs(),
+                pal.text_disabled,
+            );
+        }
     }
-    // The master-out meter bars (WO-012 increment 4, the operator's ask): two channel wells
-    // with data-class fills and audio-class peak-hold blocks — the mockup's bars, read from
-    // the live per-channel meter ring. At rest: empty wells, never a frozen bar.
-    if node.spec.module_id == OUT_MAIN_ID {
-        draw_master_meters(p, pal, node, nl, full, meters);
+
+    // The node inset displays (WO-012 increment 5, D1): the WELL REGISTRY dispatch — one
+    // lookup (`sparq_ui::canvas::inset::well_for`) says which well this node wears, and the
+    // painter matches on the Well and calls the matching draw fn. No module-id literal reaches
+    // this file (the `OUT_MAIN_ID`/`SCOPE_ID` if-chain this replaces was the pattern's first
+    // draft). Wells draw at Full AND Simplified (a meter or a shape is a reading, not text —
+    // inc 4 D3's rule); at Dot the node is a dot and wears no well. A well steals no gesture:
+    // it is pixels under the node body's existing class-L touch target (the scope's rule).
+    // LIVE where the rings carry it (meters), the param-derived declared shape otherwise —
+    // at rest, never faked.
+    match inset::well_for(&node.spec) {
+        Some(Well::Scope) => draw_scope_display(p, pal, node, nl, full, traces),
+        Some(Well::Meters) => draw_meters_well(p, pal, node, nl, meters),
+        Some(Well::Envelope) => draw_envelope_well(p, pal, node, nl),
+        Some(Well::Sparkline) => draw_sparkline_well(p, pal, node, nl),
+        Some(Well::Curve) => draw_curve_well(p, pal, node, nl, curves),
+        None => {}, // no well: the body is the box, honest
     }
 
     // Ports.
@@ -726,6 +848,22 @@ fn draw_node_box(
             ),
             dense_allowed: false,
         });
+    }
+
+    // Inline sliders are controls: registered at the dense floor (non-destructive edits,
+    // badged) while their on-screen row clears it; below that zoom the row is a reading and
+    // the inspector is the door — the same honesty as the node-body gating below.
+    if full {
+        for pr in &nl.param_rows {
+            if pr.row.height() >= LAYOUT_TOUCH_MIN_TARGET_DENSE as f32 {
+                audit.push(InteractiveElement {
+                    id: format!("canvas/param/{}/{}", nl.id, pr.index),
+                    class: TouchClass::S,
+                    rect: pr.row,
+                    dense_allowed: true,
+                });
+            }
+        }
     }
 
     // Register the node body as a class-L touch target ONLY when it is actually that big on
@@ -1105,41 +1243,44 @@ pub fn draw_wire_legend(p: &Painter, pal: &Palette, r: Rect) {
     }
 }
 
-/// The `out/main` node's stereo meter bars (WO-012 increment 4): two wells, one per channel,
-/// filled in the DATA class (a meter is data *about* the audio — the mockup's green, §4 under
-/// that reading) with an amber peak-hold block decaying on audio time in the session's drain.
-/// Full and Simplified (a meter is a reading, not text); Dot stays a dot. The wells read the
-/// session's [`LiveMeters`] — at rest the shell hands over an empty map and the bars sit empty,
-/// because a frozen bar from a dead stream is a lie with a scale on it.
-fn draw_master_meters(
-    p: &Painter,
-    pal: &Palette,
-    node: &Node,
-    nl: &NodeLayout,
-    full: bool,
-    meters: &LiveMeters,
-) {
-    let _ = full; // the bars draw at Full and Simplified alike
-    use sparq_module_api::port::{Direction, PortType};
-    let Some(port) = node
-        .spec
-        .ports
-        .iter()
-        .enumerate()
-        .find(|(_, pt)| pt.direction == Direction::Out && pt.port_type == PortType::Audio)
-        .map(|(i, _)| i)
-    else {
-        return; // an out/main without an audio out is a manifest bug, not a drawing problem
-    };
-    let m = meters.get(&(nl.id, port)).copied().unwrap_or_default();
-    let body = egui_rect(nl.screen);
-    let header = egui_rect(nl.header_screen);
+/// The Meters well (WO-012 increment 4 for `out/main`, increment 5 for EVERY audio-output
+/// node and the two registered analysers): meter bars in the shared bar vocabulary — a
+/// hairline well, a DATA-class fill (a meter is data *about* the signal — §4 under that
+/// reading) and an AUDIO-class peak-hold block decaying on AUDIO time in the session's drain.
+///
+/// Two sources, both READ, never invented:
+///
+/// * a node with an audio output takes its first audio port's [`LiveMeters`] entry — the ring
+///   already publishes per-port stereo peaks for all of them (`publish_meters` walks the whole
+///   order); increment 4 painted only `out/main`, the registry now paints every one;
+/// * `ana/rms` / `ana/tap` (registry: Meters, no audio out) take their cv port's published
+///   value ([`NodeLevels::port`] — the same reading the wire levels light from) as a SINGLE
+///   bar. The cv path carries no block stamp, so no hold block is drawn — an honest gap, not
+///   a frozen one.
+///
+/// At rest the shell hands over empty maps and the wells sit empty, because a frozen bar from
+/// a dead stream is a lie with a scale on it.
+fn draw_meters_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout, meters: &LiveMeters) {
+    // `out/main` alone wears bars (operator ruling 2026-09-30): its first audio output's
+    // per-port ring entry. At rest the shell hands over an empty map and the wells sit empty,
+    // because a frozen bar from a dead stream is a lie with a scale on it.
+    let Some(band) = nl.well_band else { return };
+    if let Some(port) = inset::first_audio_out(&node.spec) {
+        let m = meters.get(&(nl.id, port)).copied().unwrap_or_default();
+        draw_meter_bars(p, pal, band, &[(m.l, m.hold_l), (m.r, m.hold_r)]);
+    }
+}
+
+/// The bar vocabulary itself (increment 4's, unchanged): one hairline well per channel, a
+/// data-class fill to the level, an audio-class hold block where a hold was published.
+fn draw_meter_bars(p: &Painter, pal: &Palette, band: Rect, channels: &[(f32, f32)]) {
+    let body = egui_rect(band);
     let inset = LAYOUT_SPACE_2 as f32;
     let bar_h = LAYOUT_SPACE_2 as f32;
     let well_w = body.width() - inset * 4.0;
     let x0 = body.min.x + inset * 2.0;
-    let mut y = header.max.y + inset * 2.0;
-    for (level, hold) in [(m.l, m.hold_l), (m.r, m.hold_r)] {
+    let mut y = body.min.y + inset * 1.5;
+    for &(level, hold) in channels {
         let well = egui::Rect::from_min_size(egui::pos2(x0, y), egui::vec2(well_w, bar_h));
         p.rect_stroke(
             well,
@@ -1165,5 +1306,83 @@ fn draw_master_meters(
             p.rect_filled(block, LAYOUT_CORNER_NONE as u8, pal.audio);
         }
         y += bar_h + inset;
+    }
+}
+
+/// The Envelope well (`env/ad`): the attack/decay triangle from params — the module's DECLARED
+/// shape, honest at rest and before the first block (D1′: the live cv-value overlay is the
+/// declared next half, waiting on a ring that carries per-block cv history). Hairline-faint at
+/// rest — the scope rest line's own stroke. Param order is the manifest's (0 attack · 1 decay ·
+/// 2 loop · 3 curve), pinned by a sparq-app test.
+fn draw_envelope_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout) {
+    let Some(band) = nl.well_band else { return };
+    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32);
+    if disp.width() <= 0.0 || disp.height() <= 0.0 {
+        return;
+    }
+    p.rect_filled(disp, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+    let prm = node.effective_params();
+    let pts = inset::envelope_polyline(
+        prm.first().copied().unwrap_or(inset::ENV_ATTACK_DEFAULT),
+        prm.get(1).copied().unwrap_or(inset::ENV_DECAY_DEFAULT),
+        prm.get(3).copied().unwrap_or(0.0) >= 0.5, // the manifest's curve param: 0 exp, 1 lin
+        sp_rect(disp),
+    );
+    if pts.len() >= 2 {
+        let line = pts.into_iter().map(pos).collect::<Vec<Pos2>>();
+        p.line(line, pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32));
+    }
+}
+
+/// The Sparkline well (`mod/lfo`): ONE period of the declared wave from params (0 rate ·
+/// 1 shape · 2 depth — the rate does not appear because the x-axis IS one period), the honest
+/// at-rest outline; the rolling cv-history overlay is D1′'s declared next half. Hairline-faint
+/// at rest, the envelope's stroke.
+fn draw_sparkline_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout) {
+    let Some(band) = nl.well_band else { return };
+    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32);
+    if disp.width() <= 0.0 || disp.height() <= 0.0 {
+        return;
+    }
+    p.rect_filled(disp, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+    let prm = node.effective_params();
+    let pts = inset::lfo_period_polyline(
+        prm.get(1).copied().unwrap_or(0.0),
+        prm.get(2).copied().unwrap_or(inset::LFO_DEPTH_DEFAULT),
+        sp_rect(disp),
+    );
+    if pts.len() >= 2 {
+        let line = pts.into_iter().map(pos).collect::<Vec<Pos2>>();
+        p.line(line, pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32));
+    }
+}
+
+/// The Curve well (`flt/svf`): the thumbnail of the D2 response, no marker (the marker lives
+/// in the inspector's plot — one control, one home). The magnitudes come from the shell's
+/// dispatch (the filter's own `magnitude_at`, the contract's single source); the curve draws
+/// in the node's dominant class colour over a 0 dB datum. Param-derived means it is NEVER at
+/// rest while params exist — the honest fallback when the shell supplied no frame (a rate
+/// never negotiated) is the flat rest centre line, the scope's own vocabulary.
+fn draw_curve_well(p: &Painter, pal: &Palette, node: &Node, nl: &NodeLayout, curves: &Curves) {
+    let Some(band) = nl.well_band else { return };
+    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32);
+    if disp.width() <= 0.0 || disp.height() <= 0.0 {
+        return;
+    }
+    p.rect_filled(disp, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+    let grid = pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32);
+    let Some(frame) = curves.get(&nl.id) else {
+        let [a, b] = scope::rest_line(sp_rect(disp));
+        p.line_segment([pos(a), pos(b)], grid);
+        return;
+    };
+    let r = sp_rect(disp);
+    let y0 = frame.axes.y_of_db(r, 0.0);
+    p.line_segment([Pos2::new(disp.min.x, y0), Pos2::new(disp.max.x, y0)], grid);
+    let pts = response::polyline(&frame.freqs, &frame.mags, &frame.axes, r);
+    if pts.len() >= 2 {
+        let class = dominant_class(node);
+        let line = pts.into_iter().map(pos).collect::<Vec<Pos2>>();
+        p.line(line, Stroke::new(class_width(class), class_colour(class, pal)));
     }
 }

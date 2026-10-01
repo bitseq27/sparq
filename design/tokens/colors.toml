@@ -8,13 +8,15 @@ version = "0.1.0"
 theme = "phosphor-dark"          # default and only theme in v0; "contrast-high" derived below
 
 # ---------------------------------------------------------------- ground & surface
+# Warm ladder (operator ruling 2026-09-30, the Persistent-Nodes convergence): the grounds read
+# black-brown, the chrome sits one warm step above the canvas, wells stay the darkest surface.
 [ground]
-base        = "#07090C"          # application ground
-canvas      = "#05070A"          # graph canvas / full-bleed visuals (darker than chrome)
-panel       = "#0C1015"          # panels, dock, inspector
-panel_alt   = "#10151C"          # raised sections, table headers
-inset       = "#04060A"          # wells: numeric fields, scopes, meters
-overlay     = "#0E131A"          # popovers, dialogs (95% opacity)
+base        = "#0B0A08"          # application ground
+canvas      = "#070605"          # graph canvas / full-bleed visuals (darker than chrome)
+panel       = "#151210"          # panels, dock, inspector, library
+panel_alt   = "#1C1815"          # raised sections, table headers
+inset       = "#050403"          # wells: numeric fields, scopes, meters
+overlay     = "#181410"          # popovers, dialogs (95% opacity)
 
 # ---------------------------------------------------------------- structure (hairlines)
 # Structure is drawn, never filled. Three opacity tiers only.
@@ -22,15 +24,15 @@ overlay     = "#0E131A"          # popovers, dialogs (95% opacity)
 faint       = 0.10               # background grid, inactive dividers
 regular     = 0.25               # panel borders, node borders, port rings
 strong      = 0.60               # active borders, focused frames, table rules
-colour      = "#E8F1F8"          # hairlines are neutral-cool white; tint only for signal
+colour      = "#F0E6D8"          # hairlines are neutral-WARM white; tint only for signal
 
 # ---------------------------------------------------------------- text
 [text]
-primary     = "#E8F1F8"
-secondary   = "#9FB0C0"
-tertiary    = "#6B7C8C"
-disabled    = "#454F59"
-inverse     = "#07090C"          # text on a filled accent
+primary     = "#F0E6D8"
+secondary   = "#B9AC9C"
+tertiary    = "#8B7F70"
+disabled    = "#5A5248"
+inverse     = "#0B0A08"          # text on a filled accent
 # never use pure #FFFFFF: it blooms on OLED/projectors and reads as "consumer app"
 
 # ---------------------------------------------------------------- signal classes
@@ -75,13 +77,15 @@ label       = "S"
 
 # ---------------------------------------------------------------- states (structural, not decorative)
 # Pattern first, colour redundant: every state has a non-colour encoding (look-board.md §4).
+# The chrome accent (selection frames, active-tab underline, the probe marker): the operator's
+# orange primary from the Persistent-Nodes reference — structure wears orange, signal wears class.
 [state.selected]
-colour = "#E8F1F8"
+colour = "#F08C1E"
 width = 1
 encoding = "corner-ticks"          # neutral frame; never an accent
 
 [state.hover]
-colour = "#E8F1F8"
+colour = "#F0E6D8"
 opacity = 0.35
 encoding = "tint-fill"
 
@@ -102,11 +106,11 @@ colour = "#FF3B30"
 encoding = "filled-dot-pulse"
 
 [state.bypassed]
-colour = "#6B7C8C"
+colour = "#8B7F70"
 encoding = "diagonal-hatch-8px"
 
 [state.muted]
-colour = "#454F59"
+colour = "#5A5248"
 encoding = "diagonal-hatch-4px"
 
 [state.solo]
@@ -114,7 +118,7 @@ colour = "#FFB347"
 encoding = "double-frame"
 
 [state.locked]
-colour = "#9FB0C0"
+colour = "#B9AC9C"
 encoding = "corner-lock-tick"
 
 [state.stale]
@@ -130,7 +134,7 @@ colour = "#FFCC4D"
 encoding = "dotted-underline"
 
 [state.stub]
-colour = "#6B7C8C"
+colour = "#8B7F70"
 encoding = "crosshatch"            # missing module placeholder (repair dialog)
 
 # ---------------------------------------------------------------- meters & analysis
@@ -149,8 +153,8 @@ extends = "phosphor-dark"
 ground.base = "#000000"
 hairline.regular = 0.45
 hairline.strong = 0.85
-text.secondary = "#C8D6E2"
-text.tertiary = "#9FB0C0"
+text.secondary = "#D8CBBB"
+text.tertiary = "#B9AC9C"
 # accents are unchanged in hue but raised in lightness by the generator (+8% L, oklch)
 accent_lightness_lift = 0.08
 

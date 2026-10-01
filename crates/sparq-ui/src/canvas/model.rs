@@ -467,6 +467,26 @@ impl Graph {
         self.wires.iter().filter(|w| w.from.node == node || w.to.node == node).copied().collect()
     }
 
+    /// Every `(node, input port index)` whose manifest says `required` and that has NO incoming
+    /// wire — the set the shell paints with the light-red "unfinished" highlight (operator
+    /// ruling 2026-09-30: flag, not refuse). The audio side keeps the SAME truth from the
+    /// executor's own build ([`sparq_audio::executor::Executor::missing_required`]); this is the
+    /// canvas's read of it, per frame, at rest and while playing, so the highlight never lags
+    /// the wire that would clear it. Deterministic: node order × manifest order.
+    #[must_use]
+    pub fn missing_required_inputs(&self) -> Vec<(NodeId, usize)> {
+        let mut out = Vec::new();
+        for n in &self.nodes {
+            for (pi, p) in n.spec.ports.iter().enumerate() {
+                let incoming = p.direction == sparq_module_api::port::Direction::In && p.required;
+                if incoming && !self.wires.iter().any(|w| w.to.node == n.id && w.to.index == pi) {
+                    out.push((n.id, pi));
+                }
+            }
+        }
+        out
+    }
+
     /// Whether a directed path already leads from `from` to `to` through the wires. Adding an edge
     /// `to → from` would then close a cycle — the check [`super::connect`] uses to honour §5.4
     /// ("acyclic by default"; no delay module exists yet to legalise a loop).
@@ -1070,5 +1090,59 @@ mod tests {
             Op::AddNode(n) => n.id,
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn missing_required_inputs_flags_bare_required_ports_and_clears_when_wired() {
+        use sparq_module_api::manifest::Port;
+        use sparq_module_api::port::{ChannelSet, Direction, Multiplicity, PortType};
+        let port = |id: &str, dir: Direction, req: bool| Port {
+            id: id.into(),
+            direction: dir,
+            port_type: PortType::Audio,
+            required: req,
+            channel_set: Some(ChannelSet::Mono),
+            channel_set_variable: false,
+            cv_rate: None,
+            cv_range: None,
+            cv_reduce: Default::default(),
+            cv_interp: Default::default(),
+            event_kinds: Vec::new(),
+            multiplicity: Multiplicity::Single,
+            latency_contribution: 0,
+        };
+        let mut g = Graph::new();
+        // gain: required `in` (0), out (1). svf-shape: required `in`, optional `mod`, out.
+        let gain = {
+            let spec = NodeSpec::new(
+                "sparq/util/gain",
+                "Gain",
+                vec![port("in", Direction::In, true), port("out", Direction::Out, false)],
+            );
+            match g.op_add_node(spec, Vec2::ZERO) {
+                Op::AddNode(n) => n.id,
+                _ => unreachable!(),
+            }
+        };
+        let opt = {
+            let spec = NodeSpec::new(
+                "sparq/x/opt",
+                "Opt",
+                vec![port("in", Direction::In, false), port("out", Direction::Out, false)],
+            );
+            match g.op_add_node(spec, Vec2::new(200.0, 0.0)) {
+                Op::AddNode(n) => n.id,
+                _ => unreachable!(),
+            }
+        };
+        // Bare required input is flagged; the optional one never is; order is node × port.
+        assert_eq!(g.missing_required_inputs(), vec![(gain, 0)]);
+        // Wiring it clears the flag the same frame (the highlight never lags the wire).
+        let _ = g.op_add_wire(PortRef::new(opt, 1), PortRef::new(gain, 0));
+        assert_eq!(g.missing_required_inputs(), Vec::new());
+        // Removing the wire re-flags it.
+        let wid = g.wires()[0].id;
+        let _ = g.op_remove_wire(wid);
+        assert_eq!(g.missing_required_inputs(), vec![(gain, 0)]);
     }
 }

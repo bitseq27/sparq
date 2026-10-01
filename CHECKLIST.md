@@ -17,24 +17,172 @@ rest of the test006 digests (F–K, the mouse paragraph, the H diff list against
 the stage screen), and the gates digest at 777 / `src 94f/2188595B` / 37 smokes. **No bundle is
 waiting**; the next seal comes with the next build.
 
-**Mid-session update — ninth session (2026-09-30, sandbox), IN FLIGHT.** Session-start
-discipline run clean: `sync_check --quiet` OK (153 files match `wo012-inc4`, `src 94f/2188595B`
-— the count rose 152→153 because the fresh clone's build regenerated the gitignored
-`Cargo.lock` the manifest expects, clearing the only warning; `modules/out/main/sparqmod.toml`
-present, sha `725bf07a…` verified, no restore needed). `/opt` toolchain restored from the
-environment-notes recipe (cargo/rustc 1.98.1, rustfmt+clippy, MSVC cross-lint target). Baseline
-re-verified GREEN before any change: **777 tests passed / 0 failed / 1 ignored**. **Step (2)'s
-plan of record is WRITTEN: [`WO012-INC5-PLAN.md`](WO012-INC5-PLAN.md)** (docs-only, NOT
-stamp-covered, tree still green at `src 94f/2188595B`) — convergence slice B declared before
-code per the WO008-INC7 discipline: D1 the node-inset well registry (meters go live on EVERY
-audio-output node — the ring already carries them; envelope/sparkline/svf-curve wells ship their
-param-derived rest shapes, the live cv-history overlay declared the next half), D2 the per-module
-curve contract svf-first (single-source `SvfFilter::magnitude_at` in sparq-audio, the exact
-z-domain response, pinned to the sine-sweep so the display cannot drift from the DSP), D3 the
-inspector response plot + its draggable marker (a read-only probe, NOT a second cutoff door;
-display state, not undoable), D4 the model split + shape-of-the-diff proof (every golden
-bit-identical). **The BUILD is the next step and has NOT started** — no product code has changed
-this session, so no re-seal is due yet.
+**Tenth session, seventh round (2026-09-30, sandbox) — WO-014 increment 7c: the one-pole glide.
+BUILT, GREEN and SEALED (`sync-wo014-inc7c.zip`).** Operator, third ear-report: *"I can still
+hear bumps when moving the trim slider quickly."* Mechanism named: 7b's linear ramp reached its
+target in one block (1.3 ms) and HELD until the next UI snapshot (~16 ms) — a staircase under a
+fast drag, kinks at the update rate, i.e. bumps. The ramp is now a one-pole GLIDE (tau 25 ms,
+`dsp::core::glide`): the coefficient chases the moving target per sample (per frame on the
+multi-channel modules), smooth inside every block, continuous across every boundary; a −80 dB
+snap lands settled edits exactly, so static AND settled renders remain the constant multiply —
+goldens bit-exact, prime rule unchanged. New gate drives a faster-than-any-hand drag (trim
+1.0 → 0.0, one edit per block) and asserts no boundary jump beyond the signal's slope,
+monotone block peaks, per-frame stereo coherence, exact silence when settled; the gain unit
+test asserts the glide contract; live smoke 27 pumps past two taus before asking whether the
+level arrived (the lag is declared fader feel, param_ramp gates its shape). **Measured: 808
+tests, release goldens bit-identical, selftest 9/9 · 17/17 · 434.8× realtime, every runnable
+clippy cell, 5 python gates, `ui --audit` PASS (50 smokes).** **Device ask, one line: drag the
+trim FAST again — staircase kinks were the bumps; the glide has none.** Next session: (1)
+session-start discipline (expect the inc7c stamp); (2) device digests (gates at 808 / the inc7c
+stamp; test004 attempt 4 still the WO-006 acceptance — do NOT fire the ADR-008 exit early);
+(3) the bare-required badge (item 8); (4) the operator's eye on inc6 vs the PN reference.
+
+**Tenth session, sixth round (2026-09-30, sandbox) — WO-014 increment 7b: the stereo master's
+ramp fix. BUILT, GREEN and SEALED (`sync-wo014-inc7b.zip`).** The operator's second report —
+*"the main out trim still crackles, using a pure sine tone"* — named a real bug in increment 7's
+first draft: the `out/main` ramp advanced once per CHANNEL inside the `stereo_tick_f` closure
+(it runs per channel per frame), so a stereo change block swept twice its distance and snapped
+back to the target at the boundary — a step per block under a drag, the crackle surviving on the
+reported knob. One condition fixes it (advance on the frame's first channel); the new gate in
+`tests/param_ramp.rs` recovers the per-sample coefficient from the deterministic sine and pins
+the change block's geometry (starts at the old coefficient, ends AT the target, no overshoot,
+boundary carries only the signal's slope) — on the buggy code it fails by a mile. Mono modules
+and the mixer/panner frame loops were already correct. **Measured: 808 tests (+1), release
+goldens bit-identical, selftest 9/9, every runnable clippy cell, 5 python gates, `ui --audit`
+50 smokes unchanged.** **Device ask, one line: drag the main-out trim again with the sine —
+this time the stereo glide is the one under test.** Next session: (1) session-start discipline
+(expect the inc7b stamp); (2) device digests (gates at 808 / the inc7b stamp; test004 attempt 4
+still the WO-006 acceptance — do NOT fire the ADR-008 exit early); (3) the bare-required badge
+(item 8); (4) the operator's eye on inc6 vs the PN reference.
+
+**Tenth session, fifth round (2026-09-30, sandbox) — WO-014 increment 7: the zipper-noise fix
+(defect #85). BUILT, GREEN and SEALED (`sync-wo014-inc7.zip`).** Operator report from the device
+run: *"when adjusting the main out volume or sine amplitude the audio crackles."* Mechanism:
+param snapshots land at block boundaries and every gain-like module multiplied the whole next
+block by the new coefficient — a hard step of Δcoeff × signal, 750×/s during a drag. Fix per
+`WO014-INC7-PLAN.md`: `dsp::core::coeff_ramp` — the change block GLIDES (linear, one block), the
+static path is the zero-step constant multiply, so every checked-in golden stays bit-exact; the
+first block after construction primes at the target (no fade-in from a guessed coefficient).
+Applied to `syn/sine` amplitude, `out/main` trim, `util/gain`, `util/mixer` (20 coefficients),
+`util/panner` (both law coefficients). **Mute keeps its immediate exact zeros — a stage cut is a
+safety, not a fade (declared).** Frequency steps, SVF coefficients and cv-side gains are NOT
+ramped (slope changes, not amplitude discontinuities; an SVF coefficient ramp is a design of its
+own) — parked in LATER with the reason. **Measured: 807 tests** (+3: `tests/param_ramp.rs` — the
+boundary-jump gate with its own counterfactual proving the gate would have caught the old step,
+the mute-cuts-in-zeros gate, the prime/static bit-identity gate; plus the gain unit test
+rewritten to the glide contract), release goldens bit-identical, selftest 9/9 · 17/17, every
+clippy cell, 5 python gates, `ui --audit` unchanged at 50 smokes (display-side untouched).
+**Device ask: drag the main-out trim and a sine amplitude again — the crackle is the thing that
+must be gone.** Next session: (1) session-start discipline (expect the inc7 stamp); (2) the
+device digests (gates at 807 / the inc7 stamp; test004 attempt 4 still the WO-006 acceptance —
+do NOT fire the ADR-008 exit early); (3) the bare-required badge (item 8); (4) the operator's
+eye on the inc6 shell vs the PN reference.
+
+**Tenth session, fourth round (2026-09-30, sandbox) — increment 6: the Persistent-Nodes
+convergence. BUILT, GREEN and SEALED (`sync-wo012-inc6.zip`).** The operator's reference:
+kageproduction.com/persistentnodes — rulings via question round: warm-shift the tokens (class
+hues stay), PN-style node cards with INLINE param sliders, all three surfaces (NODE LIBRARY
+sidebar with search + category filter + miniature preview cards replacing the dock palette; the
+FIT/RESET/ARRANGE/zoom/wire-style/counts toolbar; right-edge vertical master IN/OUT meters),
+project buttons parked. Shipped as WO012-INC6-PLAN.md D1–D7: the warm ladder + orange chrome
+accent through `colors.toml` (mockups re-hexed, `make_display_sheet.py` now token-bound so a
+palette move can never re-freeze it); the card anatomy (class stripe, category+id header, param
+rows with round knobs — one slider vocabulary everywhere — well band, port band, `+N MORE` cap
+at 8 rows); `Hit::Param` puts the inspector's edit path on the card (one op, two surfaces); the
+library column in `shell::compute` with the reflow order inspector→library→rail (at 1440/1280
+the inspector yields — the card is the editor now — collapsing the library brings it back);
+ARRANGE is one undo step (Batch of moves); the wire-style select restyles painter AND hit-test;
+the master strip reads the ring (IN = the port feeding the master, pre-trim). **Measured: 804
+tests (+1 ignored), 50 smokes, every golden bit-identical, selftest 9/9 · 17/17 · 411.1×
+realtime, fmt, clippy every runnable cell, 5 python gates, `ui --audit` PASS (matrix 0
+violations incl. the library column and the new dense controls, DPI-invariant).** Convergence
+sheet pairs the PN screenshot with the shell: `design/mockups/convergence-wo012-inc6.png`;
+findings 25–28 declare the deltas. Two build-time decisions recorded in the plan postscript
+(reflow order; the fuzzy ranking's looseness embraced). **Next session, in order:** (1)
+session-start discipline (`sync_check --quiet`, expect the inc6 stamp); (2) device digests:
+gates at 804 / 50 smokes / the inc6 stamp, test004 attempt 4 (still the WO-006 acceptance — do
+NOT fire the ADR-008 exit early), and the operator's eye on the new shell vs the PN reference;
+(3) the bare-required badge (item 8); (4) parked: project save/open/history, the library port
+filter, a third wire style, LOG-tab scroll, Perform's return.
+
+**Tenth session, third round (2026-09-30, sandbox) — increment 5c: Perform mode removed, the
+shell loads into Design. BUILT, GREEN and SEALED (`sync-wo012-inc5c.zip`).** Operator ruling:
+"when the app loads it should load directly into design mode, remove the perform mode for now."
+Shipped: `ShellMode`/`mode`/`set_mode`/`ToggleMode`/the mode buttons/the Perform pads/the
+Perform audit rule/the below-breakpoint Design refusal are all GONE; small viewports reflow
+Design (inspector → rail collapse for the canvas floor) and say it once in words; the audit
+matrix is one mode with a SMALL-REFLOW cell (0 violations); gesture smoke 2 now asserts the
+shell loads into Design with no mode door anywhere. **Measured: 804 tests (+1 ignored; the
+Perform audit test left with its subject), 44 smokes, fmt, clippy in every runnable cell (MSVC
+`ui-window` still the declared sandbox OOM), 5 python gates, selftest 9/9 · 17/17 · 420.3×
+realtime, goldens bit-identical.** **Recovery, declared:** a sandbox storage wipe (mid-round,
+toolchain and `/tmp` too) destroyed `modules/out/main/sparqmod.toml` — a directory named `out`
+is on the snapshot exclude list, so no snapshot ever carried it — plus `.git` and the upstream
+clone (GitHub now 404s). The manifest is RECONSTRUCTED field-identical from the generated doc
+(`module_docs --check` passes against the doc the original produced) and the module's contract;
+its sha moves off `725bf07a…`, the file travels IN this bundle so every tree agrees afterwards,
+and SYNC.md names the move. **Next session, in order:** (1) session-start discipline
+(`sync_check --quiet` FIRST, expect the 5c stamp and 156 covered files); (2) the bare-required
+badge (item 8); (3) device digests: test004 attempt 4 (still the WO-006 acceptance — do NOT
+fire the ADR-008 exit early), gates at 804 / 44 smokes / the 5c stamp, and a look at the
+small-viewport reflow on the stage screen; (4) parked: Perform's return (LATER), D1′ live
+cv-history overlay, second curve module, LOG-tab scroll.
+
+**Tenth session, second round (2026-09-30, sandbox) — increment 5b: the operator's feedback
+round BUILT, GREEN and SEALED (`sync-wo012-inc5b.zip`).** The operator ran increment 5 and ruled
+on four things, all now shipped code: (1) **meter bars are `out/main`'s alone** — the increment's
+audio-output fallback and the analyser cv bars are withdrawn (the ring still carries every port;
+the painter spends it on the one meter); (2) **playback is never refused for a bare required
+input** — the WO-008 inc-7 build refusal became a FLAG: the executor collects
+`missing_required`, the module renders silenced, the canvas paints the light-red highlight
+(error tint 0.12 + error border + `NO IN` word, error ring at Dot), PLAY says one sentence
+naming every flagged node; (3) **the inspector's no-curve description box is gone** — the plot
+well is an `Option` reserved only for curve modules, no box and no words otherwise; (4) **the
+log moved to the dock's LOG tab** — the canvas band is deleted, the dock's sixth tab is live and
+shows the log tail, tabs are real audited controls now. **Measured: 805 tests (+1 flag model,
+−1 withdrawn cv-bar test), 44 smokes (+2: flag/PLAY, LOG tab; 38 and 41 rewritten), every golden
+bit-identical (the executor change is build-side only), selftest 9/9 · 17/17, fmt, every runnable
+clippy cell, 5 python gates, `ui --audit` PASS (matrix 0 violations, DPI-invariant).** Sheet
+re-rendered with a bare `util/delay` in the review state so the flag shows; mockup-review
+finding 23 records its encoding. Sealed at the new stamp (below); log_check BASELINE moved only
+where numbers moved (stamp; tests stay 805). **Next session, in order:** (1) session-start
+discipline (`sync_check --quiet` FIRST, expect the 5b stamp); (2) the bare-required-node badge
+(item 8) — note the flag now covers its substance visually, the badge item is the dock/card
+half; (3) device digests: test004 attempt 4 (still the WO-006 acceptance — do NOT fire the
+ADR-008 exit early), gates at 805 / 44 smokes / the 5b stamp; (4) parked halves: D1′ live
+cv-history overlay, a second curve module, LOG-tab scroll (the tail view ships instead).
+
+**Tenth session (2026-09-30, sandbox, fresh clone) — WO-012 increment 5 BUILT, GREEN and
+SEALED.** Session-start discipline clean on the fresh clone (`sync_check --quiet` OK at
+`wo012-inc4`, 777/0/1 re-verified before any change; `/opt` toolchain reinstalled, MSVC target
+added). **Convergence slice B is built to [`WO012-INC5-PLAN.md`](WO012-INC5-PLAN.md)** (D1 the
+well registry in `sparq-ui::canvas::inset` — meters live on EVERY audio-output node, cv bars on
+the analysers, envelope/lfo/curve param wells; D2 `SvfFilter::magnitude_at` in sparq-audio, the
+exact z-domain response pinned to the sine sweep by the drift gate, dispatch in the bridge; D3
+the inspector RESPONSE well with its read-only probe marker — tap-to-place, drag-to-read,
+≥ 44 px audited, display state, never a second cutoff door, NO RESPONSE CURVE in words where
+undeclared; D4 the model split: `canvas::response` + `canvas::inset`, toolkit-independent,
+unit-tested). **Measured: 805 tests (+1 ignored), 42 smokes, every golden bit-identical
+(`ba577186c988db21`, `dd975a24f03b19c1`, stress `7bb06379bd6845e5`, determinism
+`0f5c3e86c7f117a9`), selftest 9/9 · 17/17, probe_alloc 0, 464.4× realtime, fmt + every runnable
+clippy cell (MSVC `ui-window` still the declared sandbox OOM), 5 python gates, `ui --audit`
+PASS with the marker capture measured in the matrix, DPI-invariant.** Visual review: new
+`sparq ui --svg-out PATH --review` door dumps the slice-B showcase state; sheet at
+`design/mockups/convergence-wo012-inc5.png`; deviations declared as mockup-review findings
+18–22. Two lessons recorded in the plan postscript: a bare `flt/svf` is an illegal LIVE patch
+(required input — the meter smoke runs before the showcase spawn, the review state wires
+gain → svf), and the svg dumper closed open paths with a stray `Z` (fixed). **Sealed
+`sync-wo012-inc5.zip` (24 entries)**; stamp moved once, at completion: **`src 96f/2310417B`**;
+log_check BASELINE moved (805 / 464.4). **Next session, in order:** (1) session-start
+discipline (`sync_check --quiet` FIRST, expect 155 files at `wo012-inc5`); (2) **the
+bare-required-node badge (item 8)**; (3) when the digests land: move the device boxes — test004
+attempt 4 is still the WO-006 acceptance (ADR-008 exit: do NOT fire it early), and the gates
+digest at 805 / `src 96f/2310417B` / 42 smokes; (4) the parked halves: D1′'s live cv-history
+overlay and the second curve module (LATER).
+
+**Superseded — ninth session (2026-09-30, sandbox):** session-start discipline run clean on the
+previous tree; step (2)'s plan of record WRITTEN (`WO012-INC5-PLAN.md`, docs-only at the time).
+The build it planned is the tenth session's entry above.
 
 **Next session, in order:** (1) session-start discipline — `python3 tools/sync_check.py
 --quiet` FIRST; if `modules/out/main/sparqmod.toml` reports MISSING restore it from

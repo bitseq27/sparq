@@ -1,23 +1,19 @@
 # sparq module manifest — out/main (WO-014 increment 5).
 # Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
 #
-# The master output — "output with metering hook", the WO's contract stress "device channel
-# mapping". This is the canonical terminus: the node the listener hears. It ships together with
-# the WO-013-side master-handover rule change (canvas `resolve_master` prefers an `out/main`
-# node over the default highest-id-terminus rule) so the MASTER badge never lies: when an
-# out/main is in the patch, IT is the master, explicitly, rather than by a guess about which
-# gain node happens to be last.
+# RECONSTRUCTED 2026-09-30 (sandbox): a workspace-storage wipe destroyed the original bytes
+# (sha 725bf07a…) together with the git history and the upstream clone; no snapshot, zip or
+# upstream carried this file (a directory named `out` is on the snapshot exclude list). This
+# copy restores every FIELD from the generated doc `docs/modules/out-main.md` (which the
+# `module_docs --check` gate proves against) and from the module's own contract in
+# `sparq-audio::modules` (unity-bit-exact wire, trim, hard mute, the metering hook). Only the
+# prose comments are new; the sha therefore moves, and the move is declared in SYNC.md and
+# CHECKLIST.md rather than hidden — the stamp's cross-machine contract stays honest.
 #
-# Why it has an OUTPUT port (an "output" that outputs): the executor renders the MASTER node's
-# FIRST audio output to the device buffer. A pure sink with no audio output would render silence
-# as master. So out/main is a unity-by-default pass-through with a trim: its input is the mix,
-# its output is what the device plays, and — because the executor meters every node — its meter
-# (peak/rms) IS the master meter, which is the "metering hook". Device channel mapping is the
-# declared channel_set: `variable` on the input (it accepts whatever the mix bus is) resolving to
-# the device shape at prepare, stereo on the output (the v0 device target; a multichannel out
-# grows the channel_set when the HAL's channel map does — declared, not faked).
-#
-# v0 state is empty and says so: the trim is the parameter snapshot the project already saves.
+# The master output: a unity-BIT-EXACT pass-through with a trim and a hard mute that writes
+# EXACT zeros. Because the executor meters every node, this node's peak/rms ARE the master
+# meters — the "metering hook". The input is `variable` (it accepts the mix bus at whatever
+# width arrives); the output is stereo, the v0 device target.
 
 [identity]
 id = "sparq/out/main"
@@ -35,8 +31,6 @@ kind = "io"
 tier = "t1"
 stability = "stable"
 
-# `variable` input: accepts the mix bus at whatever width it arrives (mono/stereo/…), resolved
-# at prepare. The output is the device shape (stereo in v0).
 [[ports]]
 id = "in"
 name = "Main In"
@@ -61,8 +55,6 @@ min = 0.0
 max = 2.0
 default = 1.0
 
-# 0 = pass, 1 = silence the master (the on-stage "cut it now"). A mute that writes exact zeros,
-# never a near-zero, so a muted master is bit-exactly silent and the meter reads 0.
 [[params]]
 id = "mute"
 name = "Mute"

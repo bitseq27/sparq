@@ -27,9 +27,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 // The mirror's lock is held for a struct copy on the CONTROL path (worker poll, UI frame
 // read) — never on the audio path, which is why the disallowed-type lint is relaxed here with
 // the reason stated, the defect-#66 precedent. The audio thread never sees this Mutex.
+use std::sync::Arc;
 #[allow(clippy::disallowed_types)]
 use std::sync::Mutex;
-use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -100,12 +100,7 @@ enum ToWorker {
     /// The real open with the caller's engine in the callback, then start. The engine rides in
     /// a `Box` so the command enum stays small (the channel allocates once, on the control
     /// path, at session start — never per block).
-    Start {
-        engine: Box<AudioEngine>,
-        cfg: StreamConfig,
-        paced: bool,
-        capture_frames: usize,
-    },
+    Start { engine: Box<AudioEngine>, cfg: StreamConfig, paced: bool, capture_frames: usize },
     /// Manual-mode stepping (null backend). Device backends answer with their own refusal.
     Pump(u64),
     /// Ask the null backend to simulate a fault.
@@ -795,6 +790,14 @@ impl LiveSession {
     #[must_use]
     pub fn meters(&self) -> &LiveMeters {
         &self.meters
+    }
+
+    /// The NEGOTIATED sample rate this session runs at — the display side's rate source (the
+    /// response curves' axes and the scope traces' capacities both read the negotiated truth,
+    /// never an assumed 48 kHz).
+    #[must_use]
+    pub fn sample_rate(&self) -> u32 {
+        self.exec_cfg.sample_rate
     }
 
     /// The per-frame drain (D11 of increment 2, extended in increment 4): bounded, batched,

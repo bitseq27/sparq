@@ -9,6 +9,7 @@ tools/token_gen.py emits). Regenerate after any token change; then run tools/tok
 from __future__ import annotations
 
 import json
+import tomllib
 import math
 import pathlib
 import random
@@ -53,10 +54,24 @@ random.seed(11)
 LUT = _MAPS["phosphor"]
 GREY = _MAPS["greyscale"]
 
-A, C, E, D, S = "#FFB347", "#4FD8E8", "#FF5FA2", "#8BE36A", "#A98CFF"
-T1, T2, T3, T4 = "#E8F1F8", "#9FB0C0", "#6B7C8C", "#454F59"
-GND, CAN, PAN, ALT, INS = "#07090C", "#05070A", "#0C1015", "#10151C", "#04060A"
-WARN = "#FFCC4D"
+# Colours come from the TOKEN FILE, never from this script's memory (defect class: a generator
+# with literals re-freezes every palette move — the warm shift of 2026-09-30 caught these).
+_TOK = tomllib.loads(read_text(ROOT / "design/tokens/colors.toml"))
+A = _TOK["signal"]["audio"]["colour"]
+C = _TOK["signal"]["cv"]["colour"]
+E = _TOK["signal"]["event"]["colour"]
+D = _TOK["signal"]["data"]["colour"]
+S = _TOK["signal"]["spatial"]["colour"]
+T1 = _TOK["text"]["primary"]
+T2 = _TOK["text"]["secondary"]
+T3 = _TOK["text"]["tertiary"]
+T4 = _TOK["text"]["disabled"]
+GND = _TOK["ground"]["base"]
+CAN = _TOK["ground"]["canvas"]
+PAN = _TOK["ground"]["panel"]
+ALT = _TOK["ground"]["panel_alt"]
+INS = _TOK["ground"]["inset"]
+WARN = _TOK["state"]["warning"]["colour"]
 
 W, MARGIN, GAP, HEADER = 2560, 24, 16, 104
 COLS, ROWS = 4, 3
