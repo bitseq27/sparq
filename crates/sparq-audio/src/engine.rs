@@ -23,14 +23,20 @@
 //!   of "while playing" stays device-track (the HAL's loaded soak), exactly as the WO schedules
 //!   it.
 //!
-//! What the swap does NOT carry, in both shapes: module state. A swapped-in module starts from
-//! its `prepare`/`activate` state — carrying state across a patch change is the state protocol's
-//! job (schema'd, journaled — WO-011), not the swap's. What it DOES carry: the transport clock
-//! and the block count ([`Executor::inherit_runtime`]), because the timeline belongs to the
-//! stream, not to the patch. The shapes differ in WHEN the inheritance runs: [`Engine::stage`]
-//! inherits at staging time (control side, single thread); the cross-thread engine inherits at
-//! the swap point itself (audio side, inside the boundary — the successor adopts the clock as
-//! the predecessor left it, which is strictly more current).
+//! What the swap carries, and the difference the operator's round-4 D1 ruling made. The
+//! SINGLE-OWNER [`Engine`] still carries only the transport clock and the block count
+//! ([`Executor::inherit_runtime`]): a swapped-in module starts from its `prepare`/`activate`
+//! state, because that engine is the determinism harness's, and a stress hash that depended on
+//! instance adoption would be pinning the wrong thing. The CROSS-THREAD engine — the live
+//! session's path — additionally ADOPTS: at the boundary hook, the successor takes the
+//! predecessor's live module instances for every node whose canvas identity and version hash
+//! match ([`Executor::adopt_runtime`]), so adding a module to a playing patch no longer resets
+//! the modules the user was already hearing. Parameters deliberately do NOT ride the adoption
+//! (the staged build's canvas snapshot rules), and the timeline still inherits as before,
+//! because the clock belongs to the stream, not to the patch. The shapes differ in WHEN this
+//! runs: [`Engine::stage`] inherits at staging time (control side, single thread); the
+//! cross-thread engine adopts and inherits at the swap point itself (audio side, inside the
+//! boundary — the successor adopts from the predecessor as it actually stands).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -522,8 +528,13 @@ impl AudioEngine {
     /// reported as one).
     pub fn render_block(&mut self, out: &mut [f32]) -> Result<(), ExecError> {
         // 1. The boundary: take the staged patch if one is waiting. The hook is the
-        //    inheritance point — RT-safe by construction (two field copies).
+        //    inheritance point — RT-safe by construction: the adoption swaps instances and
+        //    copies into build-allocated storage (nothing allocates), the inheritance is two
+        //    field copies. ADOPT FIRST, THEN INHERIT (operator round 4, D1): the successor
+        //    takes over the predecessor's live modules — the patch change stops resetting the
+        //    performance — and then the stream's clock, which belongs to the swap either way.
         self.audio.boundary(|incoming, outgoing| {
+            incoming.executor.adopt_runtime(&mut outgoing.executor);
             incoming.executor.inherit_runtime(&outgoing.executor);
         });
         // 2. Commands: bounded batch, applied to the patch that renders this block.

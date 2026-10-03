@@ -191,6 +191,16 @@ pub struct ShellUi {
     /// "computed once per param change, not per pixel" (D2) literal: an unchanged node reuses
     /// its frame instead of re-evaluating 128 magnitudes.
     curve_keys: std::collections::BTreeMap<NodeId, (u32, Vec<f32>)>,
+    /// The rolling level histories for the `Well::Graph` displays (operator round 4, D13):
+    /// pushed one word per LIVE frame from the drained level publication, cleared at session
+    /// start (a restart starts empty, declared). Display state like the camera — never the
+    /// engine's, never the journal's, not undoable.
+    pub level_hists: sparq_ui::canvas::levels::LevelHistories,
+    /// The last pointer position in contact (mouse hover is a synthesised zero-pressure
+    /// contact — pointer.rs's rule): the cable node's hover ghost reads where the pointer
+    /// is (D15). `None` until the first sample; a resting mouse keeps its last place, so the
+    /// ghost stays while the pointer rests on the wire.
+    hover: Option<Vec2>,
 }
 
 /// One frame's keyboard input, normalised: the five facts the modal sheets consume. A value,
@@ -283,6 +293,8 @@ impl ShellUi {
             library_list_rect: None,
             curves: Curves::new(),
             curve_keys: std::collections::BTreeMap::new(),
+            level_hists: Default::default(),
+            hover: None,
         }
     }
 
@@ -303,6 +315,12 @@ impl ShellUi {
         // 1. gestures: pointers in, intents out (the toolkit never interprets input itself)
         let mut intents = Vec::new();
         for ev in input.pointers {
+            // The hover feed (D15's ghost dot): the last contact position, whatever its phase
+            // — a mouse hover IS a pointer sample (pointer.rs's rule), and a resting pointer
+            // keeps its last place.
+            if ev.phase.is_contact() {
+                self.hover = Some(ev.pos);
+            }
             intents.extend(self.recognizer.push(*ev));
         }
         intents.extend(self.recognizer.advance(input.now_ms));
@@ -518,6 +536,21 @@ impl ShellUi {
         // the increment-4/5 one — this swaps the SOURCE, not the drawing.
         let levels = s.drain().clone();
         self.canvas.levels = levels;
+        // The rolling graph histories (operator round 4, D13): one word per LIVE frame into
+        // every Graph well's display history — the trace the rms well draws. Display-side
+        // only: the engine and the journal never see it, a pause holds it (no pushes while
+        // the level set is empty), and a session start clears it (the declared restart rule).
+        if !self.canvas.levels.is_empty() {
+            use sparq_ui::canvas::inset::{nth_cv_out, well_for, Well};
+            for n in self.graph.nodes() {
+                if well_for(&n.spec) != Some(Well::Graph) {
+                    continue;
+                }
+                let Some(port) = nth_cv_out(&n.spec, 0) else { continue };
+                let v = self.canvas.levels.port(n.id, port).unwrap_or(0.0);
+                self.level_hists.entry(n.id).or_default().push(v);
+            }
+        }
     }
 
     /// Start the live session (PLAY, and the audit's hermetic path with explicit options).
@@ -549,7 +582,12 @@ impl ShellUi {
             opts,
             &mut self.log,
         ) {
-            Ok(session) => self.live = Some(session),
+            Ok(session) => {
+                self.live = Some(session);
+                // D13's declared restart rule: a new session starts the rolling graphs empty
+                // — an old session's trace on a new stream would be a lie in motion.
+                self.level_hists.clear();
+            },
             Err(e) => self.push_log(format!("PLAY REFUSED: {e}")),
         }
         // The unfinished-patch sentence (operator ruling 2026-09-30): playback is NOT refused
@@ -726,7 +764,33 @@ impl ShellUi {
             if !inset::declares_curve(&n.spec.module_id) {
                 continue;
             }
-            let params = n.effective_params();
+            let mut params = n.effective_params();
+            // The plot animates with modulation (operator round 4, D3): a control wire landed
+            // on a float parameter moves the curve from the EFFECTIVE knob — the executor's
+            // own per-block rule mirrored exactly (`clamp(knob + cv × half-range)`, the cv
+            // word read from the wire's published source level). With the level set empty
+            // (at rest) the params stay the knob snapshot, so the resting curve is today's
+            // curve — shots and goldens unmoved. The cache key carries the EFFECTIVE params,
+            // so a modulated curve recomputes per frame and a still one doesn't.
+            if !self.canvas.levels.is_empty() {
+                for w in self.graph.wires() {
+                    if w.to.node != n.id {
+                        continue;
+                    }
+                    let Some(pi) = w.param else { continue };
+                    let Some(d) = n.spec.params.get(pi) else { continue };
+                    let lv = sparq_ui::canvas::levels::wire_level(
+                        &self.graph,
+                        &self.canvas.levels,
+                        w.id,
+                    );
+                    let depth = ((d.max - d.min) / 2.0) as f32;
+                    let knob = params.get(pi).copied().unwrap_or(d.default as f32);
+                    if let Some(slot) = params.get_mut(pi) {
+                        *slot = (knob + lv * depth).clamp(d.min as f32, d.max as f32);
+                    }
+                }
+            }
             let key = (rate, params.clone());
             if self.curve_keys.get(&n.id) == Some(&key) {
                 if let Some(frame) = self.curves.get(&n.id) {
@@ -1530,7 +1594,9 @@ impl ShellUi {
                 traces,
                 meters,
                 &self.curves,
+                &self.level_hists,
                 main_info.as_ref(),
+                self.hover,
                 &mut self.audit_elements,
             );
             // The wire-encoding legend (increment 3, the mockup's floating box): top-right of

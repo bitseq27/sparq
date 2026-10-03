@@ -11,6 +11,7 @@
 
 use sparq_audio::executor::{ExecConfig, ExecError, Executor, LatencyMode, NodeBuild, Watchdog};
 use sparq_audio::hash::fnv1a64_f32;
+use sparq_audio::modules::register_builtins;
 use sparq_kernel::alloc::{allocation_count, start_counting, stop_counting, CountingAllocator};
 use sparq_kernel::graph::{EdgeKind, Graph, NodeId, PortRef};
 use sparq_module_api::manifest::{
@@ -18,6 +19,7 @@ use sparq_module_api::manifest::{
 };
 use sparq_module_api::module::{AudioCtx, BlockStatus, Module, ModuleError, Resources};
 use sparq_module_api::params::ParamSet;
+use sparq_module_api::registry::Registry;
 
 #[global_allocator]
 static ALLOC: CountingAllocator<std::alloc::System> = CountingAllocator::new(std::alloc::System);
@@ -1224,4 +1226,642 @@ fn the_musical_position_door_carries_what_the_transport_says_and_nothing_more() 
     ex.set_musical_position(None);
     ex.render_block(probe, &mut out).unwrap();
     assert_eq!(out[0], 960.0, "None freezes the last position; it does not rewind to zero");
+}
+
+// =============================================================== operator round 4 (2026-10-02)
+// D1 adoption + D15 cable-node trims, measured. The adoption gates all hang on one observable:
+// a PHASOR whose ramp must survive a re-stage bit-exactly when (and ONLY when) the identity,
+// the version hash and the resolved shape all match — continuity is the transparency the
+// operator asked for ("add a module" must not reset the performance), and every gate below
+// is one way of breaking the match and hearing the reset.
+
+/// A stateful ramp: `out = phase × param(1)`, phase climbing by `param(0)` per sample and
+/// wrapping at 1 — the adoption gates' state carrier. Its phase is exactly what must cross a
+/// re-stage; its params are exactly what must NOT (the staged build's snapshot rules).
+struct Phasor {
+    phase: f64,
+}
+
+impl Module for Phasor {
+    fn id(&self) -> &str {
+        "sparq/test/phasor"
+    }
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        if state.is_empty() {
+            return Ok(());
+        }
+        let bytes: [u8; 8] = state
+            .try_into()
+            .map_err(|_| ModuleError::State("phasor state is 8 bytes (phase) or empty"))?;
+        self.phase = f64::from_le_bytes(bytes);
+        Ok(())
+    }
+    fn prepare(&mut self, _: &Resources) -> Result<(), ModuleError> {
+        Ok(())
+    }
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        let inc = f64::from(ctx.param(0));
+        let amp = ctx.param(1);
+        for s in ctx.output().iter_mut() {
+            self.phase += inc;
+            if self.phase >= 1.0 {
+                self.phase -= 1.0;
+            }
+            *s = (self.phase as f32) * amp;
+        }
+        BlockStatus::Ok
+    }
+    fn message(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("phasor takes no messages"))
+    }
+}
+
+/// A constant block-rate cv publisher: `cv-out = param(0)` — the trim gates' steady word.
+struct DcCv;
+
+impl Module for DcCv {
+    fn id(&self) -> &str {
+        "sparq/test/dccv"
+    }
+    fn configure(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Ok(())
+    }
+    fn prepare(&mut self, _: &Resources) -> Result<(), ModuleError> {
+        Ok(())
+    }
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        let v = ctx.param(0); // read first: the taken cv-out holds the ctx borrow
+        if let Some(mut cv) = ctx.cv_out(0) {
+            cv.set(v);
+        }
+        BlockStatus::Ok
+    }
+    fn message(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("dccv takes no messages"))
+    }
+}
+
+/// `out = in × (param(0) + cv-in word)` — the trim gates' audible arithmetic: whatever the
+/// wire delivers lands in the product, sample for sample.
+struct VcaLike;
+
+impl Module for VcaLike {
+    fn id(&self) -> &str {
+        "sparq/test/vcalike"
+    }
+    fn configure(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Ok(())
+    }
+    fn prepare(&mut self, _: &Resources) -> Result<(), ModuleError> {
+        Ok(())
+    }
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        if !ctx.has_input() {
+            for s in ctx.output().iter_mut() {
+                *s = 0.0;
+            }
+            return BlockStatus::Silenced;
+        }
+        let cv = ctx.cv_in(0).map_or(0.0, |v| {
+            v.audio().and_then(|sl| sl.last().copied()).or_else(|| v.block()).unwrap_or(0.0)
+        });
+        let g = ctx.param(0) + cv;
+        let input = ctx.input();
+        let output = ctx.output();
+        for (o, i) in output.iter_mut().zip(input.iter()) {
+            *o = *i * g;
+        }
+        BlockStatus::Ok
+    }
+    fn message(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("vcalike takes no messages"))
+    }
+}
+
+fn cv_port(id: &str, dir: &str) -> PortSpec {
+    PortSpec {
+        id: Some(id.into()),
+        name: Some(id.to_uppercase()),
+        direction: Some(dir.into()),
+        port_type: Some("cv".into()),
+        rate: Some("block".into()),
+        range: Some("unipolar".into()),
+        required: Some(false),
+        ..PortSpec::default()
+    }
+}
+
+fn phasor_manifest(version: &str) -> sparq_module_api::ValidatedManifest {
+    let mut m = base(
+        "phasor",
+        vec![audio_port("out", "out", "mono")],
+        vec![fparam("inc", 0.0), fparam("amp", 1.0)],
+    );
+    m.identity.version = Some(version.into());
+    validated(m)
+}
+
+/// The first-party registry (the shape gate needs a real stateful built-in: the rms's slew
+/// memory is the observable the resolved-shape refusal is measured against).
+fn registry() -> Registry {
+    let mut r = Registry::new();
+    register_builtins(&mut r).unwrap();
+    r
+}
+
+fn dccv_manifest() -> sparq_module_api::ValidatedManifest {
+    validated(base("dccv", vec![cv_port("cv", "out")], vec![fparam("level", 0.0)]))
+}
+
+fn vcalike_manifest() -> sparq_module_api::ValidatedManifest {
+    validated(base(
+        "vcalike",
+        vec![audio_port("in", "in", "mono"), audio_port("out", "out", "mono"), cv_port("cv", "in")],
+        vec![fparam("gain", 0.0)],
+    ))
+}
+
+/// One phasor as the whole patch (master = the phasor): the adoption gates' minimal world.
+fn phasor_patch(inc: f32, amp: f32, version: &str) -> (Executor, NodeId) {
+    let mut graph = Graph::new();
+    let p = graph.add_node(0);
+    let builds = vec![(
+        p,
+        NodeBuild {
+            module: Box::new(Phasor { phase: 0.0 }),
+            manifest: phasor_manifest(version),
+            params: params(&[inc, amp]),
+        },
+    )];
+    (Executor::build(graph, builds, cfg(1)).unwrap(), p)
+}
+
+/// Render `blocks` blocks, returning the samples of block `skip` onward (master out).
+fn render_capture(ex: &mut Executor, master: NodeId, blocks: usize, skip: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; FRAMES];
+    let mut v = Vec::new();
+    for b in 0..blocks {
+        ex.render_block(master, &mut out).unwrap();
+        if b >= skip {
+            v.extend_from_slice(&out);
+        }
+    }
+    v
+}
+
+#[test]
+fn an_adopted_rebuild_continues_the_performance_bit_exactly() {
+    // The D1 promise, at the strongest resolution there is: an uninterrupted 60-block run and
+    // a run that RE-STAGES at block 30 (fresh build, stamped keys, adopt, inherit) produce the
+    // SAME SAMPLES — the swap is inaudible because the live instance crossed it.
+    let (mut a, ma) = phasor_patch(0.0013, 1.0, "0.1.0");
+    let reference = render_capture(&mut a, ma, 60, 30);
+
+    let (mut e1, m1) = phasor_patch(0.0013, 1.0, "0.1.0");
+    render_capture(&mut e1, m1, 30, 30); // 30 blocks of live performance…
+    let (mut e2, m2) = phasor_patch(0.0013, 1.0, "0.1.0");
+    e1.set_canvas_keys(vec![42]);
+    e2.set_canvas_keys(vec![42]);
+    assert!(!e2.adopted(), "a fresh build has not adopted");
+    e2.adopt_runtime(&mut e1);
+    e2.inherit_runtime(&e1);
+    assert!(e2.adopted(), "…and says so once it has");
+    assert_eq!(e2.blocks_rendered(), 30, "the stream's clock crossed with the inheritance");
+    let swapped = render_capture(&mut e2, m2, 30, 0);
+    assert_eq!(swapped, reference, "the re-stage is bit-exactly the uninterrupted performance");
+}
+
+#[test]
+fn an_unstaged_identity_adopts_nothing() {
+    // No canvas keys on EITHER side: no identity, no adoption — the phasor restarts its ramp
+    // and the discontinuity is audible. Identity is a prerequisite, never a guess.
+    let (mut a, ma) = phasor_patch(0.0013, 1.0, "0.1.0");
+    let reference = render_capture(&mut a, ma, 60, 30);
+    let (mut e1, m1) = phasor_patch(0.0013, 1.0, "0.1.0");
+    render_capture(&mut e1, m1, 30, 30);
+    let (mut e2, m2) = phasor_patch(0.0013, 1.0, "0.1.0");
+    e2.adopt_runtime(&mut e1); // no keys stamped on either build
+    let swapped = render_capture(&mut e2, m2, 5, 0);
+    assert_ne!(swapped[..], reference[..5 * FRAMES], "an unstamped build restarts");
+    assert!(
+        (swapped[0] - 0.0013f64 as f32).abs() < 1e-9,
+        "…from phase zero: first sample is the first increment, got {}",
+        swapped[0]
+    );
+}
+
+#[test]
+fn a_different_canvas_key_starts_fresh() {
+    // Same module, same manifest, DIFFERENT canvas identity: the user replaced the module (or
+    // the bridge re-keyed it) — its state is not the successor's to inherit.
+    let (mut e1, m1) = phasor_patch(0.0013, 1.0, "0.1.0");
+    render_capture(&mut e1, m1, 30, 30);
+    let (mut e2, m2) = phasor_patch(0.0013, 1.0, "0.1.0");
+    e1.set_canvas_keys(vec![42]);
+    e2.set_canvas_keys(vec![43]);
+    e2.adopt_runtime(&mut e1);
+    let swapped = render_capture(&mut e2, m2, 2, 0);
+    assert!(
+        (swapped[0] - 0.0013f64 as f32).abs() < 1e-9,
+        "a key mismatch restarts the ramp: {}",
+        swapped[0]
+    );
+}
+
+#[test]
+fn a_manifest_version_change_starts_fresh() {
+    // Same canvas identity, DIFFERENT version hash: the module's contract moved, and state
+    // adopted across a contract change is a lie — the gate keeps the upgrade honest.
+    let (mut e1, m1) = phasor_patch(0.0013, 1.0, "0.1.0");
+    render_capture(&mut e1, m1, 30, 30);
+    let (mut e2, m2) = phasor_patch(0.0013, 1.0, "0.2.0"); // the "upgrade"
+    e1.set_canvas_keys(vec![42]);
+    e2.set_canvas_keys(vec![42]);
+    e2.adopt_runtime(&mut e1);
+    let swapped = render_capture(&mut e2, m2, 2, 0);
+    assert!(
+        (swapped[0] - 0.0013f64 as f32).abs() < 1e-9,
+        "a version change restarts the ramp: {}",
+        swapped[0]
+    );
+    // …and the hash that decided it is public and stable: same manifest, same word.
+    let h1 = sparq_audio::executor::version_hash(&phasor_manifest("0.1.0"));
+    let h2 = sparq_audio::executor::version_hash(&phasor_manifest("0.1.0"));
+    let h3 = sparq_audio::executor::version_hash(&phasor_manifest("0.2.0"));
+    assert_eq!(h1, h2, "the version hash is deterministic");
+    assert_ne!(h1, h3, "…and the version is part of the shape");
+}
+
+#[test]
+fn a_resolved_shape_change_starts_fresh_but_the_same_shape_adopts() {
+    // The shape gate: an adopted instance's `prepare`d resources must stay TRUE. The rms's
+    // resolved input channels are wiring facts the manifest cannot know — unwiring its input
+    // between builds changes them, so the follower's slew memory must NOT cross (a memory of
+    // a signal path that no longer exists is a lie), while the same-shape rebuild adopts it.
+    let reg = registry();
+    let build_rms_world = |wire_rms: bool, sine_amp: f32| -> (Executor, NodeId, NodeId) {
+        let mut g = Graph::new();
+        let sine = g.add_node(0);
+        let rms = g.add_node(0);
+        if wire_rms {
+            g.connect(PortRef::new(sine, 0), PortRef::new(rms, 0), EdgeKind::Plain).unwrap();
+        }
+        let builds = vec![
+            (
+                sine,
+                NodeBuild {
+                    module: reg.get("sparq/syn/sine").unwrap().create(),
+                    manifest: reg.get("sparq/syn/sine").unwrap().manifest().clone(),
+                    params: params(&[440.0, sine_amp]),
+                },
+            ),
+            (
+                rms,
+                NodeBuild {
+                    module: reg.get("sparq/ana/rms").unwrap().create(),
+                    manifest: reg.get("sparq/ana/rms").unwrap().manifest().clone(),
+                    params: params(&[0.0, 0.9]), // floor 0, slew 0.9: a deep, visible memory
+                },
+            ),
+        ];
+        (Executor::build(g, builds, cfg(1)).unwrap(), sine, rms)
+    };
+    // Live: 20 loud blocks charge the follower's memory.
+    let (mut e1, m1, r1) = build_rms_world(true, 0.5);
+    render_capture(&mut e1, m1, 20, 20);
+    let charged = e1.node_cv_block(r1, 1).unwrap();
+    assert!(charged > 0.3, "the follower is charged: {charged}");
+    // The reference: the SAME world, uninterrupted, with the knob turned to 0 at the
+    // boundary. (The sine GLIDES its amp — defect #85 — so a staged 0 and a live
+    // `set_params` 0 are the same edit from the same state; the adopted rebuild must match
+    // the reference publication BIT-EXACTLY, which is a far stronger word than "decays".)
+    let (mut a2, sa2, ra2) = build_rms_world(true, 0.5);
+    render_capture(&mut a2, sa2, 20, 20);
+    a2.set_params(sa2, params(&[440.0, 0.0])).unwrap();
+    render_capture(&mut a2, sa2, 3, 3);
+    let ref_pub = a2.node_cv_block(ra2, 1).unwrap();
+    // Same shape, silence staged: the memory crosses — rms slew AND the sine's glide both
+    // continue from what they held.
+    let (mut e2, m2, r2) = build_rms_world(true, 0.0);
+    e1.set_canvas_keys(vec![1, 2]);
+    e2.set_canvas_keys(vec![1, 2]);
+    e2.adopt_runtime(&mut e1);
+    render_capture(&mut e2, m2, 3, 3);
+    let decayed = e2.node_cv_block(r2, 1).unwrap();
+    assert_eq!(decayed, ref_pub, "the adopted rebuild IS the uninterrupted performance");
+    assert!(decayed > 0.2, "…and the memory is audibly present: {decayed}");
+    // Unwired input (in_chs 2 → 0), same keys: the shape gate refuses — the fresh follower
+    // publishes the raw zero, exactly.
+    let (mut e1b, m1b, _) = build_rms_world(true, 0.5);
+    render_capture(&mut e1b, m1b, 20, 20);
+    let (mut e3, m3, r3) = build_rms_world(false, 0.5);
+    e1b.set_canvas_keys(vec![1, 2]);
+    e3.set_canvas_keys(vec![1, 2]);
+    e3.adopt_runtime(&mut e1b);
+    render_capture(&mut e3, m3, 1, 1);
+    assert_eq!(e3.node_cv_block(r3, 1).unwrap(), 0.0, "a shape change starts the memory fresh");
+}
+
+#[test]
+fn adoption_carries_state_but_params_belong_to_the_staged_build() {
+    // The trap-12 pin, by name: the instance crosses with its STATE (the phase continues), and
+    // the staged build's PARAMS rule it (the new amp applies from the first adopted sample —
+    // a live command-ring edit the canvas never saw must not smuggle itself across). Proof:
+    // an adopted run at the staged amp is bit-exactly the uninterrupted run at that amp — the
+    // phase trajectory never depended on the amp, so equality means BOTH halves held.
+    let (mut a, ma) = phasor_patch(0.0013, 0.5, "0.1.0");
+    let reference = render_capture(&mut a, ma, 60, 30); // amp 0.5 from the start
+
+    let (mut e1, m1) = phasor_patch(0.0013, 1.0, "0.1.0"); // the live patch played LOUD…
+    render_capture(&mut e1, m1, 30, 30);
+    let (mut e2, m2) = phasor_patch(0.0013, 0.5, "0.1.0"); // …the canvas snapshot says 0.5
+    e1.set_canvas_keys(vec![42]);
+    e2.set_canvas_keys(vec![42]);
+    e2.adopt_runtime(&mut e1);
+    let swapped = render_capture(&mut e2, m2, 30, 0);
+    assert_eq!(swapped, reference, "state crossed; the staged params ruled");
+    assert!(
+        swapped.iter().all(|&s| s.abs() <= 0.5 + 1e-6),
+        "the loud amp did NOT ride along — nothing exceeds the staged 0.5"
+    );
+}
+
+#[test]
+fn the_executor_owned_runtime_crosses_the_boundary_too() {
+    // The state that lives in the PLANS, not in the modules: unit-delay held frames and the
+    // control wires' latched modulation scalars. Both must cross, or a re-stage glitches.
+    //
+    // (a) A feedback loop: phasor → gain(0.5) → master, with the master's output
+    //     BLOCK-DELAYED back into the gain's input (the kernel legalises the cycle on the
+    //     delay edge). The rebuild stages silence (phasor amp 0): an ADOPTED loop keeps
+    //     ringing down from the carried delay history — bit-exactly the uninterrupted decay —
+    //     while a fresh one is exactly silent (empty history, silent input).
+    let fb = |amp: f32| -> (Executor, NodeId, NodeId) {
+        let mut g = Graph::new();
+        let p = g.add_node(0);
+        let gn = g.add_node(0);
+        let mb = g.add_node(0);
+        g.connect(PortRef::new(p, 0), PortRef::new(gn, 0), EdgeKind::Plain).unwrap();
+        g.connect(PortRef::new(gn, 1), PortRef::new(mb, 0), EdgeKind::Plain).unwrap();
+        g.connect(PortRef::new(mb, 1), PortRef::new(gn, 0), EdgeKind::BlockDelay).unwrap();
+        let phasor = NodeBuild {
+            module: Box::new(Phasor { phase: 0.0 }),
+            manifest: phasor_manifest("0.1.0"),
+            params: params(&[0.0013, amp]),
+        };
+        let gain = || NodeBuild {
+            module: Box::new(Gain),
+            manifest: validated(gain_manifest("mono")),
+            params: params(&[0.5]),
+        };
+        let master = NodeBuild {
+            module: Box::new(Gain),
+            manifest: validated(gain_manifest("mono")),
+            params: params(&[1.0]),
+        };
+        let builds = vec![(p, phasor), (gn, gain()), (mb, master)];
+        (Executor::build(g, builds, cfg(1)).unwrap(), mb, p)
+    };
+    // The uninterrupted reference: 30 loud blocks, then the param door silences the phasor
+    // and the loop rings down through the carried history.
+    let (mut a, ma, pa) = fb(1.0);
+    render_capture(&mut a, ma, 30, 30);
+    a.set_params(pa, params(&[0.0013, 0.0])).unwrap();
+    let decay_ref = render_capture(&mut a, ma, 5, 0);
+    assert!(decay_ref.iter().any(|&s| s != 0.0), "the reference tail is audible");
+    // The adopted re-stage: silence staged from the start, history carried at the boundary.
+    let (mut e1, m1, _) = fb(1.0);
+    render_capture(&mut e1, m1, 30, 30);
+    let (mut e2, m2, _) = fb(0.0);
+    e1.set_canvas_keys(vec![7, 8, 9]);
+    e2.set_canvas_keys(vec![7, 8, 9]);
+    e2.adopt_runtime(&mut e1);
+    e2.inherit_runtime(&e1);
+    let decayed = render_capture(&mut e2, m2, 5, 0);
+    assert_eq!(decayed, decay_ref, "the delay history crossed — the ring-down is bit-exact");
+    // The fresh control: same staged silence, no adoption — exactly zero, forever.
+    let (mut e3, m3, _) = fb(0.0);
+    let silent = render_capture(&mut e3, m3, 5, 0);
+    assert!(silent.iter().all(|&s| s == 0.0), "an unadopted loop has no memory to ring");
+    //
+    // (b) The modulation scalar: a control wire's latched cv word (the declared one-block
+    //     lag). Carried, the first adopted block modulates with the predecessor's latch —
+    //     bit-exactly the uninterrupted sixth block. Not carried, the first block would play
+    //     UNMODULATED and glitch.
+    let modded = || -> (Executor, NodeId) {
+        let mut g = Graph::new();
+        let p = g.add_node(0);
+        let gn = g.add_node(0);
+        let cv = g.add_node(0);
+        g.connect(PortRef::new(p, 0), PortRef::new(gn, 0), EdgeKind::Plain).unwrap();
+        let builds = vec![
+            (
+                p,
+                NodeBuild {
+                    module: Box::new(Phasor { phase: 0.0 }),
+                    manifest: phasor_manifest("0.1.0"),
+                    params: params(&[0.0013, 1.0]),
+                },
+            ),
+            (
+                gn,
+                NodeBuild {
+                    module: Box::new(Gain),
+                    manifest: validated(gain_manifest("mono")),
+                    params: params(&[0.2]),
+                },
+            ),
+            (
+                cv,
+                NodeBuild {
+                    module: Box::new(DcCv),
+                    manifest: dccv_manifest(),
+                    params: params(&[0.6]),
+                },
+            ),
+        ];
+        let mut ex = Executor::build(g, builds, cfg(1)).unwrap();
+        ex.add_param_mod(gn, 0, cv, 0, 0.0, 2.0, 1.0, 0.0).unwrap();
+        (ex, gn)
+    };
+    let (mut a2, ma2) = modded();
+    let sixth = render_capture(&mut a2, ma2, 6, 5); // the uninterrupted sixth block
+    let (mut f1, mf1) = modded();
+    render_capture(&mut f1, mf1, 5, 5);
+    let (mut f2, mf2) = modded();
+    f1.set_canvas_keys(vec![1, 2, 3]);
+    f2.set_canvas_keys(vec![1, 2, 3]);
+    f2.adopt_runtime(&mut f1);
+    let first = render_capture(&mut f2, mf2, 1, 0);
+    assert_eq!(first, sixth, "the latched scalar crossed — no unmodulated glitch block");
+    let (mut f3, mf3) = modded();
+    let fresh = render_capture(&mut f3, mf3, 1, 0);
+    assert_ne!(fresh, sixth, "an unadopted mod starts from scalar zero (the glitch this prevents)");
+}
+
+#[test]
+fn adding_a_module_is_transparent() {
+    // The operator's complaint, as a gate: build 2 INSERTS a unity module into the chain. The
+    // new node starts fresh (it has no predecessor), every other node adopts, and the render
+    // is BIT-EXACTLY the uninterrupted performance — adding a module reset nothing.
+    let bare = || -> (Executor, NodeId) {
+        let mut g = Graph::new();
+        let p = g.add_node(0);
+        let gn = g.add_node(0);
+        g.connect(PortRef::new(p, 0), PortRef::new(gn, 0), EdgeKind::Plain).unwrap();
+        let builds = vec![
+            (
+                p,
+                NodeBuild {
+                    module: Box::new(Phasor { phase: 0.0 }),
+                    manifest: phasor_manifest("0.1.0"),
+                    params: params(&[0.0013, 1.0]),
+                },
+            ),
+            (
+                gn,
+                NodeBuild {
+                    module: Box::new(Gain),
+                    manifest: validated(gain_manifest("mono")),
+                    params: params(&[0.5]),
+                },
+            ),
+        ];
+        (Executor::build(g, builds, cfg(1)).unwrap(), gn)
+    };
+    let inserted = || -> (Executor, NodeId) {
+        let mut g = Graph::new();
+        let p = g.add_node(0);
+        let gn = g.add_node(0);
+        let th = g.add_node(0);
+        // phasor → thru → gain: the passthrough is the "added module", unity by construction.
+        g.connect(PortRef::new(p, 0), PortRef::new(th, 0), EdgeKind::Plain).unwrap();
+        g.connect(PortRef::new(th, 1), PortRef::new(gn, 0), EdgeKind::Plain).unwrap();
+        let builds = vec![
+            (
+                p,
+                NodeBuild {
+                    module: Box::new(Phasor { phase: 0.0 }),
+                    manifest: phasor_manifest("0.1.0"),
+                    params: params(&[0.0013, 1.0]),
+                },
+            ),
+            (
+                gn,
+                NodeBuild {
+                    module: Box::new(Gain),
+                    manifest: validated(gain_manifest("mono")),
+                    params: params(&[0.5]),
+                },
+            ),
+            (
+                th,
+                NodeBuild {
+                    module: Box::new(Thru),
+                    manifest: validated(thru_manifest("mono")),
+                    params: params(&[]),
+                },
+            ),
+        ];
+        (Executor::build(g, builds, cfg(1)).unwrap(), gn)
+    };
+    let (mut a, ma) = bare();
+    let reference = render_capture(&mut a, ma, 60, 30);
+    let (mut e1, m1) = bare();
+    render_capture(&mut e1, m1, 30, 30);
+    let (mut e2, m2) = inserted();
+    e1.set_canvas_keys(vec![7, 8]); // phasor, gain — the two original canvas nodes
+    e2.set_canvas_keys(vec![7, 8, 9]); // …and the new thru, keyed by its own canvas id
+    e2.adopt_runtime(&mut e1);
+    e2.inherit_runtime(&e1);
+    let swapped = render_capture(&mut e2, m2, 30, 0);
+    assert_eq!(swapped, reference, "the added module changed the patch and nothing audible");
+}
+
+// ----------------------------------------------------------------- D15: the cable node's cv side
+
+/// dc(0.5) → vcalike(gain 0) with dccv(0.6) on its cv-in — the trim gates' world. Without the
+/// cv wire the vcalike still builds (its input is optional), which is what the refusal gate
+/// needs.
+fn trim_world(with_cv_wire: bool) -> (Executor, NodeId) {
+    let mut graph = Graph::new();
+    let dc = graph.add_node(0);
+    let vc = graph.add_node(0);
+    let cv = graph.add_node(0);
+    graph.connect(PortRef::new(dc, 0), PortRef::new(vc, 0), EdgeKind::Plain).unwrap();
+    if with_cv_wire {
+        graph.connect(PortRef::new(cv, 0), PortRef::new(vc, 2), EdgeKind::Plain).unwrap();
+    }
+    let builds = vec![
+        (
+            dc,
+            NodeBuild {
+                module: Box::new(Dc),
+                manifest: validated(dc_manifest()),
+                params: params(&[0.5]),
+            },
+        ),
+        (
+            vc,
+            NodeBuild {
+                module: Box::new(VcaLike),
+                manifest: vcalike_manifest(),
+                params: params(&[0.0]),
+            },
+        ),
+        (
+            cv,
+            NodeBuild { module: Box::new(DcCv), manifest: dccv_manifest(), params: params(&[0.6]) },
+        ),
+    ];
+    (Executor::build(graph, builds, cfg(1)).unwrap(), vc)
+}
+
+#[test]
+fn an_identity_cv_trim_is_the_untrimmed_wire_bit_exactly() {
+    // The identity is a BRANCH (D15's bit-exactness promise): `set_cv_trim(…, 1.0, 0.0)` and
+    // never calling it render the same samples — which is also what lets the bridge call it
+    // for every wire with a trim record and keep the untrimmed goldens standing.
+    let (mut plain, mp) = trim_world(true);
+    let (mut trimmed, mt) = trim_world(true);
+    trimmed.set_cv_trim(mt, 2, 1.0, 0.0).unwrap();
+    let a = render_capture(&mut plain, mp, 10, 0);
+    let b = render_capture(&mut trimmed, mt, 10, 0);
+    assert_eq!(a, b, "identity trim = no trim, sample for sample");
+    let want = 0.5f32 * (0.0f32 + 0.6f32);
+    assert!(a.iter().all(|&s| s == want), "and both are the untrimmed arithmetic: {want}");
+}
+
+#[test]
+fn set_cv_trim_scales_and_offsets_the_delivered_word() {
+    // The wire's arithmetic, hand-computed in the SAME f32 order the pass runs: word →
+    // `w × scale + offset` → the module's `param + cv` → the product. Exact compare, and a
+    // clamp check at the door (99 → 2, −99 → −1 — the op_set_trim discipline, enforced at
+    // BOTH doors so a driver call cannot out-range the canvas).
+    let (mut ex, m) = trim_world(true);
+    ex.set_cv_trim(m, 2, 0.5, 0.1).unwrap();
+    let out = render_capture(&mut ex, m, 4, 0);
+    let want = 0.5f32 * (0.0f32 + (0.6f32 * 0.5 + 0.1));
+    assert!(out.iter().all(|&s| s == want), "every sample is the trimmed word: {want}");
+    let (mut ex2, m2) = trim_world(true);
+    ex2.set_cv_trim(m2, 2, 99.0, -99.0).unwrap();
+    let clamped = render_capture(&mut ex2, m2, 2, 0);
+    let want2 = 0.5f32 * (0.0f32 + (0.6f32 * 2.0 + (-1.0)));
+    assert!(clamped.iter().all(|&s| s == want2), "the door clamps: {want2}");
+}
+
+#[test]
+fn set_cv_trim_refuses_in_words_with_the_remedy() {
+    let (mut ex, m) = trim_world(true);
+    // An unknown node: the graph's own sentence.
+    let err = ex.set_cv_trim(NodeId(99), 2, 1.0, 0.0).unwrap_err();
+    assert!(matches!(err, ExecError::Graph(_)), "{err}");
+    // A port that is not a cv input: named, with the rule.
+    let err = ex.set_cv_trim(m, 0, 1.0, 0.0).unwrap_err();
+    assert!(err.to_string().contains("not a cv input"), "{err}");
+    // A cv input with no wire: the remedy is the sentence's job — a trim rides a wire.
+    let (mut bare, mb) = trim_world(false);
+    let err = bare.set_cv_trim(mb, 2, 1.0, 0.0).unwrap_err();
+    assert!(err.to_string().contains("no cv wire lands"), "{err}");
+    assert!(err.to_string().contains("connect the wire first"), "the remedy rides along: {err}");
 }

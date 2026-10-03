@@ -30,9 +30,22 @@ use sparq_kernel::graph::{
 };
 use sparq_module_api::params::ParamSet;
 use sparq_module_api::registry::Registry;
-use sparq_ui::canvas::model::{Graph as CanvasGraph, NodeId as CanvasNodeId, NodeSpec};
+use sparq_ui::canvas::layout::{signal_class, SignalClass};
+use sparq_ui::canvas::model::{
+    Graph as CanvasGraph, NodeId as CanvasNodeId, NodeSpec, Wire as CanvasWire,
+    WireId as CanvasWireId, WireTrim,
+};
 use sparq_ui::geom::Vec2;
 use sparq_ui::tokens::LAYOUT_CANVAS_SNAP;
+
+/// The kernel gain nodes synthesised for AUDIO cable-node trims, keyed by the CANVAS wire id
+/// (operator round 4, D15/S8). Returned from the build doors so a live session COULD cross amp
+/// drags straight to the gain's param — the shipped behaviour is the structural re-stage,
+/// which adoption makes silent (the gain instance survives the re-stage on its synthetic
+/// wire-derived canvas key, and defect #85's one-pole glide rides the drag zipper-free by
+/// construction). The command-ring fast path is a declared LATER optimisation; this map is
+/// the door it will walk through.
+pub type TrimGainMap = HashMap<CanvasWireId, KernelNodeId>;
 
 /// Render length for a canvas render, seconds. Transport-aware lengths are WO-009's; until then
 /// a fixed, stated number — the log line always says what was rendered.
@@ -145,14 +158,16 @@ pub fn build(
     master: CanvasNodeId,
     registry: &Registry,
 ) -> Result<(Executor, KernelNodeId), String> {
-    let (ex, k_master, _map) = build_with_map(graph, master, registry)?;
+    let (ex, k_master, _map, _gains) = build_with_map(graph, master, registry)?;
     Ok((ex, k_master))
 }
 
-/// [`build`], also returning the canvas-node → kernel-node map. The map is what lets a caller read
-/// per-node executor state (meters, taps) back into canvas terms — which is exactly what the live
-/// wire levels need ([`node_levels`]). Kept separate so [`build`]'s signature stays the two things
-/// a renderer wants.
+/// [`build`], also returning the canvas-node → kernel-node map and the cable nodes'
+/// synthesised-gain map ([`TrimGainMap`]). The node map is what lets a caller read per-node
+/// executor state (meters, taps) back into canvas terms — which is exactly what the live
+/// wire levels need ([`node_levels`]); the gain map is the live session's door to the
+/// declared LATER set_params fast path (operator round 4, D15/S8). Kept separate so
+/// [`build`]'s signature stays the two things a renderer wants.
 ///
 /// # Errors
 /// Exactly what [`build`] reports.
@@ -160,7 +175,7 @@ pub fn build_with_map(
     graph: &CanvasGraph,
     master: CanvasNodeId,
     registry: &Registry,
-) -> Result<(Executor, KernelNodeId, HashMap<CanvasNodeId, KernelNodeId>), String> {
+) -> Result<(Executor, KernelNodeId, HashMap<CanvasNodeId, KernelNodeId>, TrimGainMap), String> {
     build_with_map_at(graph, master, registry, render_config())
 }
 
@@ -194,7 +209,7 @@ pub fn build_with_map_at(
     master: CanvasNodeId,
     registry: &Registry,
     cfg: ExecConfig,
-) -> Result<(Executor, KernelNodeId, HashMap<CanvasNodeId, KernelNodeId>), String> {
+) -> Result<(Executor, KernelNodeId, HashMap<CanvasNodeId, KernelNodeId>, TrimGainMap), String> {
     let mut kg = KernelGraph::new();
     let mut map: HashMap<CanvasNodeId, KernelNodeId> = HashMap::new();
     for n in graph.nodes() {
@@ -209,6 +224,17 @@ pub fn build_with_map_at(
         let kid = kg.add_node(latency);
         map.insert(n.id, kid);
     }
+    // The cable node's VOICE (operator round 4, D15): a trimmed AUDIO wire gets an invisible
+    // `util/gain` synthesised into its path (the hand-patch equivalent — the r4_bridge gate
+    // pins the sentence), a trimmed CV wire records the executor's own `set_cv_trim` door for
+    // after the build, and a trimmed CONTROL wire rides the param-mod formula below. An
+    // IDENTITY trim synthesises nothing and calls nothing: the wire renders bit-identical to
+    // no trim at all (gated, not commented). Event/data/spatial wires REFUSE the cable node
+    // in words — those streams carry no amplitude the executor can trim (event/data), or no
+    // per-set gain module exists to trim them with yet (spatial).
+    let mut trim_gains: TrimGainMap = HashMap::new();
+    let mut gain_builds: Vec<(KernelNodeId, NodeBuild)> = Vec::new();
+    let mut cv_trims: Vec<(KernelNodeId, u32, f32, f32)> = Vec::new();
     for w in graph.wires() {
         // A wire INTO a scope is a display binding, not a signal path (operator ruling
         // 2026-10-01 r3: the scope accepts any source class): the UI reads the source's own
@@ -232,12 +258,57 @@ pub fn build_with_map_at(
         let (Some(from), Some(to)) = (map.get(&w.from.node), map.get(&w.to.node)) else {
             return Err(format!("wire {} references a node outside the graph", w.id));
         };
-        kg.connect(
-            KernelPortRef::new(*from, w.from.index as u32),
-            KernelPortRef::new(*to, w.to.index as u32),
-            EdgeKind::Plain,
-        )
-        .map_err(|e| {
+        let src_pref = KernelPortRef::new(*from, w.from.index as u32);
+        let dst_pref = KernelPortRef::new(*to, w.to.index as u32);
+        if let Some(t) = effective_trim(w) {
+            match wire_class(graph, w) {
+                SignalClass::Audio => {
+                    // The invisible gain (D15): `t.amp` is the gain param — the module's
+                    // one-pole glide (defect #85) makes live amp drags zipper-free across
+                    // re-stages, and the offset NEVER enters the audio path (the DC rule),
+                    // so the bridge does not even read it. The insertion is the hand-patch
+                    // equivalent down to the channel conversions: a trim on a wire into a
+                    // mono-declared sink rides the stereo gain's documented summing exactly
+                    // as the user's own patched gain would (every first-party audio sink is
+                    // stereo-or-variable, so today the leg is transparent; per-set gains
+                    // arrive with the spatial phase).
+                    let (gk, build) = synth_gain(&mut kg, registry, src_pref, dst_pref, t.amp)?;
+                    trim_gains.insert(w.id, gk);
+                    gain_builds.push((gk, build));
+                    continue; // the direct edge is replaced by the gain's two legs
+                },
+                SignalClass::Cv => {
+                    // The executor's own trim door, recorded for after the build — the wire
+                    // must exist before a trim can ride it.
+                    cv_trims.push((*to, w.to.index as u32, t.amp, t.offset));
+                },
+                SignalClass::Event | SignalClass::Data => {
+                    return Err(format!(
+                        "wire {} carries a cable node on an event/data cable — those streams \
+                         have no amplitude to trim (a trigger's word is its sample, a data \
+                         stream's its payload); tap the node to remove it, or move the trim \
+                         onto an audio or cv cable",
+                        w.id
+                    ));
+                },
+                SignalClass::Spatial => {
+                    return Err(format!(
+                        "wire {} carries a cable node on a spatial cable — util/gain is stereo \
+                         and no per-set gain module exists yet (the spatial phase ships one); \
+                         tap the node to remove it, or trim a mono/stereo leg of the path",
+                        w.id
+                    ));
+                },
+                SignalClass::Neutral => {
+                    return Err(format!(
+                        "wire {} carries a cable node on a payload the executor does not \
+                         carry (gpu/atom) — report this",
+                        w.id
+                    ));
+                },
+            }
+        }
+        kg.connect(src_pref, dst_pref, EdgeKind::Plain).map_err(|e| {
             format!("the kernel graph refused a wire the canvas accepted: {e} — report this")
         })?;
     }
@@ -253,14 +324,55 @@ pub fn build_with_map_at(
         let Some(&src_k) = map.get(&feed.from.node) else {
             continue;
         };
+        // The cable node rides the COLLAPSED direct edge (round 4's declared interaction):
+        // the feed's trim and the copy's own trim compose into ONE affine trim per copy —
+        // upstream first, then downstream — applied per copy-edge exactly as the direct-wire
+        // path applies it (gain synthesis / set_cv_trim / refusals, same voice, same words).
+        let feed_trim = effective_trim(feed);
+        let feed_class = graph.port(feed.from).map(signal_class).unwrap_or(SignalClass::Neutral);
         for w in graph.wires().iter().filter(|w| w.from.node == n.id) {
             let Some(&dst_k) = map.get(&w.to.node) else { continue };
-            kg.connect(
-                KernelPortRef::new(src_k, feed.from.index as u32),
-                KernelPortRef::new(dst_k, w.to.index as u32),
-                EdgeKind::Plain,
-            )
-            .map_err(|e| {
+            let src_pref = KernelPortRef::new(src_k, feed.from.index as u32);
+            let dst_pref = KernelPortRef::new(dst_k, w.to.index as u32);
+            // Control copies ride their own wire's param-mod plan below (the r3 src_ref
+            // resolution), never a kernel edge trim.
+            let composed =
+                if w.param.is_none() { compose_trims(feed_trim, effective_trim(w)) } else { None };
+            if let Some(t) = composed {
+                match feed_class {
+                    SignalClass::Audio => {
+                        let (gk, build) = synth_gain(&mut kg, registry, src_pref, dst_pref, t.amp)?;
+                        trim_gains.insert(w.id, gk);
+                        gain_builds.push((gk, build));
+                        continue;
+                    },
+                    SignalClass::Cv => {
+                        cv_trims.push((dst_k, w.to.index as u32, t.amp, t.offset));
+                    },
+                    SignalClass::Event | SignalClass::Data => {
+                        return Err(format!(
+                            "wire {} copies a cable node onto an event/data path — those \
+                             streams have no amplitude to trim; tap the node to remove it",
+                            w.id
+                        ));
+                    },
+                    SignalClass::Spatial => {
+                        return Err(format!(
+                            "wire {} copies a cable node onto a spatial path — no per-set \
+                             gain module exists yet; tap the node to remove it",
+                            w.id
+                        ));
+                    },
+                    SignalClass::Neutral => {
+                        return Err(format!(
+                            "wire {} copies a cable node onto a payload the executor does \
+                             not carry (gpu/atom) — report this",
+                            w.id
+                        ));
+                    },
+                }
+            }
+            kg.connect(src_pref, dst_pref, EdgeKind::Plain).map_err(|e| {
                 format!("the kernel graph refused a collapsed mult wire: {e} — report this")
             })?;
         }
@@ -286,8 +398,36 @@ pub fn build_with_map_at(
             NodeBuild { module: reg.create(), manifest: reg.manifest().clone(), params },
         ));
     }
+    // The synthesised trim gains join the build (their kernel ids were assigned in the wire
+    // passes above; the executor's node set must match the graph exactly).
+    builds.extend(gain_builds);
 
     let mut ex = Executor::build(kg, builds, cfg).map_err(|e| e.to_string())?;
+    // The canvas identities on every canvas build (operator round 4, D1): one key per kernel
+    // id, in kernel-id order — the canvas node's own id IS the key — so a live re-stage can
+    // ADOPT the running modules (`Executor::adopt_runtime`) instead of resetting everything
+    // the user is hearing (the "add a module" transparency). An unstamped node never adopts;
+    // this stamp covers every canvas node AND every synthesised trim gain.
+    let mut keys = vec![0u64; map.len() + trim_gains.len()];
+    for (canvas_id, kid) in &map {
+        keys[kid.0 as usize] = u64::from(*canvas_id);
+    }
+    // The synthesised gains wear synthetic keys: `0x8000_0000_0000_0000 | wire id` — stable
+    // across rebuilds, so a re-staged amp drag ADOPTS the running gain (its glide cell is
+    // mid-chase) instead of priming a fresh one, and removing the trim retires it like any
+    // deleted node. Canvas node ids are u32, so the high bit is a namespace no canvas id can
+    // collide with.
+    for (wid, gk) in &trim_gains {
+        keys[gk.0 as usize] = 0x8000_0000_0000_0000 | u64::from(*wid);
+    }
+    ex.set_canvas_keys(keys);
+    // The cable node's CV side (D15): the wires exist in the build now, so the executor's
+    // trim door can ride them — sanitised and clamped at that door, the model's discipline
+    // enforced twice so neither door can be walked around.
+    for (kid, port, amp, offset) in cv_trims {
+        ex.set_cv_trim(kid, port, amp, offset)
+            .map_err(|e| format!("the executor refused a cable node's cv trim: {e}"))?;
+    }
     // Control connections (operator ruling 2026-10-01 r3): every canvas wire onto a float
     // parameter becomes an executor param-mod plan — the knob's base plus the cv's deviation
     // per block, clamped into the manifest range the bridge reads straight from the spec.
@@ -319,10 +459,72 @@ pub fn build_with_map_at(
             .and_then(|n| n.spec.params.get(idx))
             .map(|d| (d.min as f32, d.max as f32))
             .unwrap_or((0.0, 1.0));
-        ex.add_param_mod(dst, idx, src, src_ref.index as u32, lo, hi)
+        // The control wire's cable node (D15): its trim rides the param-mod formula — the
+        // executor trims the latched cv word BEFORE the additive modulation. An identity
+        // trim hands over (1, 0) exactly like no trim at all, and the executor's identity
+        // branch makes that bit-exact.
+        let (tscale, toffset) = w.trim.map(|t| (t.amp, t.offset)).unwrap_or((1.0, 0.0));
+        ex.add_param_mod(dst, idx, src, src_ref.index as u32, lo, hi, tscale, toffset)
             .map_err(|e| format!("the executor refused a control wire: {e}"))?;
     }
-    Ok((ex, k_master, map))
+    Ok((ex, k_master, map, trim_gains))
+}
+
+/// A wire's trim with the identity folded into `None` — identity IS no cable node as far as
+/// the kernel goes: nothing synthesised, nothing called, bit-identical samples (the gate
+/// measures the sentence).
+fn effective_trim(w: &CanvasWire) -> Option<WireTrim> {
+    w.trim.filter(|t| *t != WireTrim::identity())
+}
+
+/// A wire's signal class — the SOURCE port's own (the palette's rule: a wire carries what
+/// its source publishes). An unresolvable port reads Neutral and the trim refusals answer.
+fn wire_class(graph: &CanvasGraph, w: &CanvasWire) -> SignalClass {
+    graph.port(w.from).map(signal_class).unwrap_or(SignalClass::Neutral)
+}
+
+/// Two cable nodes on one signal path, composed (`up` first, then `down`): the affine
+/// composition `(v·a₁+o₁)·a₂+o₂ = v·(a₁a₂) + (o₁a₂+o₂)`. The mult collapse's feed/copy pair
+/// is the only place two trims can ride one kernel edge, and this is the declared
+/// interaction's arithmetic — one trim per copy-edge, whatever the canvas drew.
+fn compose_trims(up: Option<WireTrim>, down: Option<WireTrim>) -> Option<WireTrim> {
+    match (up, down) {
+        (Some(a), Some(b)) => {
+            Some(WireTrim { amp: a.amp * b.amp, offset: a.offset * b.amp + b.offset })
+        },
+        (a, b) => a.or(b),
+    }
+}
+
+/// Synthesise the cable node's invisible `util/gain` (operator round 4, D15/S8): a kernel
+/// node between `src` and `dst` — `src → gain.in`, `gain.out → dst` replacing the direct
+/// edge — with `amp` as its gain param. The registry module and manifest, unmodified: the
+/// synthesised gain is the HAND-PATCHED gain, byte for byte, which is exactly what the
+/// r4_bridge ≡ gate measures. Returns the gain's kernel id and its build.
+///
+/// # Errors
+/// A sentence when `util/gain` is not installed (a build bug — it is a built-in) or when the
+/// kernel refuses either leg (refused in words, like every wire).
+fn synth_gain(
+    kg: &mut KernelGraph,
+    registry: &Registry,
+    src: KernelPortRef,
+    dst: KernelPortRef,
+    amp: f32,
+) -> Result<(KernelNodeId, NodeBuild), String> {
+    let r = registry.get("sparq/util/gain").ok_or_else(|| {
+        "the cable node's invisible gain needs `util/gain` — it is a built-in; report this"
+            .to_string()
+    })?;
+    let latency = r.manifest().manifest().resources.latency_samples.unwrap_or(0);
+    let gk = kg.add_node(latency);
+    kg.connect(src, KernelPortRef::new(gk, 0), EdgeKind::Plain)
+        .map_err(|e| format!("the kernel graph refused a cable node's gain leg: {e}"))?;
+    kg.connect(KernelPortRef::new(gk, 1), dst, EdgeKind::Plain)
+        .map_err(|e| format!("the kernel graph refused a cable node's gain leg: {e}"))?;
+    let params = ParamSet::new(1, &[amp])
+        .ok_or_else(|| "util/gain declares more than MAX_PARAMS parameters".to_string())?;
+    Ok((gk, NodeBuild { module: r.create(), manifest: r.manifest().clone(), params }))
 }
 
 /// Blocks rendered to freshen the meters before a level read. A wire level is the peak of the most
@@ -355,7 +557,7 @@ pub fn node_levels(
     master: CanvasNodeId,
     registry: &Registry,
 ) -> Result<sparq_ui::canvas::levels::NodeLevels, String> {
-    let (mut ex, k_master, map) = build_with_map(graph, master, registry)?;
+    let (mut ex, k_master, map, _gains) = build_with_map(graph, master, registry)?;
     let mut out = vec![0.0f32; RENDER_BLOCK * RENDER_CHANNELS];
     for _ in 0..LEVEL_PREVIEW_BLOCKS {
         ex.render_block(k_master, &mut out).map_err(|e| format!("level preview failed: {e}"))?;
@@ -494,8 +696,10 @@ mod tests {
 
     use super::*;
     use sparq_audio::modules::register_builtins;
+    use sparq_module_api::port::Phase;
+    use sparq_ui::canvas::connect::{self, ConnectContext, ConnectOutcome};
     use sparq_ui::canvas::interact::CanvasState;
-    use sparq_ui::canvas::model::Op;
+    use sparq_ui::canvas::model::{Op, PortRef as CPortRef};
 
     fn registry() -> Registry {
         let mut r = Registry::new();
@@ -601,8 +805,8 @@ mod tests {
         let g = demo_graph(&reg).unwrap();
         let master = CanvasState::new().resolve_master(&g).unwrap();
 
-        let (mut a, am, map_a) = build_with_map(&g, master, &reg).unwrap();
-        let (mut b, bm, map_b) = build_with_map_at(&g, master, &reg, render_config()).unwrap();
+        let (mut a, am, map_a, _ga) = build_with_map(&g, master, &reg).unwrap();
+        let (mut b, bm, map_b, _gb) = build_with_map_at(&g, master, &reg, render_config()).unwrap();
         assert_eq!(am, bm, "the master designation is the same node");
         assert_eq!(map_a, map_b, "the canvas→kernel map is identical");
         let n = RENDER_BLOCK * RENDER_CHANNELS;
@@ -619,7 +823,7 @@ mod tests {
         // The live door at numbers no offline path uses: it builds, it renders at ITS block
         // size, and the map still covers every node — the negotiated truth is honoured.
         let cfg = ExecConfig::new(44_100, 96, 2);
-        let (mut c, cm, map_c) = build_with_map_at(&g, master, &reg, cfg).unwrap();
+        let (mut c, cm, map_c, _gc) = build_with_map_at(&g, master, &reg, cfg).unwrap();
         assert_eq!(map_c.len(), map_a.len(), "every node is mapped at any config");
         let mut out_c = vec![0.0f32; 96 * 2];
         c.render_block(cm, &mut out_c).unwrap();
@@ -854,5 +1058,324 @@ mod tests {
         // Undo-equivalent (the inverse op's value): back to the default render, bit-exact.
         g.op_set_param(gid, pidx, 1.0).unwrap();
         assert_eq!(peak_of(&g), before, "the default render is reproducible");
+    }
+
+    #[test]
+    fn the_step_bar_display_mirrors_the_module_hash_and_the_span_constant() {
+        // Operator round 4, D12/D11 — the cross-crate pin the mirrors hang on: `sparq-ui` is
+        // zero-dependency, so the display's copy of the ring hash and the pitch span live in
+        // `inset.rs`; THIS test is the single place that sees both crates and proves they
+        // agree — the pinned seed-42 ring first (the checked-in evidence), then a wide sweep,
+        // so a drift on either side fails a gate instead of silently revoicing a performance.
+        const SEED42_RING: [u32; 8] =
+            [1517363, 10542902, 13721998, 8088911, 6531285, 16292829, 12864735, 5502068];
+        for (i, want) in SEED42_RING.iter().enumerate() {
+            let module = sparq_audio::modules::step_value(42, i as u32);
+            let display = sparq_ui::canvas::inset::rand_step_value(42, i as u32);
+            assert_eq!(module, *want as f32 / 16_777_216.0, "the module's ring is the pinned one");
+            assert_eq!(display, module, "the display mirror drifts at step {i}");
+        }
+        for seed in [0u32, 1, 7, 42, 4096, 65_535] {
+            for i in 0..64u32 {
+                assert_eq!(
+                    sparq_audio::modules::step_value(seed, i),
+                    sparq_ui::canvas::inset::rand_step_value(seed, i),
+                    "mirror disagreement at seed {seed}, step {i}"
+                );
+            }
+        }
+        // The pitch span: the keyboard's class mapping and the quantizer's snap read the same
+        // 120 semitones from their own files — pinned equal here, where both are visible.
+        assert_eq!(
+            sparq_audio::modules::QUANT_PITCH_SEMITONES,
+            sparq_ui::canvas::inset::QUANT_PITCH_SEMITONES,
+            "the span constants drifted apart"
+        );
+        assert_eq!(sparq_audio::modules::QUANT_PITCH_SEMITONES, 120.0);
+    }
+
+    // ============================================== operator round 4, S8: the cable node's voice
+    // The bridge batch's gates (D15/D7), registry+bridge harness: an audio trim IS the
+    // hand-patched gain; identity synthesises nothing; a cv trim IS `set_cv_trim`; a control
+    // trim rides the D15 formula; the vca takes the lfo wire; a trimmed mult copy rides the
+    // collapsed edge, composed.
+
+    const TRIM_BLOCKS: usize = 200;
+
+    /// A canvas node from the registry's own manifest (the browser's construction path).
+    fn t_add(reg: &Registry, g: &mut CanvasGraph, id: &str, x: f32) -> CanvasNodeId {
+        let spec = NodeSpec::from_manifest(reg.get(id).unwrap().manifest());
+        match g.op_add_node(spec, Vec2::new(x, 0.0)) {
+            Op::AddNode(n) => n.id,
+            _ => unreachable!(),
+        }
+    }
+
+    fn t_wire(
+        g: &mut CanvasGraph,
+        from: (CanvasNodeId, usize),
+        to: (CanvasNodeId, usize),
+    ) -> CanvasWireId {
+        match g.op_add_wire(CPortRef::new(from.0, from.1), CPortRef::new(to.0, to.1)) {
+            Op::AddWire(w) => w.id,
+            _ => unreachable!(),
+        }
+    }
+
+    fn t_render_hash(ex: &mut Executor, master: KernelNodeId, cfg: &ExecConfig) -> String {
+        let mut out = vec![0.0f32; cfg.block_frames * cfg.device_channels];
+        let mut samples: Vec<f32> = Vec::with_capacity(TRIM_BLOCKS * out.len());
+        for _ in 0..TRIM_BLOCKS {
+            ex.render_block(master, &mut out).unwrap();
+            samples.extend_from_slice(&out);
+        }
+        hex64(fnv1a64_f32(&samples))
+    }
+
+    /// The manifest defaults of a module — what an untouched canvas node carries.
+    fn t_defaults(reg: &Registry, id: &str) -> Vec<f32> {
+        reg.get(id)
+            .unwrap()
+            .manifest()
+            .manifest()
+            .params
+            .iter()
+            .map(|p| p.default.unwrap_or(0.0) as f32)
+            .collect()
+    }
+
+    #[test]
+    fn an_audio_cable_trim_is_the_hand_patched_gain_hash_for_hash() {
+        let reg = registry();
+        let cfg = render_config();
+        // World A: sine → master gain, with a cable node on the wire (amp 0.42 — an odd
+        // number, so a wrong formula cannot land on it by accident).
+        let mut ga = CanvasGraph::new();
+        let sine = t_add(&reg, &mut ga, "sparq/syn/sine", 0.0);
+        let mst = t_add(&reg, &mut ga, "sparq/util/gain", 400.0);
+        let wid = t_wire(&mut ga, (sine, 0), (mst, 0));
+        ga.op_set_trim(wid, Some(WireTrim { amp: 0.42, offset: 0.0 })).unwrap();
+        let (mut ex_a, m_a, _map_a, gains_a) = build_with_map_at(&ga, mst, &reg, cfg).unwrap();
+        assert_eq!(gains_a.len(), 1, "one trimmed audio wire synthesises exactly one gain");
+        let hash_a = t_render_hash(&mut ex_a, m_a, &cfg);
+        // World B: the hand patch — an explicit util/gain at 0.42 in the same place on the path.
+        let mut gb = CanvasGraph::new();
+        let sine = t_add(&reg, &mut gb, "sparq/syn/sine", 0.0);
+        let mid = t_add(&reg, &mut gb, "sparq/util/gain", 200.0);
+        let mst = t_add(&reg, &mut gb, "sparq/util/gain", 400.0);
+        gb.op_set_param(mid, 0, 0.42).unwrap();
+        t_wire(&mut gb, (sine, 0), (mid, 0));
+        t_wire(&mut gb, (mid, 1), (mst, 0));
+        let (mut ex_b, m_b, _map_b, gains_b) = build_with_map_at(&gb, mst, &reg, cfg).unwrap();
+        assert!(gains_b.is_empty(), "an untrimmed patch synthesises nothing");
+        let hash_b = t_render_hash(&mut ex_b, m_b, &cfg);
+        assert_eq!(hash_a, hash_b, "the cable node IS the hand-patched gain, sample for sample");
+        // …and it is audible against the untrimmed wire (the gate is not vacuous).
+        let mut gc = CanvasGraph::new();
+        let sine = t_add(&reg, &mut gc, "sparq/syn/sine", 0.0);
+        let mst = t_add(&reg, &mut gc, "sparq/util/gain", 400.0);
+        t_wire(&mut gc, (sine, 0), (mst, 0));
+        let (mut ex_c, m_c, _, _) = build_with_map_at(&gc, mst, &reg, cfg).unwrap();
+        assert_ne!(hash_a, t_render_hash(&mut ex_c, m_c, &cfg), "the trim is audible");
+    }
+
+    #[test]
+    fn an_identity_trim_synthesises_nothing_and_renders_bit_exactly() {
+        let reg = registry();
+        let cfg = render_config();
+        let world = |trim: Option<WireTrim>| -> (String, usize) {
+            let mut g = CanvasGraph::new();
+            let sine = t_add(&reg, &mut g, "sparq/syn/sine", 0.0);
+            let mst = t_add(&reg, &mut g, "sparq/util/gain", 400.0);
+            let wid = t_wire(&mut g, (sine, 0), (mst, 0));
+            if trim.is_some() {
+                g.op_set_trim(wid, trim).unwrap();
+            }
+            let (mut ex, m, _, gains) = build_with_map_at(&g, mst, &reg, cfg).unwrap();
+            (t_render_hash(&mut ex, m, &cfg), gains.len())
+        };
+        let (clean, gains_clean) = world(None);
+        let (identity, gains_id) = world(Some(WireTrim::identity()));
+        assert_eq!(gains_clean, 0);
+        assert_eq!(gains_id, 0, "identity synthesises NO node — the map is the mechanical claim");
+        assert_eq!(clean, identity, "…and renders bit-identical to no trim at all");
+    }
+
+    #[test]
+    fn a_cv_cable_trim_is_the_set_cv_trim_door() {
+        let reg = registry();
+        let cfg = render_config();
+        // sine → svf (master); lfo → svf's cutoff-mod with a cable node (0.5, 0.25). The
+        // svf's `mod` depth rides at 1.0 — its default 0 would silence the cv input and the
+        // gate would measure nothing (a quiet lie is still a lie).
+        let canvas = |trim: Option<WireTrim>| -> CanvasGraph {
+            let mut g = CanvasGraph::new();
+            let sine = t_add(&reg, &mut g, "sparq/syn/sine", 0.0);
+            let svf = t_add(&reg, &mut g, "sparq/flt/svf", 200.0);
+            let lfo = t_add(&reg, &mut g, "sparq/mod/lfo", 400.0);
+            g.op_set_param(svf, 3, 1.0).unwrap();
+            t_wire(&mut g, (sine, 0), (svf, 0));
+            let w = t_wire(&mut g, (lfo, 1), (svf, 2)); // lfo cv-out (1) → cutoff-mod (2)
+            if let Some(t) = trim {
+                g.op_set_trim(w, Some(t)).unwrap();
+            }
+            g
+        };
+        let svf_id = |g: &CanvasGraph| {
+            g.nodes().iter().find(|n| n.spec.module_id == "sparq/flt/svf").unwrap().id
+        };
+        // World A: the bridge voices the trim.
+        let ga = canvas(Some(WireTrim { amp: 0.5, offset: 0.25 }));
+        let (mut ex_a, m_a, _, gains_a) = build_with_map_at(&ga, svf_id(&ga), &reg, cfg).unwrap();
+        assert!(gains_a.is_empty(), "a cv trim synthesises no gain — it rides the executor's door");
+        let hash_a = t_render_hash(&mut ex_a, m_a, &cfg);
+        // World B: the same canvas untrimmed, with the manual `set_cv_trim` call after build —
+        // the bridge's record and the hand-turned door must be the same samples (right node,
+        // right port, right values).
+        let gb = canvas(None);
+        let (mut ex_b, m_b, map_b, _) = build_with_map_at(&gb, svf_id(&gb), &reg, cfg).unwrap();
+        let svf_k = *map_b.get(&svf_id(&gb)).unwrap();
+        ex_b.set_cv_trim(svf_k, 2, 0.5, 0.25).unwrap();
+        let hash_b = t_render_hash(&mut ex_b, m_b, &cfg);
+        assert_eq!(hash_a, hash_b, "the bridge's cv trim IS the set_cv_trim arithmetic");
+        // …and the trim is audible against the clean modulation (not vacuous).
+        let (mut ex_c, m_c, _, _) = build_with_map_at(&gb, svf_id(&gb), &reg, cfg).unwrap();
+        assert_ne!(hash_a, t_render_hash(&mut ex_c, m_c, &cfg), "the cv trim moves the sound");
+    }
+
+    #[test]
+    fn a_control_cable_trim_rides_the_param_mod_formula() {
+        let reg = registry();
+        let cfg = render_config();
+        // World A (bridge): sine → gain (master); lfo → gain's `gain` param as a CONTROL
+        // wire with a cable node (0.5, 0.25).
+        let mut ga = CanvasGraph::new();
+        let sine = t_add(&reg, &mut ga, "sparq/syn/sine", 0.0);
+        let gain = t_add(&reg, &mut ga, "sparq/util/gain", 200.0);
+        let lfo = t_add(&reg, &mut ga, "sparq/mod/lfo", 400.0);
+        t_wire(&mut ga, (sine, 0), (gain, 0));
+        let cw = match ga.op_add_param_wire(CPortRef::new(lfo, 1), gain, 0) {
+            Op::AddWire(w) => w.id,
+            _ => unreachable!(),
+        };
+        ga.op_set_trim(cw, Some(WireTrim { amp: 0.5, offset: 0.25 })).unwrap();
+        let (mut ex_a, m_a, _, gains_a) = build_with_map_at(&ga, gain, &reg, cfg).unwrap();
+        assert!(gains_a.is_empty(), "a control trim rides the formula, it synthesises nothing");
+        let hash_a = t_render_hash(&mut ex_a, m_a, &cfg);
+        // World B (executor-level): the same three nodes in the same ids, the same edge, and
+        // the r3-style `add_param_mod` with the D15 trim args by hand — the bridge's call,
+        // replicated. Hash-identical is the claim: the formula, the args and the order agree.
+        let mut kg = KernelGraph::new();
+        let ks = kg.add_node(0);
+        let kn = kg.add_node(0);
+        let kl = kg.add_node(0);
+        kg.connect(KernelPortRef::new(ks, 0), KernelPortRef::new(kn, 0), EdgeKind::Plain).unwrap();
+        let nb = |id: &str| {
+            let r = reg.get(id).unwrap();
+            NodeBuild {
+                module: r.create(),
+                manifest: r.manifest().clone(),
+                params: ParamSet::new(1, &t_defaults(&reg, id)).unwrap(),
+            }
+        };
+        let mut ex_b = Executor::build(
+            kg,
+            vec![
+                (ks, nb("sparq/syn/sine")),
+                (kn, nb("sparq/util/gain")),
+                (kl, nb("sparq/mod/lfo")),
+            ],
+            cfg,
+        )
+        .unwrap();
+        ex_b.add_param_mod(kn, 0, kl, 1, 0.0, 2.0, 0.5, 0.25).unwrap();
+        let hash_b = t_render_hash(&mut ex_b, kn, &cfg);
+        assert_eq!(hash_a, hash_b, "the control cable node rides the D15 formula exactly");
+    }
+
+    #[test]
+    fn the_vca_takes_the_lfo_wire_and_the_patch_modulates() {
+        // D7's canvas verdict gate: the manifest moved to unipolar, the matrix did NOT — so
+        // the lfo's unipolar word is Compatible at the vca's cv input, and the rendered patch
+        // proves the connection carries: the lfo sweeps the vca's gain between 1 and 2
+        // around the sine (level default 1, depth default 1 — the manifest's own words).
+        let reg = registry();
+        let cfg = render_config();
+        let mut g = CanvasGraph::new();
+        let sine = t_add(&reg, &mut g, "sparq/syn/sine", 0.0);
+        let vca = t_add(&reg, &mut g, "sparq/util/vca", 200.0);
+        let lfo = t_add(&reg, &mut g, "sparq/mod/lfo", 400.0);
+        t_wire(&mut g, (sine, 0), (vca, 0));
+        let ctx = ConnectContext::no_adapters(Phase::Zero);
+        let verdict = connect::resolve(&mut g, CPortRef::new(lfo, 1), CPortRef::new(vca, 1), &ctx);
+        assert!(
+            matches!(verdict, ConnectOutcome::Connected { .. }),
+            "the lfo→vca wire is compatible now: {verdict:?}"
+        );
+        if let ConnectOutcome::Connected { op, .. } = verdict {
+            g.apply(&op);
+        }
+        let (mut ex, m, _, _) = build_with_map_at(&g, vca, &reg, cfg).unwrap();
+        let mut out = vec![0.0f32; cfg.block_frames * cfg.device_channels];
+        let mut peak = 0.0f32;
+        for _ in 0..400 {
+            ex.render_block(m, &mut out).unwrap();
+            peak = peak.max(out.iter().fold(0.0f32, |a, &s| a.max(s.abs())));
+        }
+        // 0.5-amp sine × gain up to 2 → peaks near 1.0; the glide lags the 1 Hz lfo, so the
+        // claim is the window, not the instant (the round-4 handoff's trap #6, honoured).
+        assert!(peak > 0.85 && peak <= 1.0 + 1e-3, "the modulation is audible and bounded: {peak}");
+    }
+
+    #[test]
+    fn a_trimmed_mult_copy_rides_the_collapsed_edge_composed() {
+        let reg = registry();
+        let cfg = render_config();
+        // The declared interaction: lfo → mult dot 0 (feed, trim ×2.0), dot 1 → svf
+        // cutoff-mod (copy, trim ×0.5 +0.25). The bus collapses, so BOTH trims ride the one
+        // direct edge, composed affinely: v·(2.0×0.5) + (0×0.5 + 0.25) = v·1.0 + 0.25 —
+        // hash-identical to the direct wire carrying the composed trim.
+        let canvas = |via_bus: bool| -> CanvasGraph {
+            let mut g = CanvasGraph::new();
+            let sine = t_add(&reg, &mut g, "sparq/syn/sine", 0.0);
+            let svf = t_add(&reg, &mut g, "sparq/flt/svf", 200.0);
+            let lfo = t_add(&reg, &mut g, "sparq/mod/lfo", 400.0);
+            g.op_set_param(svf, 3, 1.0).unwrap(); // mod depth 1: the cv word is audible
+            t_wire(&mut g, (sine, 0), (svf, 0));
+            if via_bus {
+                let mult = t_add(&reg, &mut g, "sparq/util/mult", 600.0);
+                let feed = t_wire(&mut g, (lfo, 1), (mult, 0));
+                g.op_set_trim(feed, Some(WireTrim { amp: 2.0, offset: 0.0 })).unwrap();
+                let copy = t_wire(&mut g, (mult, 1), (svf, 2));
+                g.op_set_trim(copy, Some(WireTrim { amp: 0.5, offset: 0.25 })).unwrap();
+            } else {
+                let direct = t_wire(&mut g, (lfo, 1), (svf, 2));
+                g.op_set_trim(direct, Some(WireTrim { amp: 1.0, offset: 0.25 })).unwrap();
+            }
+            g
+        };
+        let svf_id = |g: &CanvasGraph| {
+            g.nodes().iter().find(|n| n.spec.module_id == "sparq/flt/svf").unwrap().id
+        };
+        let ga = canvas(true);
+        let (mut ex_a, m_a, _, gains_a) = build_with_map_at(&ga, svf_id(&ga), &reg, cfg).unwrap();
+        assert!(gains_a.is_empty(), "cv copies ride set_cv_trim, never a gain");
+        let hash_a = t_render_hash(&mut ex_a, m_a, &cfg);
+        let gb = canvas(false);
+        let (mut ex_b, m_b, _, _) = build_with_map_at(&gb, svf_id(&gb), &reg, cfg).unwrap();
+        let hash_b = t_render_hash(&mut ex_b, m_b, &cfg);
+        assert_eq!(hash_a, hash_b, "the composed trims ride the collapsed edge exactly");
+        // Not vacuous: the composition is audible against the same bus with no cable nodes.
+        let mut gc = CanvasGraph::new();
+        let sine = t_add(&reg, &mut gc, "sparq/syn/sine", 0.0);
+        let svf = t_add(&reg, &mut gc, "sparq/flt/svf", 200.0);
+        let lfo = t_add(&reg, &mut gc, "sparq/mod/lfo", 400.0);
+        let mult = t_add(&reg, &mut gc, "sparq/util/mult", 600.0);
+        gc.op_set_param(svf, 3, 1.0).unwrap();
+        t_wire(&mut gc, (sine, 0), (svf, 0));
+        t_wire(&mut gc, (lfo, 1), (mult, 0));
+        t_wire(&mut gc, (mult, 1), (svf, 2));
+        let (mut ex_c, m_c, _, _) = build_with_map_at(&gc, svf_id(&gc), &reg, cfg).unwrap();
+        assert_ne!(hash_a, t_render_hash(&mut ex_c, m_c, &cfg), "the composition moves the sound");
     }
 }

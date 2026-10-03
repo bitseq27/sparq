@@ -361,3 +361,63 @@ fn the_snapshot_order_pin_the_appended_last_discipline() {
     // And the version says what it is.
     assert_eq!(man.identity.version.as_deref(), Some("0.2.0"));
 }
+
+// ---------------------------------------------------------------- operator round 4: the cable
+// node's cv side (D15). The trim rides the WIRE — the merge arithmetic downstream is the
+// contract this file already pinned, so the gates here are the wire's word: trimmed exactly
+// as `v × scale + offset` declares, and identity-exact when the cable node is at rest.
+
+#[test]
+fn a_cable_node_trim_rides_the_wire_into_the_merge() {
+    // rms ≈ 0.35 through a (0.5, +0.25) trim into cvm0 = 1: the merged word is the trimmed
+    // wire word — hand-computed in the wire pass's own f32 order, compared exactly, source
+    // and destination read from the SAME rendered block (the per-block ripple trap).
+    let reg = registry();
+    let mut g = Graph::new();
+    let mut builds = Vec::new();
+    let (_sine, rms) = rms_chain(&mut g, &reg, 0.5, &mut builds);
+    let mix = mixer(&mut g, &reg, &identity24(), &mut builds);
+    g.connect(PortRef::new(rms, RMS_LEVEL), PortRef::new(mix, CV_IN_0), EdgeKind::Plain).unwrap();
+    let mut ex = Executor::build(g, builds, cfg(2)).unwrap();
+    ex.set_cv_trim(mix, CV_IN_0, 0.5, 0.25).unwrap();
+    render_blocks(&mut ex, mix, 20, 2);
+    let l = ex.node_cv_block(rms, RMS_LEVEL).expect("rms publishes its level");
+    let out = ex.node_cv_block(mix, CV_OUT).expect("the mixer publishes its merge");
+    assert!(l > 0.3 && l < 0.4, "the sanity anchor stands: {l}");
+    let trimmed = l * 0.5 + 0.25; // the wire pass's arithmetic, same order
+    let want = (1.0f64 * f64::from(trimmed.clamp(0.0, 1.0))) as f32; // cvm0 = 1 through the f64 merge
+    assert_eq!(out, want, "the merge sums the TRIMMED word");
+    assert_ne!(out, l, "…and the trim is audible against the untrimmed wire");
+}
+
+#[test]
+fn an_identity_cv_trim_is_the_untrimmed_merge_bit_exactly() {
+    // Two identical worlds; one calls `set_cv_trim(…, 1.0, 0.0)`. Every merged word AND every
+    // rendered sample must be bit-equal: the identity is a BRANCH, which is what lets the
+    // bridge ride this door for every trim record without moving the untrimmed goldens.
+    let world = |trim: Option<(f32, f32)>| -> Vec<f32> {
+        let reg = registry();
+        let mut g = Graph::new();
+        let mut builds = Vec::new();
+        let (_sine, rms) = rms_chain(&mut g, &reg, 0.5, &mut builds);
+        let mix = mixer(&mut g, &reg, &identity24(), &mut builds);
+        g.connect(PortRef::new(rms, RMS_LEVEL), PortRef::new(mix, CV_IN_0), EdgeKind::Plain)
+            .unwrap();
+        let mut ex = Executor::build(g, builds, cfg(2)).unwrap();
+        if let Some((s, o)) = trim {
+            ex.set_cv_trim(mix, CV_IN_0, s, o).unwrap();
+        }
+        let mut seq = Vec::new();
+        let mut out = vec![0.0f32; FRAMES * 2];
+        for _ in 0..20 {
+            ex.render_block(mix, &mut out).unwrap();
+            seq.push(ex.node_cv_block(mix, CV_OUT).unwrap());
+            seq.extend_from_slice(&out);
+        }
+        seq
+    };
+    let plain = world(None);
+    let identity = world(Some((1.0, 0.0)));
+    assert_eq!(plain, identity, "identity trim = no trim, bit for bit");
+    assert!(plain.iter().any(|&v| v != 0.0), "and the world is not silent");
+}

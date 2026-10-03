@@ -1,6 +1,69 @@
-# Sync manifest — operator UI rounds (2026-10-01): rev 3, the control-wire / junction-bus round
+# Sync manifest — operator UI rounds: rev 4 (2026-10-02), the cable-node / living-wells round
 
-**Current bundle: `sparq-update-2026-10-01.zip` REV 3 (rounds 1+2+3 of 2026-10-01, overlay
+**Current bundle: `sparq-update-2026-10-02.zip` REV 4 (operator round 4 of 2026-10-02 — a
+FULL-TREE pack, defect #94's remedy: it overlays any tree at git `871d725` or later and does not
+depend on a base the receiver might not have).** Excluded from the pack by rule: `.git/`,
+`target/`, `Cargo.lock` (regenerates on first build), `logs/`, `*.wav`, and `SYNC-STAMP.txt` —
+**the stamp does NOT ride in the pack** (rev-3 pattern): after applying, re-run
+`python tools\sync_check.py --write --sync sparq-round4-2026-10-02` on the machine that will own
+the tree; until then `scripts\build.bat` names the stamp mismatch in words, which is EXPECTED,
+not a failure. **Provenance:** round-4's code was lost with the sandbox that wrote it (only
+`ROUND4-HANDOFF.md` reached git); this pack is the REBUILD from that handoff on a clean clone,
+re-measured end to end on Linux/rustc 1.99.0 — see `CHECKLIST.md`'s round-4 paragraph for the
+three provenance notes (defect #95 pre-existing, mutation-hash baseline moved to
+`8143e1ddfd8fb261` on this box, and defect #96: the pack's `modules/out/main/sparqmod.toml` is
+a DECLARED RECONSTRUCTION — the #93 `out/`-drop trap re-struck the sealed tree and no byte-exact
+copy survived; rebuilt from its generated doc + the `OutMain` implementation, proven
+semantically identical at both layers, its stamp row moved while the fp did not).
+
+**Rev 4 is the operator's 15-item round** (table in `UI-CHANGES-PLAN.md`): **cable nodes** —
+hover ghost, tap-insert at identity (bit-identical render, audit smoke 54 pins it through the
+real gesture door), drag up/down = amp / left/right = offset (the audio offset inert by the DC
+rule), tap to remove, one undo per drag; the bridge gives them a voice (audio → invisible
+`util/gain`, cv → `set_cv_trim`, control → param-mod, mult-collapse composed affinely,
+event/data/spatial refused in words). **The executor adopts** (D1: unchanged nodes keep state
+and allocations across a hotswap — adding a module while playing no longer rebuilds the world).
+**The wells came alive**: clock division rings, seq walking lights, rand step bars (seed pinned
+in both crates), the quantizer's 12-key keyboard with Custom-mode taps, the rms rolling graph,
+the master's latched CLIP LED, the svf curve moving under its cv, the mult strip at quarter
+width. **Three new modules** — `fx/fold`, `util/quant`, `mod/rand` — plus clk `phase`, seq
+`step`, rms `slew`, delay `sync`: the first-party set is **24**, `module_docs` 24/24. **Tokens by
+ruling**: event cables SOLID (D9; control wires stay dashed — mockup-review findings 25–26) and
+ports float 6 px (D10). Gates: **899 tests (+1 ignored)**, goldens untouched
+(`ba577186c988db21`, selftest 9/9, the three pinned exec renders exact), every runnable clippy
+cell clean, every python gate, `ui --audit` **PASS, 0 failures, 59 [PASS] lines**,
+`modules --strict` 24/24, `sync_check` OK at **162 files, `src 96f/2694477B`**. One declared
+OWED piece: the dropdown picker (item 11's inspector list-picker). One declared defect: **#95**
+(pre-existing ui-live glide-lag test; the ui-feature cell reads 28/1).
+
+**Rev 4 namelist** (49 paths vs git `871d725`; the pack carries the whole tree, this names what
+moved): `crates/sparq-audio/src/{executor,engine,modules}.rs` ·
+`crates/sparq-audio/tests/{executor,mixer_cv,r4_modules,r4_new_modules}.rs` ·
+`crates/sparq-kernel/src/sync/hotswap.rs` ·
+`crates/sparq-ui/src/canvas/{model,layout,interact,inset,levels,mod}.rs` ·
+`crates/sparq-app/src/bridge.rs` · `crates/sparq-app/src/ui/{canvas_ui,shell_ui,live,headless}.rs`
+· `crates/sparq-app/tests/r3_controls.rs` · `modules/{fx/fold,util/quant,mod/rand}/sparqmod.toml`
+(new) + bumped `modules/{ana/rms,mod/clk,mod/seq,util/delay,util/vca}/sparqmod.toml` ·
+`docs/modules/` (8 regenerated: ana-rms, fx-fold, mod-clk, mod-rand, mod-seq, util-delay,
+util-quant, util-vca) · `design/tokens/{colors,layout}.toml` + `generated/{tokens.rs,json,css}` +
+`preview.html` · `docs/ui/gestures.md` (§4f, §6 event row, §7 round-4 list) ·
+`design/mockups/mockup-review.md` (findings 25–26) · `scripts/test006.bat` (steps L–U, counts
+moved) · `CHECKLIST.md` · `SYNC.md` · `README.md` · `UI-CHANGES-PLAN.md` (round-4 sheet) ·
+`ROUND4-HANDOFF.md` (§0–§0e session record) · `SYNC-STAMP.txt` (re-stamped, NOT in the pack).
+
+**THE ASK, round 4:** run `scripts\test006.bat` on SATURN — the new steps **L–U** are the
+operator's eyes and ears: the clip LED on a hot render, the clock wheel turning under PLAY, the
+seq/rand walking lights, the quantizer keyboard (Custom tap flips, preset tap refuses in words),
+the cable node under a real finger (silent insert, audible amp drag, inert audio offset,
+tap-remove, one undo), the mult strip, `vca` taking the lfo wire (the tremolo), `fold`'s bloom,
+the rms graph + the svf curve moving, and the round-4 chrome (solid events, dashed controls,
+6 px ports). Send back `test006-digest.log` + `logs\ui-digest.log`.
+
+---
+
+## Previous bundle — operator UI rounds 2026-10-01 (rev 3, the control-wire / junction-bus round)
+
+**Rev 3 was `sparq-update-2026-10-01.zip` (rounds 1+2+3 of 2026-10-01, overlay
 pack; NO patch base this rev — the sandbox lost its `.git` in a reset, so rev 3 is the file set,
 not a diff; revs 1–2 patches remain valid for trees at those states).** It stacks on
 `sync-wo014-inc7c.zip` (applied). Extract at the repo root, overwriting; the pack is

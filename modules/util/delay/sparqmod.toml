@@ -12,13 +12,22 @@
 # late (declared). With no transport feeding a tick, it falls back to the `time` ms parameter, so a
 # tempo-synced delay never collapses to zero. At the defaults (tempo-sync = 0) this is byte-for-byte
 # the increment-2 delay, which its golden pins.
+#
+# SYNC INPUT (0.3.0, operator round 4 2026-10-02, D14): an OPTIONAL `sync` event-in APPENDED
+# after the audio pair, whose indices 0/1 do not move (the append discipline the goldens pin).
+# A trigger or clock event on it DUMPS THE TAIL at that event's exact sample: both lines' stored
+# memory is cleared sample-accurately through the frame-walk (`stereo_tick_f`), so a synced
+# re-entry starts clean instead of bleeding the previous repeats. Gate-OFF events (value <= 0)
+# are ignored — the counting rule `mod/seq` and `mod/clk-div` already hold: only a rising
+# trigger dumps. With nothing wired to `sync` (the default) the delay is byte-for-byte the
+# 0.2.0 module, because the dump is driven entirely by events that are not there.
 
 [identity]
 id = "sparq/util/delay"
-version = "0.2.0"
+version = "0.3.0"
 host_api = { min = 1, max = 1 }
 display_name = "Delay"
-summary = "Tempo-syncable feedback delay with damping and dry/wet mix"
+summary = "Tempo-syncable feedback delay with damping, dry/wet mix and a tail-dump sync input"
 authors = ["sparq"]
 license = "MIT"
 
@@ -42,6 +51,16 @@ name = "Output"
 direction = "out"
 type = "audio"
 channel_set = "stereo"
+
+# 0.3.0 (round 4, D14) — APPENDED: a rising trigger/clock here dumps both lines' tails at the
+# event's sample. Optional: an unwired sync leaves the delay exactly the 0.2.0 module.
+[[ports]]
+id = "sync"
+name = "Sync"
+direction = "in"
+type = "event"
+event_kinds = ["trigger", "clock"]
+required = false
 
 [[params]]
 id = "time"

@@ -1,31 +1,96 @@
-sparq operator rounds 2026-10-01 - REV 3 FULL-TREE overlay pack (name-fixed reissue)
+sparq operator round 4 (2026-10-02) - REV 4 FULL-TREE overlay pack
 
-This pack carries the COMPLETE source tree at the state after operator rounds
-1-3 (commit f056f02 of the re-initialised sandbox repo). Rev 3 is a full tree,
-not a diff: the sandbox lost its .git in a reset, so no patch base survives for
-this rev. (Revs 1-2 patches remain valid for trees at those states.)
+This pack carries the COMPLETE source tree at the state after operator round 4
+(the 15-item list: cable nodes, the living wells, three new modules, the
+executor's adoption). Rev 4 is a full tree, not a diff - defect #94's remedy:
+the round-4 code was lost with the sandbox that wrote it (only
+ROUND4-HANDOFF.md reached git), so this pack depends on no base you might not
+have. It overlays any tree at git 871d725 or later.
+
+PROVENANCE, READ THIS FIRST
+  Round 4 was REBUILT from ROUND4-HANDOFF.md on a clean clone of 871d725
+  (Linux, rustc 1.99.0, single-job) and re-measured end to end. Three notes:
+  * defect #95 (PRE-EXISTING, stash-proven on the pristine clone): the ui::live
+    glide-lag test fails deterministically - the sine amp's 25 ms glide lags
+    the test's 4-block window. The ui-feature cell reads 28/1 until the
+    operator triage lands. NOT a round-4 regression.
+  * the mutation-stress hash on this box is 8143e1ddfd8fb261 (pristine vs
+    rebuilt identical, stash-proven). The handoff's 7bb06379bd6845e5 was the
+    lost sandbox's product and does not reproduce here.
+  * defect #96: the pack's modules/out/main/sparqmod.toml is a DECLARED
+    RECONSTRUCTION. The #93 trap (message boundaries drop directories named
+    out) re-struck the sealed tree, and this time no byte-exact copy survived
+    anywhere - repo private (404), no .git, and the checkpoint zips are
+    changed-file overlays that never carried it. Rebuilt from its generated
+    doc + the OutMain implementation and proven at both layers: module_docs
+    regeneration byte-matches docs/modules/out-main.md (24/24), and the real
+    Rust decoder validates all 24 manifests. The file's header declares the
+    reconstruction. The stamp's fp did NOT move (96f/2694477B - fingerprints
+    walk .rs files only); the manifest's own stamp row did (86608e10...,
+    4087 B; comments are the only difference from the sealed 3b0a619f...).
 
 HOW TO APPLY
-  1. Extract AT THE ROOT of your sparq workspace, overwriting. Excluded from the
-     pack: .git, target/, Cargo.lock, logs, *.wav - your copies of those win.
-  2. On the source machine:  python tools\sync_check.py --write --sync sync-ui-round-2026-10-01
-     (the stamp is deliberately not in the pack; test006's [00b] gate fails by
-     design until you re-stamp - its file list IS this round landing.)
-  3. Verify:  cargo fmt --all && cargo test --workspace &&
-              cargo run -p sparq-app --features ui -- ui --audit
-     Expected: 832 tests (+1 ignored), audit PASS 0 failures, selftest 9/9.
+  1. Extract AT THE ROOT of your sparq workspace, overwriting. Excluded from
+     the pack: .git, target/, Cargo.lock, logs/, *.wav, SYNC-STAMP.txt - your
+     copies of those win (Cargo.lock regenerates on first build).
+  2. On the machine that will own the tree:
+       python tools\sync_check.py --write --sync sparq-round4-2026-10-02
+     (the stamp deliberately does not ride in the pack - rev-3 pattern.
+     Until you re-stamp, build.bat / test006's [00b] name the mismatch in
+     words; that report is EXPECTED, not a failure.)
+  3. Verify:  scripts\gates.bat   (or by hand: cargo fmt --all --check &&
+     cargo test --workspace && cargo run -p sparq-app --features ui -- ui --audit)
+     Expected on the source box: 899 tests (+1 ignored), audit PASS 0 failures
+     with 59 [PASS] lines, selftest 9/9 ba577186c988db21, the three pinned
+     exec renders exact (mod-demo 1 s 1621e1f65b1b64e1, drum-demo 2 s
+     f2303f13aa0cf299, demo 2.8 s 53de3b1f3f40e3c9), modules --strict 24/24,
+     stamp 162 files src 96f/2694477B.
 
-WHAT'S IN ROUND 3 (on top of rounds 1-2)
-  * control wires: a cv drag reveals small blue dots beside every float setting
-    of the hovered module; dropping one modulates that parameter per block
-    (clamp(knob + cv * half-range), one block of latency) - executor param-mod plan
-  * util/vca (audio gain = knob + bipolar cv) and util/mult (six-dot junction
-    bus: role+type by first connection, one source, bridge-collapsed) - 21 modules
-  * trig seq wears sixteen step buttons (card strip + inspector 2x8 chips)
-  * scope accepts any audio/cv/event/data source; the trace wears the source's
-    class colour (an lfo on the scope draws control blue); audio outputs now
-    publish waveforms on the analysis ring; event/data bindings say NO WAVEFORM
-  * zoom ceiling 100% (token zoom_max 1.0)
-  * gates: tests/r3_controls.rs + headless smokes 51-52; analysis_pub re-pinned
-Docs: UI-CHANGES-PLAN.md (round 3 table), CHECKLIST.md / SYNC.md round paragraphs,
-docs/ui/gestures.md 3e/3f/3g, fresh shots in docs/ui/shots/.
+WHAT'S IN ROUND 4 (on top of rounds 1-3)
+  * CABLE NODES (D15): hover a wire - ghost dot at its midpoint; tap - insert
+    at identity (renders BIT-IDENTICAL: furniture you see, not sound you hear);
+    drag up/down = amp 0..2, left/right = offset -1..+1 (100 px per unit; on
+    AUDIO wires the horizontal axis is inert by rule - DC never enters the
+    audio path); tap the node - removed. One coalesced undo per drag. The
+    bridge's voice: audio -> invisible synthesised util/gain, cv ->
+    set_cv_trim, control -> param-mod args, mult-collapse composed affinely,
+    event/data/spatial REFUSED IN WORDS with the remedy. Vocabulary:
+    docs/ui/gestures.md 4f. Audit smoke 54 pins insert/edit/remove through the
+    real gesture door.
+  * THE EXECUTOR ADOPTS (D1): adopt_runtime - an unchanged node keeps its state
+    and allocations across a hotswap; adding a module while playing no longer
+    rebuilds the world. The command-ring fast path stays declared LATER behind
+    the bridge's TrimGainMap door.
+  * THE WELLS CAME ALIVE: the clock's four division rings (wrap-correct phase,
+    turning under PLAY, still at rest), the seq's walking lights, the rand
+    card's step bars (step_hash pinned in BOTH crates - same seed same bars),
+    the quantizer's 12-key keyboard (membership fill, passing-pitch light,
+    Custom-mode tap flips / preset tap refuses in words), the rms card's
+    240-frame rolling graph, the master's latched CLIP LED (red cap + CLIP
+    word, cleared by STOP), the svf's response curve moving under its
+    cutoff-mod cv, the mult strip at quarter width with its words off.
+  * THREE NEW MODULES: fx/fold (tri-fold waveshaper), util/quant (15 scales +
+    Custom mask), mod/rand (seeded random steps) - plus clk phase, seq step,
+    rms slew, delay sync: the first-party set is 24, module_docs 24/24.
+  * TOKENS BY RULING: event cables SOLID (D9; control wires stay dashed - a
+    different encoding; mockup-review findings 25-26) and ports float 6 px
+    (D10).
+
+THE ASK - OPERATOR'S EYES AND EARS (test006.bat steps L-U on SATURN)
+  the clip LED on a genuinely hot render; the clock wheel turning under PLAY;
+  the seq/rand walking lights; the quantizer keyboard (Custom tap flips,
+  preset tap refuses); the cable node under a real finger (silent insert,
+  audible amp drag, inert audio offset, tap-remove, one undo); the mult strip;
+  vca taking the lfo wire (the tremolo); fold's bloom above zero; the rms
+  graph rolling and the svf curve moving; the round-4 chrome (solid events,
+  dashed controls, 6 px ports). Send back test006-digest.log + logs\ui-digest.log.
+
+ONE DECLARED OWED BUILD PIECE
+  the dropdown picker (item 11's inspector list-picker over the 15 quant scale
+  names): the name table exists (QUANT_SCALES), the widget awaits an operator
+  go. Named in UI-CHANGES-PLAN.md's round-4 sheet and CHECKLIST.md.
+
+Docs: UI-CHANGES-PLAN.md (round-4 sheet), CHECKLIST.md / SYNC.md round-4
+paragraphs, ROUND4-HANDOFF.md (session record 0-0e), docs/ui/gestures.md
+4f + 6 + 7, design/mockups/mockup-review.md findings 25-26,
+RDP-PREP-RUN-SHEET.md 7b, scripts/test006.bat steps L-U.

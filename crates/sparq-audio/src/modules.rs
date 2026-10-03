@@ -62,6 +62,8 @@ pub const SVF_MANIFEST: &str = include_str!("../../../modules/flt/svf/sparqmod.t
 pub const DELAY_MANIFEST: &str = include_str!("../../../modules/util/delay/sparqmod.toml");
 /// The `fx/bitcrush` manifest — the on-disk file, compiled in.
 pub const BITCRUSH_MANIFEST: &str = include_str!("../../../modules/fx/bitcrush/sparqmod.toml");
+/// The `fx/fold` manifest — the triangular wavefolder (operator round 4 2026-10-02, D8).
+pub const FOLD_MANIFEST: &str = include_str!("../../../modules/fx/fold/sparqmod.toml");
 /// The `util/panner` manifest — the on-disk file, compiled in.
 pub const PANNER_MANIFEST: &str = include_str!("../../../modules/util/panner/sparqmod.toml");
 /// The `syn/membrane` manifest — the on-disk file, compiled in.
@@ -78,10 +80,14 @@ pub const CLK_DIV_MANIFEST: &str = include_str!("../../../modules/mod/clk-div/sp
 pub const CLK_MANIFEST: &str = include_str!("../../../modules/mod/clk/sparqmod.toml");
 /// The `mod/seq` manifest — the 3-16 step trigger sequencer (operator round 2026-10-01).
 pub const SEQ_MANIFEST: &str = include_str!("../../../modules/mod/seq/sparqmod.toml");
+/// The `mod/rand` manifest — the seeded random-step ring (operator round 4 2026-10-02, D12).
+pub const RAND_MANIFEST: &str = include_str!("../../../modules/mod/rand/sparqmod.toml");
 /// The `util/vca` manifest — the voltage-controlled amplifier (operator round 2026-10-01 r3).
 pub const VCA_MANIFEST: &str = include_str!("../../../modules/util/vca/sparqmod.toml");
 /// The `util/mult` manifest — the six-dot junction bus (operator round 2026-10-01 r3).
 pub const MULT_MANIFEST: &str = include_str!("../../../modules/util/mult/sparqmod.toml");
+/// The `util/quant` manifest — the note quantizer (operator round 4 2026-10-02, D11).
+pub const QUANT_MANIFEST: &str = include_str!("../../../modules/util/quant/sparqmod.toml");
 /// The `ana/tap` manifest — the on-disk file, compiled in.
 pub const TAP_MANIFEST: &str = include_str!("../../../modules/ana/tap/sparqmod.toml");
 /// The `dsp/scope` manifest — the on-disk file, compiled in.
@@ -334,14 +340,24 @@ pub fn create_gain() -> Box<dyn Module> {
 /// (`level`) — the v0 convention of riding in `output[0]` of an audio buffer the manifest never
 /// declared is gone, because a wire that says `cv` and a payload that travels as `audio` is a
 /// lie in two places. Peak following and the `data` port arrive in a later batch.
+///
+/// Operator round 4 (D13) made the follower STATEFUL and appended `slew` (param 1): a one-pole
+/// whose memory is the last published level. `slew` 0 — the default, and every pre-0.2 patch —
+/// takes the IDENTITY BRANCH: the raw block value, bit-exact, the goldens unmoved. Above 0 the
+/// publication lags toward the raw level, which is what the rolling graph draws honestly
+/// instead of a jittering trace. The state blob grew from empty to the 4-byte memory; an empty
+/// blob still restores (a pre-0.2 save lands with empty memory — restores must not fail).
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Rms;
+pub struct Rms {
+    /// The one-pole's held level (D13) — the memory the slew smooths from.
+    held: f32,
+}
 
 impl Rms {
-    /// A fresh follower.
+    /// A fresh follower with an empty memory.
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self { held: 0.0 }
     }
 }
 
@@ -350,8 +366,18 @@ impl Module for Rms {
         "sparq/ana/rms"
     }
 
-    fn configure(&mut self, _state: &[u8]) -> Result<(), ModuleError> {
-        Ok(()) // stateless: an empty blob is the whole state
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        // The empty blob is pre-0.2 history (the follower was stateless): accepted, memory
+        // starts empty — an old save restores instead of failing.
+        if state.is_empty() {
+            self.held = 0.0;
+            return Ok(());
+        }
+        let bytes: [u8; 4] = state.try_into().map_err(|_| {
+            ModuleError::State("sparq/ana/rms state is 4 bytes (the slew memory) or empty")
+        })?;
+        self.held = f32::from_le_bytes(bytes);
+        Ok(())
     }
 
     fn prepare(&mut self, _resources: &Resources) -> Result<(), ModuleError> {
@@ -359,7 +385,7 @@ impl Module for Rms {
     }
 
     fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
-        let level = if !ctx.has_input() {
+        let raw = if !ctx.has_input() {
             0.0
         } else {
             let mut sum = 0.0f64;
@@ -381,6 +407,13 @@ impl Module for Rms {
                 }
             }
         };
+        // The slew one-pole (D13): default 0 is the identity branch — the raw block value,
+        // bit-exact; above 0 the published level lags toward it. The memory follows the
+        // publication in BOTH modes, so turning slew on mid-stream starts from the level the
+        // wire is already carrying, not from a stale zero.
+        let slew = ctx.param(1).clamp(0.0, 1.0);
+        let level = if slew == 0.0 { raw } else { self.held + (raw - self.held) * (1.0 - slew) };
+        self.held = level;
         // The declared port carries the value; a host that did not present it (a module run
         // outside its manifest's shape — tests do this) gets the number nowhere, and the status
         // still tells the truth about the input.
@@ -995,8 +1028,9 @@ impl Module for Delay {
         // tempo/param block costs nothing. Beat-lock rides `set_tempo_sync` (the once-unreachable
         // DSP path); no transport falls back to the ms parameter so a synced delay never collapses.
         let secs =
-            if synced { f64::from(division) * 60.0 / bpm } else { f64::from(time_ms) / 1000.0 };
-        let key = (secs.clamp(0.0, 2.0) as f32, fb, damp, mix);
+            if synced { f64::from(division) * 60.0 / bpm } else { f64::from(time_ms) / 1000.0 }
+                .clamp(0.0, 2.0);
+        let key = (secs as f32, fb, damp, mix);
         if self.applied != key {
             for l in &mut self.lines {
                 if synced {
@@ -1010,7 +1044,36 @@ impl Module for Delay {
             }
             self.applied = key;
         }
-        stereo_tick(ctx, |c, v| self.lines[c].tick(v))
+        // The tail dump (operator round 4, D14): qualifying events on the appended `sync`
+        // input (value > 0 — gate-offs are ignored, the counting rule) clear both lines'
+        // stored memory AT THE EVENT'S EXACT SAMPLE, before that sample renders — the lfo's
+        // sample-accurate sync discipline, on the echo side. No events (the default, and
+        // every pre-0.3 patch): the old `stereo_tick` path runs UNTOUCHED, byte-for-byte the
+        // 0.2.0 module. The samples ride a fixed stack array — the audio path allocates
+        // nothing; a block somehow carrying more sync events than the host's own per-port cap
+        // drops the excess (a patching error, declared here rather than grown for).
+        let mut dumps = [0u32; sparq_module_api::event::EVENTS_PER_BLOCK];
+        let mut n_dumps = 0usize;
+        if let Some(evs) = ctx.events_in(0) {
+            for ev in evs {
+                if ev.value > 0.0 && n_dumps < dumps.len() {
+                    dumps[n_dumps] = ev.sample;
+                    n_dumps += 1;
+                }
+            }
+        }
+        if n_dumps == 0 {
+            return stereo_tick(ctx, |c, v| self.lines[c].tick(v));
+        }
+        let mut idx = [0usize; 2];
+        stereo_tick_f(ctx, |c, v, f| {
+            let c = c.min(1);
+            while idx[c] < n_dumps && dumps[idx[c]] as usize <= f {
+                self.lines[c].reset();
+                idx[c] += 1;
+            }
+            self.lines[c].tick(v)
+        })
     }
 
     fn message(&mut self, payload: &[u8]) -> Result<(), ModuleError> {
@@ -2165,6 +2228,18 @@ impl Module for Clock {
                 self.next[k] += interval;
             }
         }
+        // The phase publication (operator round 4, D4): the QUARTER grid's fractional position
+        // 0..1, read from the SAME counter the 4th fires on — wrap-correct, so the block whose
+        // edge just fired a downbeat publishes 0, never 1 (`(interval − until) % interval`;
+        // a tempo edit can leave `until` beyond the new interval, and the euclidean remainder
+        // wraps that too). Sink-gated like every publication: no port presented, nothing
+        // computed, nothing published — the tick lists above are untouched either way.
+        if let Some(mut cv) = ctx.cv_out(0) {
+            let interval = i128::from(Self::interval(self.rate, bpm, 1));
+            let until = i128::from(self.next[0].saturating_sub(base + frames));
+            let elapsed = (interval - until).rem_euclid(interval);
+            cv.set((elapsed as f64 / interval as f64) as f32);
+        }
         BlockStatus::Ok
     }
 
@@ -2242,6 +2317,14 @@ impl Module for TrigSeq {
             if (pattern >> step) & 1 == 1 {
                 sink.push(sparq_module_api::event::Event::trigger(ev.sample, 1.0));
             }
+        }
+        // The cursor publication (operator round 4, D5): the ring position AFTER this block's
+        // advances, as `cursor / steps` in 0..1 — the walking lights read `floor(pub × steps)`.
+        // Sink-gated by construction: this only runs when the event out is presented, so a seq
+        // with nowhere to publish neither advances nor publishes (the house rule) and the
+        // pattern bits stay the authoritative drawing.
+        if let Some(mut cv) = ctx.cv_out(0) {
+            cv.set((self.count % steps) as f32 / steps as f32);
         }
         BlockStatus::Ok
     }
@@ -2530,11 +2613,340 @@ pub fn create_out_main() -> Box<dyn Module> {
     Box::new(OutMain::new())
 }
 
+// ------------------------------------------------------- operator round 4 (2026-10-02) batch
+//
+// The three modules the round-4 rulings named: `fx/fold` (D8, the wavefolder), `util/quant`
+// (D11, the note quantizer with the Custom-mask keyboard) and `mod/rand` (D12, the seeded
+// random-step ring). Each manifest header states the exact semantics; the code below is that
+// statement made measurable — and the pure helpers (`fold_tri`, `snap_to_scale`, `step_hash`)
+// are public so the display side can MIRROR them under a pin, never re-derive them freely.
+
+// --------------------------------------------------------------------------- fx/fold
+
+/// The triangular fold (D8): folds `x` into −1..1 with period 4 — `|x| ≤ 1` passes, the
+/// overshoot reflects off the rail (the triangle's descending leg, `2 − y`). Continuous
+/// everywhere, odd-symmetric, fold points at the odd integers ±1, ±3, …
+#[must_use]
+pub fn fold_tri(x: f32) -> f32 {
+    let y = (x + 1.0).rem_euclid(4.0) - 1.0;
+    if y <= 1.0 {
+        y
+    } else {
+        2.0 - y
+    }
+}
+
+/// The wavefolder (operator round 4, D8): memoryless — `out = fold_tri(in × drive)` per
+/// sample per channel, `drive = 1 + 7 × amount` (amount 0..1 → drive 1..8, three and a half
+/// full folds at the ceiling). Amount 0 takes the IDENTITY BRANCH: a straight tick-for-tick
+/// copy, bit-exact — an untouched fold is a wire (the house rule for every "off").
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fold;
+
+impl Fold {
+    /// A fresh folder (memoryless — there is nothing to freshen, the constructor is the
+    /// factory's vocabulary).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Module for Fold {
+    fn id(&self) -> &str {
+        "sparq/fx/fold"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        if state.is_empty() {
+            return Ok(());
+        }
+        Err(ModuleError::State("sparq/fx/fold is memoryless — its state is empty"))
+    }
+
+    fn prepare(&mut self, _resources: &Resources) -> Result<(), ModuleError> {
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        if !ctx.has_input() {
+            for s in ctx.output().iter_mut() {
+                *s = 0.0;
+            }
+            return BlockStatus::Silenced;
+        }
+        let amount = ctx.param(0).clamp(0.0, 1.0);
+        if amount == 0.0 {
+            return stereo_tick(ctx, |_c, v| v); // the identity branch: bit-exact passthrough
+        }
+        let drive = 1.0 + 7.0 * amount;
+        stereo_tick(ctx, |_c, v| fold_tri(v * drive))
+    }
+
+    fn message(&mut self, _payload: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("sparq/fx/fold takes no messages"))
+    }
+}
+
+/// Factory for [`Fold`].
+#[must_use]
+pub fn create_fold() -> Box<dyn Module> {
+    Box::new(Fold::new())
+}
+
+// --------------------------------------------------------------------------- util/quant
+
+/// Semitones in the quantizer's pitch span (D11): `pitch` runs 0..1 across ten octaves. The
+/// display side mirrors this constant (`sparq-ui::canvas::inset::QUANT_PITCH_SEMITONES`), and
+/// both copies are pinned to 120 by their own gates — a drift would light the wrong key.
+pub const QUANT_PITCH_SEMITONES: f64 = 120.0;
+
+/// The standard fifteen scales (the operator's ruling: "quantizer scales = the standard 15"),
+/// in the order the manifest declares and the inspector dropdown lists: `(name, mask)` with
+/// the mask's bit `k` = semitone class `k`. `scale` param values 1..15 index this table;
+/// 0 is Custom (the node's own `custom-mask`). ONE copy: the module snaps with it, and the
+/// painter's keyboard shows membership from the same words.
+pub const QUANT_SCALES: [(&str, u32); 15] = [
+    ("Chromatic", 0xFFF),        // every class
+    ("Major", 0xAB5),            // Ionian: 0 2 4 5 7 9 11
+    ("Minor", 0x5AD),            // Aeolian: 0 2 3 5 7 8 10
+    ("Dorian", 0x6AD),           // 0 2 3 5 7 9 10
+    ("Phrygian", 0x5AB),         // 0 1 3 5 7 8 10
+    ("Lydian", 0xAD5),           // 0 2 4 6 7 9 11
+    ("Mixolydian", 0x6B5),       // 0 2 4 5 7 9 10
+    ("Locrian", 0x56B),          // 0 1 3 5 6 8 10
+    ("Harmonic Minor", 0x9AD),   // 0 2 3 5 7 8 11
+    ("Melodic Minor", 0xAAD),    // 0 2 3 5 7 9 11 (ascending)
+    ("Major Pentatonic", 0x295), // 0 2 4 7 9
+    ("Minor Pentatonic", 0x4A9), // 0 3 5 7 10
+    ("Blues", 0x4E9),            // 0 3 5 6 7 10
+    ("Whole Tone", 0x555),       // 0 2 4 6 8 10
+    ("Diminished", 0xB6D),       // whole-half: 0 2 3 5 6 8 9 11
+];
+
+/// Snap a continuous semitone value to the nearest semitone the `mask` allows (D11): class
+/// distance is measured circularly inside the octave and an exact tie resolves DOWN — the
+/// deterministic declared rule. An EMPTY mask returns the input unchanged: nothing to snap
+/// to, and silently snapping to a class the user turned off would be a lie. Candidates walk
+/// in ascending value order (octave below, own octave, octave above), so "first strictly
+/// nearer wins" IS "ties resolve down".
+#[must_use]
+pub fn snap_to_scale(semitone: f64, mask: u32) -> f64 {
+    if mask == 0 || !semitone.is_finite() {
+        return semitone;
+    }
+    let cls = semitone.rem_euclid(12.0);
+    let base = semitone - cls; // the input's own octave floor
+    let mut best: Option<(f64, f64)> = None; // (distance, candidate)
+    for octave in [-12.0, 0.0, 12.0] {
+        for c in 0..12u32 {
+            if mask & (1 << c) == 0 {
+                continue;
+            }
+            let cand = base + f64::from(c) + octave;
+            let d = (cand - semitone).abs();
+            if best.map_or(true, |(bd, _)| d < bd) {
+                best = Some((d, cand));
+            }
+        }
+    }
+    best.map_or(semitone, |(_, v)| v)
+}
+
+/// The note quantizer (operator round 4, D11): a pitch cv (0..1 across
+/// [`QUANT_PITCH_SEMITONES`] semitones) snaps to the Custom mask or the standard fifteen
+/// ([`QUANT_SCALES`]). The publication is the block's settled word; an OPTIONAL trigger input
+/// makes the block sample-and-hold instead — with at least one qualifying trigger (value > 0)
+/// the block publishes the quantized input AT THE LAST TRIGGER'S SAMPLE, otherwise it follows
+/// the input continuously. The latch is block-scoped v0 (a hold across silent blocks is state
+/// work, declared in the manifest, not faked). Stateless: the blob is empty.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Quant;
+
+impl Quant {
+    /// A fresh quantizer (stateless — the constructor is the factory's vocabulary).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Module for Quant {
+    fn id(&self) -> &str {
+        "sparq/util/quant"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        if state.is_empty() {
+            return Ok(());
+        }
+        Err(ModuleError::State("sparq/util/quant v0 state is empty"))
+    }
+
+    fn prepare(&mut self, _resources: &Resources) -> Result<(), ModuleError> {
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        // The block's input word (the vca's cv-in discipline): an audio-rate cv reads its
+        // LAST sample, a block-rate cv its single value, an unconnected port 0 — the
+        // optionality is the manifest's, never silence-by-accident.
+        let settled = ctx.cv_in(0).map_or(0.0, |v| {
+            v.audio().and_then(|sl| sl.last().copied()).or_else(|| v.block()).unwrap_or(0.0)
+        });
+        // The S&H latch (D11): the LAST qualifying trigger's sample wins the block's word.
+        let latched = ctx.events_in(0).and_then(|evs| {
+            evs.iter().rev().find(|e| e.value > 0.0).and_then(|e| {
+                ctx.cv_in(0).and_then(|v| {
+                    v.audio()
+                        .and_then(|sl| sl.get(e.sample as usize).or_else(|| sl.last()).copied())
+                        .or_else(|| v.block())
+                })
+            })
+        });
+        let p01 = latched.unwrap_or(settled).clamp(0.0, 1.0);
+        // The scale door: 0 = Custom (the node's mask), 1..15 = the standard fifteen.
+        let scale = (f64::from(ctx.param(0)).round() as i64).clamp(0, 15) as usize;
+        let mask = if scale == 0 {
+            (f64::from(ctx.param(1)).round() as i64).clamp(0, 4095) as u32
+        } else {
+            QUANT_SCALES[scale - 1].1
+        };
+        let semitone = f64::from(p01) * QUANT_PITCH_SEMITONES;
+        let snapped = snap_to_scale(semitone, mask).clamp(0.0, QUANT_PITCH_SEMITONES);
+        if let Some(mut cv) = ctx.cv_out(0) {
+            cv.set((snapped / QUANT_PITCH_SEMITONES) as f32);
+        }
+        BlockStatus::Ok
+    }
+
+    fn message(&mut self, _payload: &[u8]) -> Result<(), ModuleError> {
+        Err(ModuleError::Message("sparq/util/quant takes no messages"))
+    }
+}
+
+/// Factory for [`Quant`].
+#[must_use]
+pub fn create_quant() -> Box<dyn Module> {
+    Box::new(Quant::new())
+}
+
+// --------------------------------------------------------------------------- mod/rand
+
+/// The random-step ring's hash (D12): a PURE INTEGER splitmix32-family mixer (the lowbias32
+/// finalizer) over `seed ^ (i × 0x9E37_79B9)` — no float in the generation path, so the ring
+/// is the same numbers on every machine and every compiler. The seed-42 ring is PINNED by
+/// `tests/r4_new_modules.rs` and MIRRORED by the step-bars display under the same pin, so the
+/// bars can never drift from the module.
+#[must_use]
+pub fn step_hash(seed: u32, i: u32) -> u32 {
+    let mut z = seed ^ i.wrapping_mul(0x9e37_79b9);
+    z ^= z >> 16;
+    z = z.wrapping_mul(0x7feb_352d);
+    z ^= z >> 15;
+    z = z.wrapping_mul(0x846c_a68b);
+    z ^ (z >> 16)
+}
+
+/// One ring value in 0..1: the hash's TOP 24 BITS over 2²⁴ — the arithmetic the pinned
+/// seed-42 ring (`[…]/2²⁴`) states.
+#[must_use]
+pub fn step_value(seed: u32, i: u32) -> f32 {
+    (step_hash(seed, i) >> 8) as f32 / 16_777_216.0
+}
+
+/// The seeded random-step source (operator round 4, D12): a ring of `steps` values from
+/// [`step_hash`], walked by triggers. Every qualifying input trigger (value > 0 — the counting
+/// rule) advances the cursor by one, wrapping at `steps`, and the trigger out ECHOES it at the
+/// input event's sample. The cursor advances ONLY while the event out is presented (the seq's
+/// sink-gated rule: a module with nowhere to publish does not count). `value` publishes the
+/// ring value at the cursor AFTER this block's advances; `pos` publishes `cursor / steps` —
+/// the pair the step-bars display reads. State is the 8-byte cursor, so a restore resumes the
+/// walk mid-ring (the seq promise); same seed ⇒ same ring ⇒ same performance, always.
+#[derive(Clone, Copy, Debug)]
+pub struct RandStep {
+    count: u64,
+}
+
+impl RandStep {
+    /// A fresh ring at cursor 0.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { count: 0 }
+    }
+}
+
+impl Default for RandStep {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Module for RandStep {
+    fn id(&self) -> &str {
+        "sparq/mod/rand"
+    }
+
+    fn configure(&mut self, state: &[u8]) -> Result<(), ModuleError> {
+        let bytes: [u8; 8] = state
+            .try_into()
+            .map_err(|_| ModuleError::State("sparq/mod/rand state is exactly 8 bytes (cursor)"))?;
+        self.count = u64::from_le_bytes(bytes);
+        Ok(())
+    }
+
+    fn prepare(&mut self, _resources: &Resources) -> Result<(), ModuleError> {
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut AudioCtx<'_>) -> BlockStatus {
+        let events = ctx.events_in(0).unwrap_or(&[]);
+        let steps = (f64::from(ctx.param(0)).round() as i64).clamp(3, 16) as u64;
+        let seed = (f64::from(ctx.param(1)).round() as i64).clamp(0, 65_535) as u32;
+        let Some(mut sink) = ctx.take_event_out(0) else {
+            return BlockStatus::Ok; // sink-gated: no event out presented, no advance, no publish
+        };
+        for ev in events {
+            if ev.value <= 0.0 {
+                continue; // gate-offs do not draw a new value
+            }
+            self.count += 1;
+            sink.push(sparq_module_api::event::Event::trigger(ev.sample, 1.0));
+        }
+        // The publications ride the cursor AFTER the block's advances: the lit bar and the
+        // published value are the same step, always.
+        let cursor = self.count % steps;
+        if let Some(mut cv) = ctx.cv_out(0) {
+            cv.set(step_value(seed, cursor as u32));
+        }
+        if let Some(mut cv) = ctx.cv_out(1) {
+            cv.set(cursor as f32 / steps as f32);
+        }
+        BlockStatus::Ok
+    }
+
+    fn message(&mut self, payload: &[u8]) -> Result<(), ModuleError> {
+        if payload == b"reset" {
+            self.count = 0;
+            return Ok(());
+        }
+        Err(ModuleError::Message("sparq/mod/rand understands only `reset`"))
+    }
+}
+
+/// Factory for [`RandStep`].
+#[must_use]
+pub fn create_rand_step() -> Box<dyn Module> {
+    Box::new(RandStep::new())
+}
+
 // --------------------------------------------------------------------------- the table
 
 /// Every built-in: id → (manifest text, factory). The single place that knows the first-party
 /// set; discovery pairs these with on-disk manifests by id (§11 precedence: built-in wins).
-pub const BUILTINS: [(&str, &str, Factory); 21] = [
+/// Round 4 (2026-10-02) completes the operator's list at TWENTY-FOUR: fold, quant and rand
+/// join in their category slots.
+pub const BUILTINS: [(&str, &str, Factory); 24] = [
     ("sparq/syn/sine", SINE_MANIFEST, create_sine),
     ("sparq/syn/noise", NOISE_MANIFEST, create_noise),
     ("sparq/syn/polyblep", POLYBLEP_MANIFEST, create_polyblep),
@@ -2547,11 +2959,14 @@ pub const BUILTINS: [(&str, &str, Factory); 21] = [
     ("sparq/util/mixer", MIXER_MANIFEST, create_mixer),
     ("sparq/util/vca", VCA_MANIFEST, create_vca),
     ("sparq/util/mult", MULT_MANIFEST, create_mult),
+    ("sparq/util/quant", QUANT_MANIFEST, create_quant),
     ("sparq/mod/lfo", LFO_MANIFEST, create_lfo),
     ("sparq/mod/clk-div", CLK_DIV_MANIFEST, create_clk_div),
     ("sparq/mod/clk", CLK_MANIFEST, create_clock),
     ("sparq/mod/seq", SEQ_MANIFEST, create_trig_seq),
+    ("sparq/mod/rand", RAND_MANIFEST, create_rand_step),
     ("sparq/fx/bitcrush", BITCRUSH_MANIFEST, create_bitcrush),
+    ("sparq/fx/fold", FOLD_MANIFEST, create_fold),
     ("sparq/ana/rms", RMS_MANIFEST, create_rms),
     ("sparq/ana/tap", TAP_MANIFEST, create_tap),
     ("sparq/dsp/scope", SCOPE_MANIFEST, create_scope),

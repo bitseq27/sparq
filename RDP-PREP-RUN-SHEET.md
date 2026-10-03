@@ -159,6 +159,28 @@ the one mechanical claim. Rules for a compute-only pass:
 MSVC-vs-Linux note: goldens are bit-exact across platforms by design (that is the project's
 determinism claim); a hash that differs on SATURN but matches here is a device finding.
 
+### 7b. Round-4 state (filled on the source machine, Linux, clean clone of `871d725` + the rebuild)
+
+> Filled in by the round-4 source session (2026-10-02, Linux x86-64, clean clone of `871d725` —
+> the rev-3 codebase + round-4 docs — with ALL round-4 code rebuilt from `ROUND4-HANDOFF.md`,
+> rustc 1.99.0, single-job, the 1 GB-sandbox discipline). Unlike the rev-2/3 table above, this
+> session ran every gate that runs on Linux, release cells included; only the WASAPI/device cells
+> stay the machine's.
+
+| Gate | Source result (round-4 state, this box) |
+|---|---|
+| `sync_check` vs `SYNC-STAMP.txt` | **OK** — re-stamped `sparq-round4-2026-10-02`, 162 files, `src 96f/2694477B`; the pack carries no stamp (the device re-stamps after applying) |
+| `cargo fmt --all --check` | **CLEAN** |
+| `cargo clippy` — workspace, `ui`, `bootstrap-audio` cells, `--all-targets -D warnings` | **0 diagnostics** (the `ui-window` cell stays device-only) |
+| `cargo test --workspace` | **899 passed / 0 failed / 1 ignored** (the ignored one is `sparq-kernel/src/alloc.rs`'s doc test — the known "+1 ignored") |
+| `cargo test -p sparq-app --features ui` | **28 passed / 1 failed** — the 1 is **defect #95**, PRE-EXISTING on the pristine clone (stash-proven): the `ui::live` glide-lag test; operator triage owed |
+| python gates (token_gen --check, token_audit, unsafe_audit, module_docs --check, check_text_io) | **ALL PASS** — token_gen writes 0; audit clean; unsafe clean; module_docs **24/24**; text-io clean |
+| goldens: `sparq selftest --golden` | **9/9, `ba577186c988db21`** — the DSP never moved (ran on THIS box, release build) |
+| the three pinned exec renders | **EXACT** — `mod-demo` 1 s `1621e1f65b1b64e1`, `drum-demo` 2 s `f2303f13aa0cf299`, `demo` 2.8 s `53de3b1f3f40e3c9` |
+| `sparq ui --audit` | **PASS, 0 failures — 59 [PASS] lines** (58 carried + smoke 54, the cable-node render hashes) |
+| `sparq modules --strict` | **24/24** |
+| mutation-stress hash | **`8143e1ddfd8fb261`** on this box — pristine-vs-rebuilt identical (stash-proven); the handoff's `7bb06379bd6845e5` was the lost sandbox's product and does not reproduce here |
+
 ## 8. Send-back package (one folder, digests only)
 
 ```

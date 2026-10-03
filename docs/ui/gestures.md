@@ -136,7 +136,8 @@ that end:
 
 ## 3c. Ports float beside the window; covered is untouchable (operator ruling 2026-10-01)
 
-Connection points are drawn **4 px outside the card edge** (`canvas.node_port_offset`) — inputs
+Connection points are drawn **6 px outside the card edge** (`canvas.node_port_offset`; widened
+from 4 in operator round 4, D10 — a port must read as its own furniture at arm's length) — inputs
 left of the body, outputs right — so a port is never half-buried in the window it belongs to, and
 a wire visibly lands *beside* the card. The flip side of floating ports is that one card can sit
 on another card's ports, so the hit-test carries the drawing order's own rule: **nodes draw in
@@ -341,6 +342,45 @@ IN/OUT master strip is **gone** with the same ruling — the master's meters liv
 own card (its well), and the driver truth lives beside them; a strip of bars floating over the
 canvas was chrome pretending to be a reading.
 
+## 4f. The cable node (operator round 4, D15)
+
+A wire is itself an edit surface. Every wire carries an optional **trim** (`WireTrim { amp,
+offset }` in the model, `Op::SetTrim` in the ledger — one row per change, structural: a live
+engine re-stages at the block boundary, D1's rule, the command ring does not carry it).
+
+* **Hover / light press over a clean wire** shows the painter's **ghost dot** at the arc
+  midpoint; its capture is the same 24 px zoom-invariant ring as a port's.
+* **Tap the ghost → insert** at identity (`amp = 1`, `offset = 0`). The bridge synthesises and
+  calls nothing for an identity trim, so the render stays **bit-identical** — the node is
+  furniture you see, not sound you hear (audit smoke 54 pins all three legs: insert, edit,
+  removal). The insert's log note teaches the vocabulary the handle's tap relies on.
+* **Drag the node**: up/down = amp (0…2), left/right = offset (−1…+1), 100 px per unit on both
+  axes — the raw delta accumulates, the axes ARE the scaling. On an **audio** wire the
+  horizontal axis is **inert by rule**: DC never enters the audio path (the offset is never
+  read, not merely clamped). Every update coalesces into **one history entry keeping the
+  drag's original `from`**: one three-finger tap undoes the whole drag back to the value the
+  finger found, not its first waypoint.
+* **Tap the node → remove**: the same `SetTrim` op to `None`, one undo step, wire clean again.
+* **Hit rank** (Full/Simplified LOD): port > cable-node handle > wire-end grab > card body >
+  wire. The handle outranks the re-patch grabs because it is DRAWN furniture while the grabs
+  are invisible until you know them; it obeys the same visibility discipline — never under a
+  card body, never at Dot LOD (nothing of the wire draws to scale there). Only a wire that
+  already CARRIES a trim offers the handle; the clean wire's insert door is the wire tap.
+* **The voice is the bridge's** (build-time, verdicts in words): an audio trim becomes an
+  invisible synthesised `util/gain`; a cv trim rides the executor's own `set_cv_trim` door
+  after the build; a control (param-mod) trim composes into the mod formula (identity =
+  `(1.0, 0.0)`); a `util/mult` collapse composes its feed's and copy's trims affinely into ONE
+  trim per collapsed chain. **Event and data wires refuse in words** (a trigger's word is its
+  sample, a data stream's its payload — no amplitude to trim) and **spatial refuses in words**
+  (no per-set gain module exists yet); the refusal surfaces in the shell log with the remedy
+  (tap the node to remove it), never as a silent no-op.
+
+The quantizer's **keyboard well** (round 4, D11) is the other new touch surface: twelve equal
+key cells on the `util/quant` card, a tap flips scale membership — but only in **Custom** mode;
+under a preset scale the tap refuses in words and names the remedy (switch the scale param to
+Custom first). The membership fill, the passing-pitch light and the key taps all read the same
+`custom-mask` the module reads: the display is the module.
+
 ## 5. Level of detail, snapping, and the audit
 
 - **LOD** (from `camera.zoom`, tokens `lod_*`): **Full** ≥ 0.6 — header text, port labels (name +
@@ -369,7 +409,7 @@ by colour alone:
 |---|---|---|---|
 | audio | amber | solid, signal width | **A** |
 | cv | cyan | solid, thin | **C** |
-| event | magenta | dashed 6-3 | **E** |
+| event | magenta | solid, signal width (round 4, D9 — event cables are solid; the control-wire dash below is a different encoding and stays) | **E** |
 | data | green | dotted 2-4 | **D** |
 | spatial (audio + spatial set) | violet | double stroke | **S** |
 | gpu / atom | neutral text | solid thin | — |
@@ -398,3 +438,17 @@ the inspector scroll under real two fingers (and the camera staying put behind i
 against `design-mode.svg` — Simplified shows no text with the flag patterns readable, Dot shows
 hairline wires and shape-encoded dots; and a cv wire (`rms.level → svf.cutoff-mod`) lighting from
 its own published value after RENDER WAV while the rms node's folded audio meter stays at rest.
+
+**Round 4 added to this list** (`test006.bat` steps L–U): the clip LED on a genuinely hot render
+(red cap + the CLIP word on the master's info band, latched while playing, cleared by STOP); the
+clock's four division rings turning under PLAY and standing still at rest; the seq's walking
+lights (the cursor cell over the pattern fill) and the rand card's step bars with the cursor bar
+lit — same seed, same bars, the display is the module; the quantizer keyboard lit from its own
+mask, a Custom-mode tap flipping a key, a preset-scale tap refusing in words; the cable node
+under a real finger — hover ghost, tap-insert (silent: identity renders bit-identical), drag to
+hear the amp, the audio wire's inert horizontal axis, tap-to-remove, one undo per gesture; the
+`util/mult` strip at its quarter width with the centred dot column; `util/vca` accepting the lfo
+wire and the tremolo it makes; `fx/fold` blooming above zero and acting as a wire at zero; the
+rms card's rolling level graph beside its floor bar; and the round-4 chrome — event cables solid
+magenta (D9; control wires stay dashed cyan, a different encoding), ports floating 6 px beside
+the card edge (D10), and the svf's response curve moving under its cutoff-mod cv.

@@ -217,7 +217,7 @@ fn a_control_wire_modulates_the_parameter_every_block() {
     )
     .unwrap();
     // the control connection: lfo cv out (port 0) → gain param 0, range 0..2
-    ex.add_param_mod(gain, 0, lfo, 1, 0.0, 2.0).unwrap(); // port 1 = the lfo's cv out
+    ex.add_param_mod(gain, 0, lfo, 1, 0.0, 2.0, 1.0, 0.0).unwrap(); // port 1 = the lfo's cv out; identity trim
     let mut out = vec![0.0f32; FRAMES * 2];
     let mut peak_mod = 0.0f32;
     for _ in 0..200 {
@@ -419,4 +419,66 @@ fn the_step_buttons_toggle_their_bits_through_the_param_door() {
     let il = inspector::compute(g.node(seq).unwrap(), panel);
     let row = il.rows.iter().find(|r| !r.steps.is_empty()).expect("the pattern row wears chips");
     assert_eq!(row.steps.len(), 16);
+}
+
+#[test]
+fn a_control_wires_trim_rides_the_modulation_formula() {
+    // Operator round 4, D15 — the control side of the cable node: the latched cv word is
+    // trimmed BEFORE the r3 additive modulation, so the effective value per block is
+    // `clamp(base + (scalar × scale + offset) × depth, lo, hi)`. Three renders of the same
+    // patch — unmodulated, identity-modulated, trimmed-modulated (scale 0.5, offset 0.25) —
+    // and the peaks must ORDER: the trim shrinks the swing and raises the floor, audibly,
+    // inside the same clamp (ratios and orderings, not absolutes: the gain glide lags the
+    // 4 Hz lfo, the trap the round-4 handoff named).
+    let reg = registry();
+    let build = |id: &str, params: &[f32]| {
+        let r = reg.get(id).unwrap();
+        NodeBuild {
+            module: r.create(),
+            manifest: r.manifest().clone(),
+            params: sparq_module_api::params::ParamSet::new(1, params).unwrap(),
+        }
+    };
+    let world = |trim: Option<(f32, f32)>| -> f32 {
+        let mut g = sparq_kernel::graph::Graph::new();
+        let sine = g.add_node(0);
+        let gain = g.add_node(0);
+        let lfo = g.add_node(0);
+        g.connect(
+            sparq_kernel::graph::PortRef::new(sine, 0),
+            sparq_kernel::graph::PortRef::new(gain, 0),
+            sparq_kernel::graph::EdgeKind::Plain,
+        )
+        .unwrap();
+        let mut ex = Executor::build(
+            g,
+            vec![
+                (sine, build("sparq/syn/sine", &[440.0, 0.5])),
+                (gain, build("sparq/util/gain", &[1.0])),
+                (lfo, build("sparq/mod/lfo", &[4.0, 0.0, 1.0, 0.0, 0.0])),
+            ],
+            ExecConfig::new(RATE, FRAMES, 2),
+        )
+        .unwrap();
+        if let Some((scale, offset)) = trim {
+            ex.add_param_mod(gain, 0, lfo, 1, 0.0, 2.0, scale, offset).unwrap();
+        }
+        let mut out = vec![0.0f32; FRAMES * 2];
+        let mut peak = 0.0f32;
+        for _ in 0..400 {
+            ex.render_block(gain, &mut out).unwrap();
+            peak = peak.max(out.iter().fold(0.0f32, |a, &s| a.max(s.abs())));
+        }
+        peak
+    };
+    let unmod = world(None); // gain 1.0 → peak ≈ 0.5
+    let identity = world(Some((1.0, 0.0))); // base 1 + cv × 1 → peak ≈ 1.0 at the lfo crest
+    let trimmed = world(Some((0.5, 0.25))); // base 1 + (0.5 cv + 0.25) → crest ≈ 0.875
+    assert!((unmod - 0.5).abs() < 0.02, "the unmodulated anchor: {unmod}");
+    assert!(identity > trimmed, "the trim shrinks the swing: {identity} vs {trimmed}");
+    assert!(
+        trimmed > unmod,
+        "…and its raised floor still modulates above the bare knob: {trimmed}"
+    );
+    assert!((trimmed - 0.875).abs() < 0.05, "the crest lands where the formula says: {trimmed}");
 }

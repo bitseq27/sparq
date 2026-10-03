@@ -20,13 +20,20 @@
 #
 # v0 limits, declared: no transport sync, no swing, no start/stop gate — the clock runs from
 # the first block and says so.
+#
+# PHASE (0.2.0, operator round 4 2026-10-02, D4): a block-rate unipolar `phase` cv-out
+# APPENDED after the four trigger outs — their event indices do not move (the append discipline
+# the goldens and the tick lists pin). The value is the QUARTER grid's fractional position
+# 0..1, read from the SAME counter the 4th ticks fire on, wrap-correct: the block whose edge
+# fires a downbeat publishes 0, never 1 (`(interval - until) % interval`). The clock-wheel
+# well turns on it — at rest the wheel is static at phase 0, the declared at-rest rule.
 
 [identity]
 id = "sparq/mod/clk"
-version = "0.1.0"
+version = "0.2.0"
 host_api = { min = 1, max = 1 }
 display_name = "Clock"
-summary = "Free-running tempo clock: trigger outs at 4ths, 8ths, 16ths and 32nds"
+summary = "Free-running tempo clock: trigger outs at 4ths, 8ths, 16ths and 32nds, plus quarter phase"
 authors = ["sparq"]
 license = "MIT"
 
@@ -64,6 +71,16 @@ name = "Thirty-second"
 direction = "out"
 type = "event"
 event_kinds = ["trigger", "clock"]
+
+# 0.2.0 (round 4, D4) — APPENDED: the quarter grid's fractional position, 0..1, block rate,
+# from the same counter the 4th ticks fire on. The clock-wheel well reads it.
+[[ports]]
+id = "phase"
+name = "Phase"
+direction = "out"
+type = "cv"
+rate = "block"
+range = "unipolar"
 
 [[params]]
 id = "bpm"

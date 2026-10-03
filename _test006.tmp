@@ -1,6 +1,6 @@
 sparq exec · WO-008 executor render · patch `demo`
-  registry    21 built-in module(s) compiled in
-  discovery   21 manifest(s) scanned under `modules` · 21 shadowed by built-ins · 0 without a factory
+  registry    24 built-in module(s) compiled in
+  discovery   24 manifest(s) scanned under `modules` · 24 shadowed by built-ins · 0 without a factory
   patch       sine(440 Hz, 0.5) → gain(0.5) → master · rms analysis tap · 3 node(s), 2 edge(s)
   budget      1796 bytes of audio buffers, all pre-allocated
   meters      rms tap value Some(0.16621882) (0.25 amp sine, 0.59-cycle window → ≈ 0.16..0.19) · master peak Some(0.24996915) rms Some(0.16621882)

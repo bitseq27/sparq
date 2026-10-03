@@ -18,10 +18,17 @@
 # v0 limits, declared: one pattern, no per-step velocity (the output trigger is intensity 1),
 # no chain input — longer sequences are several sequencers on divided clocks, which is what
 # mod/clk-div is for.
+#
+# STEP CURSOR (0.2.0, operator round 4 2026-10-02, D5): a block-rate unipolar `step` cv-out
+# APPENDED after the trigger out — the clk/trig indices 0/1 do not move (the append discipline
+# the goldens and the tick lists pin). It publishes the ring cursor the walking lights read:
+# `cursor / steps`, 0..1, the same counter the pattern bit is taken from. The cursor still
+# advances ONLY when the event out is presented (sink-gated — the house rule that a module
+# with nowhere to publish does not count), so the publication changes no timing.
 
 [identity]
 id = "sparq/mod/seq"
-version = "0.1.0"
+version = "0.2.0"
 host_api = { min = 1, max = 1 }
 display_name = "Trig Seq"
 summary = "3-16 step trigger sequencer: a clock walks the ring, the pattern mask fires steps"
@@ -49,6 +56,16 @@ name = "Trig Out"
 direction = "out"
 type = "event"
 event_kinds = ["trigger"]
+
+# 0.2.0 (round 4, D5) — APPENDED: the ring cursor as a block-rate unipolar cv (cursor/steps,
+# 0..1). The step-button painter walks its lights on it; the pattern bits stay the authority.
+[[ports]]
+id = "step"
+name = "Step"
+direction = "out"
+type = "cv"
+rate = "block"
+range = "unipolar"
 
 [[params]]
 id = "steps"

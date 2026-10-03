@@ -58,7 +58,10 @@ label       = "C"
 colour      = "#FF5FA2"          # magenta — events: MIDI/UMP, OSC, triggers, gates, notes
 dim         = "#7A2C4E"
 glow        = "#FFA9CD"
-encoding    = "dashed-6-3"       # dashed line, 2px
+encoding    = "solid-stroke"     # continuous line, 2px (round-4 D9: event CABLES are solid —
+                                 # a patch you perform on reads at a glance, and colour+letter
+                                 # carry the class; the control-wire dash of gestures §4c is a
+                                 # DIFFERENT encoding (a modulation overlay, not a cable) and stays)
 label       = "E"
 
 [signal.data]

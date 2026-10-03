@@ -4,11 +4,11 @@
 > regenerate with `python3 tools/module_docs.py`; CI fails on a stale doc (`--check`).
 
 
-*Tempo-syncable feedback delay with damping and dry/wet mix*
+*Tempo-syncable feedback delay with damping, dry/wet mix and a tail-dump sync input*
 
 | | |
 |---|---|
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Host API | 1…1 |
 | Category | utility/delay |
 | Kind / tier / stability | processor · t1 · stable |
@@ -21,6 +21,7 @@
 |---|---|---|---|---|---|---|---|
 | `in` | Input | in | audio | channel set: stereo | — | — | 0 |
 | `out` | Output | out | audio | channel set: stereo | — | — | 0 |
+| `sync` | Sync | in | event | — | no | — | 0 |
 
 ## Parameters
 

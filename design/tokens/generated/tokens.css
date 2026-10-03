@@ -29,7 +29,7 @@
   --sparq-color-signal-event-colour: #FF5FA2;
   --sparq-color-signal-event-dim: #7A2C4E;
   --sparq-color-signal-event-glow: #FFA9CD;
-  --sparq-color-signal-event-encoding: dashed-6-3;
+  --sparq-color-signal-event-encoding: solid-stroke;
   --sparq-color-signal-event-label: E;
   --sparq-color-signal-data-colour: #8BE36A;
   --sparq-color-signal-data-dim: #3F6A2F;
@@ -214,7 +214,7 @@
   --sparq-layout-canvas-node-well-height: 48;
   --sparq-layout-canvas-node-well-height-scope: 160;
   --sparq-layout-canvas-node-info-height: 40;
-  --sparq-layout-canvas-node-port-offset: 4;
+  --sparq-layout-canvas-node-port-offset: 6;
   --sparq-layout-canvas-node-radius: 2;
   --sparq-layout-canvas-zoom-min: 0.25;
   --sparq-layout-canvas-zoom-max: 1.0;

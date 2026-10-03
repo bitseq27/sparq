@@ -21,7 +21,7 @@ use sparq_ui::canvas::connect::{self, ConnectContext, Preview};
 use sparq_ui::canvas::inset::{self, Well};
 use sparq_ui::canvas::interact::{CanvasState, Interaction};
 use sparq_ui::canvas::layout::{CanvasLayout, NodeLayout, SignalClass, WireEndSide};
-use sparq_ui::canvas::levels::LiveMeters;
+use sparq_ui::canvas::levels::{LevelHistories, LiveMeters};
 use sparq_ui::canvas::model::{Graph, Node, NodeId};
 use sparq_ui::canvas::response::{self, Curves};
 use sparq_ui::canvas::scope::{self, ScopeTraces, ScopeView};
@@ -37,6 +37,11 @@ const FLAG_TINT_ALPHA: f32 = 0.12;
 /// Paint the whole canvas for one frame. `view` is the canvas rect (screen px); `audit` collects
 /// the touch targets the layout audit measures. `main_info` is the live session's driver truth
 /// for the permanent Main Out card's info band (operator ruling 2026-10-01) — `None` at rest.
+/// `hists` are the display-side rolling level histories (operator round 4, D13 — the shell
+/// pushes them per live frame; empty at rest, so the graph wells sit empty, never faked).
+/// `pointer` is the shell's last contact position (mouse hover counts — pointer.rs's rule):
+/// the cable node's hover ghost reads it, and nothing else may (a touch-first canvas has no
+/// hover-DEPENDENT gesture — the ghost only SHOWS the tap-insert door the hit-test already has).
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     p: &Painter,
@@ -49,11 +54,13 @@ pub fn draw(
     traces: &ScopeTraces,
     meters: &LiveMeters,
     curves: &Curves,
+    hists: &LevelHistories,
     main_info: Option<&[String; 2]>,
+    pointer: Option<Vec2>,
     audit: &mut Vec<InteractiveElement>,
 ) {
     draw_grid(p, pal, canvas, view);
-    draw_wires(p, pal, graph, canvas, layout);
+    draw_wires(p, pal, graph, canvas, layout, pointer);
     draw_pending_wire(p, pal, graph, canvas, layout, ctx);
     draw_repatch(p, pal, graph, canvas, layout, ctx);
     // The resolved master (explicit or the documented default rule) wears a MASTER badge: the
@@ -65,8 +72,8 @@ pub fn draw(
     // and clears the frame the wire lands.
     let missing = graph.missing_required_inputs();
     draw_nodes(
-        p, pal, graph, canvas, layout, master_id, traces, meters, curves, &missing, main_info,
-        audit,
+        p, pal, graph, canvas, layout, master_id, traces, meters, curves, hists, &missing,
+        main_info, audit,
     );
     draw_marquee(p, pal, canvas);
     draw_menu(p, pal, canvas, view, audit);
@@ -321,6 +328,7 @@ fn draw_wires(
     graph: &Graph,
     canvas: &CanvasState,
     layout: &CanvasLayout,
+    pointer: Option<Vec2>,
 ) {
     // Live wire levels (WO-013 increment 4): when the bridge has supplied meter-driven levels, a
     // wire carrying signal brightens from its class colour toward its class glow and grows a soft
@@ -416,6 +424,38 @@ fn draw_wires(
             let tick = pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32);
             p.circle_stroke(pos(w.grab_from), r, tick);
             p.circle_stroke(pos(w.grab_to), r, tick);
+
+            // The cable node (operator round 4, D15): the trim handle at the wire's arc
+            // midpoint — a filled dot at rest at capture × 0.25 (the shrink the operator
+            // named), grown to × 0.5 under the pointer or mid-drag, its amp read as the inner
+            // level disc (half-full at identity, full at the 2.0 rail). A CLEAN wire shows the
+            // hover GHOST at the same point and the same capture radius the tap-insert door
+            // uses — the drawing and the gesture read one geometry, so what you can touch is
+            // what you see, and what you cannot see (no pointer near) draws nothing.
+            let cap = LAYOUT_TOUCH_PORT_CAPTURE_RADIUS as f32;
+            let near = pointer.is_some_and(|pp| pp.distance(w.trim_point) <= cap);
+            if let Some(t) = w.trim {
+                let dragging =
+                    matches!(&canvas.interaction, Interaction::Trim { wire, .. } if *wire == w.id);
+                let r = cap * if dragging || near { 0.5 } else { 0.25 };
+                let c = pos(w.trim_point);
+                p.circle_filled(c, r, class_colour(w.class, pal));
+                p.circle_stroke(
+                    c,
+                    r,
+                    pal.hairline(pal.hairline_strong, (LAYOUT_STROKE_HAIRLINE as f32).max(0.5)),
+                );
+                let amp_r = r * (t.amp.clamp(0.0, 2.0) / 2.0);
+                if amp_r > 0.5 {
+                    p.circle_filled(c, amp_r, class_glow(w.class, pal));
+                }
+            } else if near {
+                p.circle_stroke(
+                    pos(w.trim_point),
+                    cap * 0.25,
+                    pal.hairline(pal.hairline_regular, (LAYOUT_STROKE_HAIRLINE as f32).max(0.5)),
+                );
+            }
         }
     }
 }
@@ -556,6 +596,7 @@ fn draw_nodes(
     traces: &ScopeTraces,
     meters: &LiveMeters,
     curves: &Curves,
+    hists: &LevelHistories,
     missing: &[(NodeId, usize)],
     main_info: Option<&[String; 2]>,
     audit: &mut Vec<InteractiveElement>,
@@ -569,12 +610,12 @@ fn draw_nodes(
         match layout.lod {
             Lod::Dot => draw_node_dot(p, pal, node, nl, selected, is_master, flagged, z),
             Lod::Simplified => draw_node_box(
-                p, pal, graph, node, nl, selected, is_master, false, traces, meters, curves,
-                flagged, main_info, z, audit,
+                p, pal, graph, canvas, node, nl, selected, is_master, false, traces, meters,
+                curves, hists, flagged, main_info, z, audit,
             ),
             Lod::Full => draw_node_box(
-                p, pal, graph, node, nl, selected, is_master, true, traces, meters, curves,
-                flagged, main_info, z, audit,
+                p, pal, graph, canvas, node, nl, selected, is_master, true, traces, meters, curves,
+                hists, flagged, main_info, z, audit,
             ),
         }
     }
@@ -811,6 +852,7 @@ fn draw_node_box(
     p: &Painter,
     pal: &Palette,
     graph: &Graph,
+    canvas: &CanvasState,
     node: &Node,
     nl: &NodeLayout,
     selected: bool,
@@ -819,6 +861,7 @@ fn draw_node_box(
     traces: &ScopeTraces,
     meters: &LiveMeters,
     curves: &Curves,
+    hists: &LevelHistories,
     flagged: bool,
     main_info: Option<&[String; 2]>,
     z: f32,
@@ -829,6 +872,9 @@ fn draw_node_box(
     // camera; touch targets and the selection frame stay screen-sized, because a finger and
     // a "which node am I editing" cue do not shrink.
     let hair = |a: f32| pal.hairline(a, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5));
+    // The junction bus wears no WORDS (operator round 4, D6): the dots wear their role, and a
+    // name/category/label stack on a 60 px strip would be chrome around nothing.
+    let is_mult = node.spec.module_id == sparq_ui::canvas::MULT_ID;
     let body = egui_rect(nl.screen);
     let corner = LAYOUT_CANVAS_NODE_RADIUS as u8;
     let dimmed = node.flags.bypassed || node.flags.muted;
@@ -893,7 +939,7 @@ fn draw_node_box(
     p.rect_filled(header, corner, pal.ground_panel_alt);
     p.line_segment([header.left_bottom(), header.right_bottom()], hair(pal.hairline_faint));
 
-    if full {
+    if full && !is_mult {
         p.text(
             header.left_center() + egui::vec2(LAYOUT_SPACE_2 as f32 * z, 0.0),
             Align2::LEFT_CENTER,
@@ -918,7 +964,7 @@ fn draw_node_box(
     // The header's right side (increment 6, PN's anatomy): the category word and the node id,
     // dim — what the card is and which instance of it, before any state word competes.
     let mut cat_w = 0.0f32;
-    if full {
+    if full && !is_mult {
         let top = node.spec.module_id.split('/').nth(1).unwrap_or("");
         let cat = format!("{top} · {}", nl.id);
         cat_w = cat.len() as f32 * LAYOUT_SPACE_2 as f32 * z;
@@ -1019,6 +1065,36 @@ fn draw_node_box(
                         );
                     }
                 }
+                // The walking light (operator round 4, D5): the cursor cell — read from the
+                // module's OWN `step` publication (`floor(pub × steps)`, never a display-side
+                // counter) — wears the EVENT accent ring. The pattern bits stay the
+                // authoritative fill; the cursor is a reading over them, and at rest (no
+                // session, no publication) no cell is lit: nothing is faked.
+                let steps_val = node
+                    .spec
+                    .params
+                    .iter()
+                    .position(|d| d.id == "steps")
+                    .and_then(|i| node.param_value(i))
+                    .unwrap_or(8.0)
+                    .round()
+                    .clamp(3.0, 16.0) as usize;
+                if let Some(ci) = inset::nth_cv_out(&node.spec, 0)
+                    .and_then(|pt| canvas.levels.port(nl.id, pt))
+                    .map(|pub01| ((pub01 * steps_val as f32).floor() as usize).min(15))
+                {
+                    if let Some(cell) = nl.step_cells.get(ci) {
+                        p.rect_stroke(
+                            egui_rect(*cell),
+                            LAYOUT_CORNER_MICRO as u8,
+                            Stroke::new(
+                                (LAYOUT_STROKE_EMPHASIS as f32 * z).max(1.0),
+                                class_colour(SignalClass::Event, pal),
+                            ),
+                            StrokeKind::Middle,
+                        );
+                    }
+                }
                 let _ = (tr, mid_y);
             } else if sparq_ui::canvas::inspector::is_choice(desc) {
                 draw_choices(p, pal, tr, desc, value, col, z);
@@ -1065,6 +1141,14 @@ fn draw_node_box(
         Some(Well::Envelope) => draw_envelope_well(p, pal, node, nl, z),
         Some(Well::Sparkline) => draw_sparkline_well(p, pal, node, nl, z),
         Some(Well::Curve) => draw_curve_well(p, pal, node, nl, curves, z),
+        // The round-4 wells (operator rulings 2026-10-02): each draws a PUBLISHED value (the
+        // level set the session drains) or a DECLARED param-derived shape — the compute-then-
+        // draw rule the whole file holds: nothing here invents motion, and at rest every one
+        // of them sits at its declared at-rest shape, never a frozen lie.
+        Some(Well::ClockWheel) => draw_clock_wheel(p, pal, node, nl, canvas, full, z),
+        Some(Well::Graph) => draw_level_graph(p, pal, node, nl, canvas, hists, z),
+        Some(Well::Keyboard) => draw_keyboard_well(p, pal, node, nl, canvas, z),
+        Some(Well::Steps) => draw_step_bars(p, pal, node, nl, canvas, z),
         None => {}, // no well: the body is the box, honest
     }
 
@@ -1079,10 +1163,18 @@ fn draw_node_box(
         if r.width() > 0.0 && r.height() > 0.0 {
             p.rect_filled(r, LAYOUT_CORNER_NONE as u8, pal.ground_inset);
             p.line_segment([r.left_top(), r.right_top()], hair(pal.hairline_faint));
+            // The clip latch's WORD (operator round 4, D2): while any of this node's meters
+            // carries the latch, CLIP sits at the band's right edge in the error token — the
+            // redundant encoding of the red cap the meter bars wear (a latch a colour-blind
+            // operator can still read, and a word the log can quote).
+            let clipped = meters.iter().any(|((id, _), m)| *id == nl.id && (m.clip_l || m.clip_r));
             if full {
                 let pad = LAYOUT_SPACE_2 as f32 * z;
                 let char_w = LAYOUT_SPACE_2 as f32 * z;
-                let max_chars = ((r.width() - pad * 2.0) / char_w).floor().max(4.0) as usize;
+                // The CLIP word reserves its own width: the driver lines clip to what is left.
+                let clip_w = if clipped { 5.0 * char_w } else { 0.0 };
+                let max_chars =
+                    ((r.width() - pad * 2.0 - clip_w) / char_w).floor().max(4.0) as usize;
                 // char-boundary-safe: the driver lines carry `·` separators (multi-byte), and
                 // a byte-slice ellipsis there is a panic, not a truncation
                 let clip = |line: &str| -> String {
@@ -1116,6 +1208,15 @@ fn draw_node_box(
                         );
                     },
                 }
+                if clipped {
+                    p.text(
+                        r.right_center() - egui::vec2(pad, 0.0),
+                        Align2::RIGHT_CENTER,
+                        "CLIP",
+                        scaled_font(font_xs(), z),
+                        pal.error,
+                    );
+                }
             }
         }
     }
@@ -1127,7 +1228,6 @@ fn draw_node_box(
     // static direction — uncommitted a hollow neutral ring, carrying an input a ring in the
     // bus's class, carrying an output a filled dot in it. The first connection's class is
     // the bus's colour from then on, so the dot says what it carries without a word.
-    let is_mult = node.spec.module_id == sparq_ui::canvas::MULT_ID;
     for pl in &nl.ports {
         let (col, filled) = if is_mult {
             let role = graph.mult_port_role(nl.id, pl.pref.index);
@@ -1151,8 +1251,9 @@ fn draw_node_box(
                 Stroke::new((LAYOUT_STROKE_SIGNAL as f32 * z).max(0.5), col),
             );
         }
-        if full {
-            // Redundant encoding: the class letter rides beside the port name.
+        if full && !is_mult {
+            // Redundant encoding: the class letter rides beside the port name. (A mult dot
+            // wears no name and no letter — D6: the dot's ROLE is its whole vocabulary.)
             let name =
                 node.spec.port(pl.pref.index).map(|pt| pt.id.to_uppercase()).unwrap_or_default();
             let label = format!("{name} {}", class_label(pl.class));
@@ -1607,20 +1708,23 @@ fn draw_meters_well(
     let Some(band) = nl.well_band else { return };
     if let Some(port) = inset::first_audio_out(&node.spec) {
         let m = meters.get(&(nl.id, port)).copied().unwrap_or_default();
-        draw_meter_bars(p, pal, band, &[(m.l, m.hold_l), (m.r, m.hold_r)], z);
+        draw_meter_bars(p, pal, band, &[(m.l, m.hold_l, m.clip_l), (m.r, m.hold_r, m.clip_r)], z);
     }
 }
 
-/// The bar vocabulary itself (increment 4's, unchanged): one hairline well per channel, a
-/// data-class fill to the level, an audio-class hold block where a hold was published.
-fn draw_meter_bars(p: &Painter, pal: &Palette, band: Rect, channels: &[(f32, f32)], z: f32) {
+/// The bar vocabulary itself (increment 4's, plus the round-4 clip cap): one hairline well per
+/// channel, a data-class fill to the level, an audio-class hold block where a hold was
+/// published — and, when the session's clip LATCH is set for the channel (operator round 4,
+/// D2: peak ≥ 1.0, held until STOP), a red cap segment AT FULL SCALE: the rail itself wears
+/// the latch, in the error token, redundant with the CLIP word on the info band.
+fn draw_meter_bars(p: &Painter, pal: &Palette, band: Rect, channels: &[(f32, f32, bool)], z: f32) {
     let body = egui_rect(band);
     let inset = LAYOUT_SPACE_2 as f32 * z;
     let bar_h = LAYOUT_SPACE_2 as f32 * z;
     let well_w = body.width() - inset * 4.0;
     let x0 = body.min.x + inset * 2.0;
     let mut y = body.min.y + inset * 1.5;
-    for &(level, hold) in channels {
+    for &(level, hold, clip) in channels {
         let well = egui::Rect::from_min_size(egui::pos2(x0, y), egui::vec2(well_w, bar_h));
         p.rect_stroke(
             well,
@@ -1644,6 +1748,14 @@ fn draw_meter_bars(p: &Painter, pal: &Palette, band: Rect, channels: &[(f32, f32
                 egui::vec2(LAYOUT_SPACE_1 as f32 * z, bar_h),
             );
             p.rect_filled(block, LAYOUT_CORNER_NONE as u8, pal.audio);
+        }
+        if clip {
+            let cap_w = (LAYOUT_SPACE_2 as f32 * z).max(2.0);
+            let cap = egui::Rect::from_min_size(
+                egui::pos2(x0 + well_w - cap_w, y),
+                egui::vec2(cap_w, bar_h),
+            );
+            p.rect_filled(cap, LAYOUT_CORNER_NONE as u8, pal.error);
         }
         y += bar_h + inset;
     }
@@ -1743,5 +1855,258 @@ fn draw_curve_well(
         let class = dominant_class(node);
         let line = pts.into_iter().map(pos).collect::<Vec<Pos2>>();
         p.line(line, Stroke::new(class_width(class) * z, class_colour(class, pal)));
+    }
+}
+
+// ------------------------------------------------------ the round-4 wells (operator rulings)
+
+/// The clock wheel (`mod/clk`, operator round 4 D4): four concentric divisor rings — 4/8/16/32
+/// centre-out on [`inset::clock_ring_rects`] — each with cardinal ticks, its numeral on the
+/// top-left diagonal (Full LOD only; the Simplified contract is no text), and a phase dot at
+/// `frac(phase × div)`, `div = [1, 2, 4, 8]`: the outer rings turn faster, which IS the musical
+/// statement (a 32nd grid spins eight times per quarter). The phase is the module's OWN
+/// publication (its 0th cv out, read through [`inset::nth_cv_out`] — no port literal here);
+/// at rest the level set is empty, the phase reads 0, and the wheel sits static with its dots
+/// at the top — the declared at-rest rule, never faked motion.
+fn draw_clock_wheel(
+    p: &Painter,
+    pal: &Palette,
+    node: &Node,
+    nl: &NodeLayout,
+    canvas: &CanvasState,
+    full: bool,
+    z: f32,
+) {
+    let Some(band) = nl.well_band else { return };
+    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32 * z);
+    if disp.width() <= 0.0 || disp.height() <= 0.0 {
+        return;
+    }
+    p.rect_filled(disp, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+    let phase = inset::nth_cv_out(&node.spec, 0)
+        .and_then(|pt| canvas.levels.port(nl.id, pt))
+        .unwrap_or(0.0);
+    let rings = inset::clock_ring_rects(sp_rect(disp));
+    let divs = [1.0f32, 2.0, 4.0, 8.0];
+    let words = ["4", "8", "16", "32"];
+    let hair = pal.hairline(pal.hairline_faint, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5));
+    let dot_col = class_colour(SignalClass::Event, pal);
+    let tick_len = LAYOUT_SPACE_1 as f32 * z;
+    for (k, rr) in rings.iter().enumerate() {
+        let rad = rr.width() * 0.5;
+        let c = rr.center();
+        p.circle_stroke(pos(c), rad, hair);
+        for t in 0..4u32 {
+            let ph = t as f32 / 4.0;
+            let a = pos(inset::ring_point(c, rad, ph));
+            let b = pos(inset::ring_point(c, (rad - tick_len).max(0.0), ph));
+            p.line_segment([a, b], hair);
+        }
+        // The phase dot: this ring's own division of the quarter grid.
+        let d = pos(inset::ring_point(c, rad, (phase * divs[k]).rem_euclid(1.0)));
+        p.circle_filled(d, (LAYOUT_SPACE_1 as f32 * z).max(1.0), dot_col);
+        if full {
+            // The numeral rides the top-left diagonal — the phase-0 dot is at the top, so the
+            // word and the dot never collide at rest (or anywhere on the wheel's own geometry).
+            let at = pos(inset::ring_point(c, rad, 0.875));
+            p.text(
+                at,
+                Align2::CENTER_CENTER,
+                words[k],
+                scaled_font(font_xs(), z),
+                pal.text_tertiary,
+            );
+        }
+    }
+}
+
+/// The rolling level graph (`ana/rms`, operator round 4 D13): the display-side history the
+/// shell pushes per live frame ([`LevelHistories`] — never the engine's, never the journal's)
+/// as a hairline trace in the cv accent, with the LIVE word's bar along the bottom (the meter
+/// bars' data fill — the reading you can trust this frame). At rest the history is empty and
+/// the well shows only its ground: a restart starts empty, declared, never a frozen trace.
+fn draw_level_graph(
+    p: &Painter,
+    pal: &Palette,
+    node: &Node,
+    nl: &NodeLayout,
+    canvas: &CanvasState,
+    hists: &LevelHistories,
+    z: f32,
+) {
+    let Some(band) = nl.well_band else { return };
+    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32 * z);
+    if disp.width() <= 0.0 || disp.height() <= 0.0 {
+        return;
+    }
+    p.rect_filled(disp, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+    if let Some(h) = hists.get(&nl.id) {
+        let pts = h.polyline(sp_rect(disp));
+        if pts.len() >= 2 {
+            let stroke = Stroke::new(
+                (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5),
+                with_alpha(class_colour(SignalClass::Cv, pal), 0.8),
+            );
+            p.line(pts.into_iter().map(pos).collect::<Vec<Pos2>>(), stroke);
+        }
+    }
+    // The live word: the current publication as a bar along the well's floor — in the CV
+    // class colour, NOT the meters' data fill: a meter bar is out/main's alone (the
+    // 2026-09-30 ruling the audit pins), and this bar is a cv word about a cv word.
+    let lv = inset::nth_cv_out(&node.spec, 0)
+        .and_then(|pt| canvas.levels.port(nl.id, pt))
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    if lv > 0.0 {
+        let bar_h = (LAYOUT_SPACE_1 as f32 * z).max(1.0);
+        let r = egui::Rect::from_min_size(
+            disp.left_bottom() - egui::vec2(0.0, bar_h),
+            egui::vec2((disp.width() * lv).max(LAYOUT_STROKE_SIGNAL as f32 * z), bar_h),
+        );
+        p.rect_filled(r, LAYOUT_CORNER_NONE as u8, class_colour(SignalClass::Cv, pal));
+    }
+}
+
+/// The quantizer keyboard (`util/quant`, operator round 4 D11): the layout's 12 equal key
+/// cells — the hit-test's own geometry, so every drawn key lives inside the cell that routes
+/// its tap — with the seven naturals full-height in the panel ground and the five accidentals
+/// as the classic shorter, narrower, darker overlay. FILLED = in the active scale: Custom
+/// reads the node's own `custom-mask` (the parameter the keys themselves edit), a preset reads
+/// the module's own [`sparq_audio::modules::QUANT_SCALES`] table — one source, so the display
+/// can never revoice a scale. Out-of-scale keys draw as empty wells (the membership IS the
+/// display). The passing pitch lights its key in the cv accent, read from the module's
+/// quantized-pitch publication through [`inset::keyboard_key`] — the lit key and the snapped
+/// note are the same arithmetic.
+fn draw_keyboard_well(
+    p: &Painter,
+    pal: &Palette,
+    node: &Node,
+    nl: &NodeLayout,
+    canvas: &CanvasState,
+    z: f32,
+) {
+    let Some(band) = nl.well_band else { return };
+    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32 * z);
+    if disp.width() <= 0.0 || disp.height() <= 0.0 {
+        return;
+    }
+    p.rect_filled(disp, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+    if nl.key_cells.is_empty() {
+        return; // no mask param on this card: the well is ground, honestly
+    }
+    let prm = node.effective_params();
+    let pidx = |id: &str| node.spec.params.iter().position(|d| d.id == id);
+    let scale =
+        pidx("scale").and_then(|i| prm.get(i).copied()).unwrap_or(0.0).round().clamp(0.0, 15.0)
+            as usize;
+    let mask: u32 = if scale == 0 {
+        pidx("custom-mask")
+            .and_then(|i| prm.get(i).copied())
+            .unwrap_or(0.0)
+            .round()
+            .clamp(0.0, 4095.0) as u32
+    } else {
+        sparq_audio::modules::QUANT_SCALES.get(scale - 1).map(|&(_, m)| m).unwrap_or(0xFFF)
+    };
+    let lit = inset::nth_cv_out(&node.spec, 0)
+        .and_then(|pt| canvas.levels.port(nl.id, pt))
+        .map(inset::keyboard_key);
+    const BLACKS: [usize; 5] = [1, 3, 6, 8, 10];
+    let gap = (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5);
+    for (k, cell) in nl.key_cells.iter().enumerate() {
+        let mut r = egui_rect(*cell);
+        r = egui::Rect::from_min_max(
+            r.min + egui::vec2(gap * 0.5, 0.0),
+            r.max - egui::vec2(gap * 0.5, 0.0),
+        );
+        let black = BLACKS.contains(&k);
+        if black {
+            let dx = r.width() * 0.15;
+            r = egui::Rect::from_min_max(
+                r.min + egui::vec2(dx, 0.0),
+                egui::pos2(r.max.x - dx, r.min.y + r.height() * 0.62),
+            );
+        }
+        if lit == Some(k) {
+            // The passing pitch: the key wears the cv accent — the same word the wire lights.
+            p.rect_filled(r, LAYOUT_CORNER_MICRO as u8, class_colour(SignalClass::Cv, pal));
+            p.rect_stroke(
+                r,
+                LAYOUT_CORNER_MICRO as u8,
+                pal.hairline(pal.hairline_strong, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5)),
+                StrokeKind::Middle,
+            );
+        } else if mask & (1 << k) != 0 {
+            let fill =
+                if black { pal.ground_panel_alt.gamma_multiply(0.35) } else { pal.ground_panel };
+            p.rect_filled(r, LAYOUT_CORNER_MICRO as u8, fill);
+        } else {
+            p.rect_stroke(
+                r,
+                LAYOUT_CORNER_MICRO as u8,
+                pal.hairline(pal.hairline_regular, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5)),
+                StrokeKind::Middle,
+            );
+        }
+    }
+}
+
+/// The random-step bars (`mod/rand`, operator round 4 D12): one bar per step, its height the
+/// ring value MIRRORED from the module's own pinned hash ([`inset::rand_step_value`] — the
+/// display shows the ring the patch will actually walk, and the cross-crate pin in
+/// `bridge.rs`'s tests proves the mirror never drifts). The cursor bar — read from the
+/// module's `pos` publication, `floor(pos × steps)` — wears the class glow; the others the
+/// class colour. At rest (no session) no bar is lit as cursor: the ring is param-derived and
+/// honest before the first block, the walk is a reading, never an invention.
+fn draw_step_bars(
+    p: &Painter,
+    pal: &Palette,
+    node: &Node,
+    nl: &NodeLayout,
+    canvas: &CanvasState,
+    z: f32,
+) {
+    let Some(band) = nl.well_band else { return };
+    let disp = egui_rect(band).shrink(LAYOUT_SPACE_1 as f32 * z);
+    if disp.width() <= 0.0 || disp.height() <= 0.0 {
+        return;
+    }
+    p.rect_filled(disp, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+    let prm = node.effective_params();
+    let steps = prm.first().copied().unwrap_or(8.0).round().clamp(3.0, 16.0) as usize;
+    let seed = prm.get(1).copied().unwrap_or(0.0).round().clamp(0.0, 65_535.0) as u32;
+    let cursor = inset::nth_cv_out(&node.spec, 1)
+        .and_then(|pt| canvas.levels.port(nl.id, pt))
+        .map(|pos01| ((pos01 * steps as f32).floor() as usize).min(steps - 1));
+    let gap = LAYOUT_SPACE_1 as f32 * 0.5 * z;
+    let w = ((disp.width() - gap * (steps - 1) as f32) / steps as f32).max(1.0);
+    let col = class_colour(SignalClass::Cv, pal);
+    let glow = class_glow(SignalClass::Cv, pal);
+    let floor_h = (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5);
+    for i in 0..steps {
+        let x = disp.min.x + i as f32 * (w + gap);
+        // The slot's floor tick: a zero ring value is still a visible slot (the ring's shape,
+        // honestly — an invisible bar would be a value the display swallowed).
+        p.rect_filled(
+            egui::Rect::from_min_size(egui::pos2(x, disp.max.y - floor_h), egui::vec2(w, floor_h)),
+            LAYOUT_CORNER_NONE as u8,
+            pal.hairline(pal.hairline_regular, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5)).color,
+        );
+        let v = inset::rand_step_value(seed, i as u32).clamp(0.0, 1.0);
+        let h = disp.height() * v;
+        if h > floor_h {
+            let r = egui::Rect::from_min_size(egui::pos2(x, disp.max.y - h), egui::vec2(w, h));
+            p.rect_filled(r, LAYOUT_CORNER_MICRO as u8, if cursor == Some(i) { glow } else { col });
+        } else if cursor == Some(i) {
+            // The cursor on a zero-height bar: the floor tick itself wears the glow.
+            p.rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(x, disp.max.y - floor_h),
+                    egui::vec2(w, floor_h),
+                ),
+                LAYOUT_CORNER_NONE as u8,
+                glow,
+            );
+        }
     }
 }

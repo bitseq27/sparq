@@ -4,11 +4,11 @@
 > regenerate with `python3 tools/module_docs.py`; CI fails on a stale doc (`--check`).
 
 
-*Voltage-controlled amplifier: audio gain = knob + bipolar control voltage*
+*Voltage-controlled amplifier: audio gain = knob + unipolar control voltage*
 
 | | |
 |---|---|
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Host API | 1…1 |
 | Category | utility/vca |
 | Kind / tier / stability | processor · t1 · stable |
@@ -20,7 +20,7 @@
 | ID | Name | Dir | Type | Shape | Required | Multiplicity | Latency |
 |---|---|---|---|---|---|---|---|
 | `in` | Audio In | in | audio | channel set: stereo | — | — | 0 |
-| `cv` | Control In | in | cv | rate: audio, range: bipolar | no | — | 0 |
+| `cv` | Control In | in | cv | rate: audio, range: unipolar | no | — | 0 |
 | `out` | Audio Out | out | audio | channel set: stereo | — | — | 0 |
 
 ## Parameters

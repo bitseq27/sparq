@@ -6,21 +6,80 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-10-01, END of eleventh session round 3 (sandbox) — the control-wire /
-junction-bus round is sealed (`sparq-update-2026-10-01.zip` rev 3; NOTE: the sandbox lost its
-`.git` in a reset, so rev 3 ships as an overlay pack only — no patch base this time); the
-device-confirmed state below (eighth session) is unchanged. **PLAY MAKES SOUND.**
-**test006 on SATURN stopped at the sync gate as designed** (stamp still inc7c): re-stamp on the
-source machine (`python tools\sync_check.py --write --sync sync-ui-round-2026-10-01`) and re-run.
-Operator-confirmed on SATURN with `sync-wo012-inc4.zip` applied: the drawn patch is audible
-through the project's own HAL on the stage machine — the UX pivot's promise, measured where it
-counts. That closes, on hardware: WO-012 inc 2's device box J (live canvas audio on
-`wasapi-shared` at the negotiated latency), inc 4's MTA audio-control thread (the STA refusal
-cannot recur in any host), and the first real-screen look at the converged chrome. Still OPEN
-on the device: test004 attempt 4 (the 🔴 exclusive acceptance — the ADR-008 exit gate), the
-rest of the test006 digests (F–K, the mouse paragraph, the H diff list against the mockup on
-the stage screen), and the gates digest at 777 / `src 94f/2188595B` / 37 smokes. **No bundle is
-waiting**; the next seal comes with the next build.
+**Last updated:** 2026-10-02, END of twelfth session round 4 (Linux sandbox box) — operator UI
+round 4 (the 15-item list: cable nodes, the round-4 wells, three new modules, the executor's
+adoption) is **BUILT, GREEN and SEALED** as `sparq-update-2026-10-02.zip` rev 4 — a FULL-TREE
+overlay this time (defect #94's remedy: the pack no longer depends on a base the receiver might
+not have). **Provenance, read this first:** the round-4 CODE was lost with the sandbox that wrote
+it (only `ROUND4-HANDOFF.md` reached git, head `871d725`); this session REBUILT all of it from the
+handoff on a clean clone and re-measured end to end — every number below is from this box (rustc
+1.99.0, single-job). **PLAY MAKES SOUND** (device-confirmed, eighth session, unchanged).
+**test006 on SATURN** still owes its device rounds: steps A–K from rev 3 plus the NEW round-4
+steps **L–U** (clip LED, clock wheel, walking lights, the quantizer keyboard, the cable node under
+a real finger, the mult strip, vca+lfo, fold, the rms graph + moving svf curve, the round-4
+chrome); the gates-digest expectation moves to **899 / 24 modules / audit PASS 59 lines /
+`src 96f/2694477B`** (stamp `sparq-round4-2026-10-02` — the device re-stamps after applying, the
+pack carries no stamp, rev-3 pattern). Still OPEN on the device: test004 attempt 4 (the 🔴
+exclusive acceptance — the ADR-008 exit gate). **One declared OWED build piece:** the dropdown
+picker (item 11's inspector list-picker over the 15 quant scale names — the table exists,
+`QUANT_SCALES`; the widget awaits an operator go). **One declared defect:** #95, PRE-EXISTING on
+the pristine clone (stash-proven, not a round-4 regression) — the `ui::live` glide-lag test; the
+ui-feature cell reads 28/1 until the operator triage lands. **No bundle is waiting**; the next
+seal comes with the next build.
+
+**Twelfth session, round 4 (2026-10-02, Linux sandbox) — operator UI round 4: the cable-node /
+living-wells round, REBUILT from `ROUND4-HANDOFF.md` after the loss (defect #94), GREEN and
+SEALED (`sparq-update-2026-10-02.zip` rev 4, full-tree).** What landed, deepest first — the full
+item-by-item table is in `UI-CHANGES-PLAN.md`'s round-4 sheet, the session record in
+`ROUND4-HANDOFF.md` §0–§0e: **the executor adopts** (D1: `adopt_runtime` — an unchanged node
+keeps its state and its allocations across a hotswap; the kernel boundary hook is
+`FnOnce(&mut T, &mut T)`; the command-ring fast path stays declared LATER behind the bridge's
+`TrimGainMap` door). **Cable nodes end to end** (D15: `WireTrim`/`Op::SetTrim` in the model, hover
+ghost → tap-insert at identity → drag axes → tap-remove in the gestures, the trim node painted,
+and the bridge's voice — audio → invisible synthesised `util/gain`, cv → `set_cv_trim`, control →
+param-mod args, mult-collapse composed affinely, event/data/spatial refused IN WORDS; identity
+renders BIT-IDENTICAL, pinned by audit smoke 54 through the real gesture door; vocabulary in
+`gestures.md` §4f). **The wells came alive**: the clock's four division rings (wrap-correct
+`phase`), the seq's walking lights, the rand card's step bars (`step_hash` pinned in BOTH crates
+— the seed-42 ring reproduces exactly), the quantizer's 12-key keyboard (membership fill,
+passing-pitch light, Custom-mode tap with the worded preset refusal), the rms card's 240-frame
+rolling graph, the clip LED latched on the master's meters, the svf's response curve moving under
+its cutoff-mod cv, the mult strip at quarter width with its words off. **Three new modules** —
+`fx/fold`, `util/quant` (15 scales + Custom mask), `mod/rand` — plus `clk phase`, `seq step`,
+`rms slew`, `delay sync`: the first-party set is **24**, `module_docs` 24/24. **Tokens moved by
+ruling**: event cables SOLID (D9 — the control-wire dash stays, a different encoding;
+mockup-review finding 25) and ports float 6 px (D10, finding 26). Gates, all on this box:
+`cargo fmt --all --check` CLEAN · clippy workspace + `ui` + `bootstrap-audio` cells 0 diagnostics
+· **`cargo test --workspace` 899 / 0 / 1 ignored** (+67 over rev 3's 832) · `cargo build
+--release` · selftest **9/9, `ba577186c988db21`** — the DSP goldens never moved · the three
+pinned exec renders EXACT (`mod-demo` 1 s `1621e1f65b1b64e1`, `drum-demo` 2 s `f2303f13aa0cf299`,
+`demo` 2.8 s `53de3b1f3f40e3c9`) · **`ui --audit` PASS, 0 failures, 59 [PASS] lines** (four new
+round-4 smokes: the clip latch, the phase pipeline end-to-end `19456/24000`, the encoding pin,
+the cable-node render hashes) · `modules --strict` 24/24 · every python gate · sync re-stamped
+**`sparq-round4-2026-10-02`, 162 files, `src 96f/2694477B`**, `sync_check` OK.
+**Defect #94 (the loss, recorded):** the between-turn sandbox reset dropped every `out` path
+component (defect #93's trap) AND the repo had gone private — round-4's code existed nowhere.
+Remedied by this rebuild and by the full-tree pack. **The trap re-struck THIS tree at the S9
+wrap-up boundary (defect #96):** the same reset dropped `modules/out/` from the sealed tree —
+and this time no byte-exact copy survived anywhere (repo 404-private, `.git`/`target/` gone at
+the boundary, the checkpoint zips are changed-file overlays that never carried the file, the
+sandbox's own undo snapshot applies the same exclusion). The manifest was REBUILT per #94's
+remedy from its generated doc + the `OutMain` implementation and PROVEN semantically identical
+at both layers — `module_docs.py` regeneration byte-matches the checked-in
+`docs/modules/out-main.md` (24/24) and the real Rust `decode::decode` validates all 24
+manifests — its header declares the reconstruction, and the stamp was re-written: the file's
+row moved (`86608e10…`, 4 087 B; comments are the only difference from the sealed `3b0a619f…`,
+2 544 B) while the fp line did NOT (`src 96f/2694477B` walks `.rs` files only), so every
+figure quoted here and in the pack stays true. The durable recovery copy at
+`../sparq-recovery/` is re-established with the reconstructed bytes. **Defect #95 (new,
+PRE-EXISTING):**
+`ui::live::tests::a_param_edit_crosses_the_command_ring_without_a_restage_and_the_level_follows`
+fails deterministically on the PRISTINE clone (stash-proven): the sine amp's 25 ms glide lags the
+test's 4-block window. Operator triage owed — move the window or snap the glide; a silent fix
+either way would be a lie. **Mutation-stress provenance:** the handoff's recorded 10 000-mutation
+hash `7bb06379bd6845e5` does NOT reproduce on the pristine clone on this box; pristine-vs-rebuilt
+here is **`8143e1ddfd8fb261`**, stash-proven identical (round 4 held it). Future rounds on this
+box use the new baseline; the old figure is the lost sandbox's product (its rustc/platform).
 
 **Eleventh session, third round (2026-10-01, sandbox) — operator UI round 3: control wires, the
 junction bus, and six more rulings. BUILT, GREEN and SEALED (`sparq-update-2026-10-01.zip`
@@ -1624,6 +1683,27 @@ default** (that deletion is gated on this device run — do not do it early).
   component), the session-start discipline in the environment notes below, and this row. The
   device tree is unaffected — bundles never removed it, and SATURN's own `synccheck.bat` would
   name it if it ever went missing there.
+- **#96 — REMEDIED (round-4 S9 wrap-up, 2026-10-02; environment/delivery class — the #93 trap's
+  third strike): the between-turn reset dropped `modules/out/` from the SEALED tree, and no
+  byte-exact copy survived anywhere.** `sync_check` named the one file of 162 MISSING at the
+  wrap-up turn (the gate earning its keep a third time). Unlike #93 there was no operator copy
+  to restore from: the repo answers 404 (private — #94's other half), `.git` and `target/` do
+  not outlive turn boundaries, the three checkpoint zips are changed-file overlays that never
+  carried the file, and the sandbox's own undo snapshot applies the same `out/` exclusion (it
+  was checked). Remedied per #94's pattern: REBUILT from its generated doc
+  (`docs/modules/out-main.md`) and the `OutMain` implementation, PROVEN semantically identical
+  at both layers — `module_docs.py` regeneration byte-matches the checked-in doc (24/24) and
+  the real Rust decoder (`sparq_module_api::decode::decode`, the call `Registry::register` and
+  `modules --strict` ride) validates all 24 manifests with out/main's parsed vocabulary
+  eyeballed field-for-field against the doc. The file's header declares the reconstruction.
+  Re-stamped `sparq-round4-2026-10-02`: the row moved (`86608e10…`, 4 087 B — comments are the
+  only difference from the sealed `3b0a619f…`, 2 544 B); the fp did NOT (`src 96f/2694477B`
+  walks `.rs` files only — which is why every doc quoting the fp stays true). Remedies in
+  place: the durable recovery copy at `../sparq-recovery/modules-out-main-sparqmod.toml`
+  RE-ESTABLISHED with the reconstructed bytes (#93's copy died with the lost sandbox — the
+  session-start discipline in the environment notes below is what failed to happen this
+  session; it stands), the pack carries the file, and the device's `gates.bat` re-proves it
+  end to end after apply.
 - #69 — `build.bat` cmd-parser death: probe ships, culprit statement not yet named (stays open)
 - compat-matrix mirror in `port.rs` vs `docs/api/compat-matrix.toml` — **re-worded (contract
   v1):** the drift gate pins the two together; full deletion waits on restructuring the table's

@@ -1,14 +1,23 @@
-# sparq module manifest — util/vca (operator round 2026-10-01 r3).
+# sparq module manifest — util/vca (operator round 2026-10-01 r3; cv range moved in round 4).
 # Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
 #
 # The voltage-controlled amplifier the operator asked for: an audio path whose gain is the
 # SUM of a knob and a control voltage — the classic modulation junction (envelope or LFO
 # in, shaped audio out).
 #
+# ROUND 4 (2026-10-02, D7 — the operator's ruling): the cv input's declared range moves
+# BIPOLAR → UNIPOLAR. Every first-party cv SOURCE publishes unipolar (lfo, env, rms, the
+# clock family), so a bipolar declaration made the manifest refuse the very wires the
+# patch is built from ("vca will not take the lfo"). The compatibility matrix itself does
+# NOT move (cell G2 stands): the manifest now tells the truth about what modulates this
+# module, and the verdict follows the truth. `util/range` (the explicit converter) stays
+# Phase-1 work — a genuinely bipolar source is that module's job, not a mismatched pin here.
+#
 # SEMANTICS, stated exactly:
-# * `out = in * (level + cv)`, where `cv` is the bipolar control input read at block rate
+# * `out = in * (level + cv)`, where `cv` is the unipolar control input read at block rate
 #   (the cv-in discipline of `util/gain`'s family): the knob is the bias, the wire is the
-#   motion, and with no wire the VCA is exactly the knob's amplifier.
+#   motion, and with no wire the VCA is exactly the knob's amplifier. A 0..1 cv sweeps the
+#   gain from `level` to `level + 1`; negative motion is `util/range`'s future job.
 # * The product rides the same one-pole glide discipline as the other gain-like coefficients
 #   (defect #85): a fast cv or a fast knob chase instead of stepping, and a settled signal is
 #   the exact constant multiply the goldens pin.
@@ -17,10 +26,10 @@
 
 [identity]
 id = "sparq/util/vca"
-version = "0.1.0"
+version = "0.2.0"
 host_api = { min = 1, max = 1 }
 display_name = "VCA"
-summary = "Voltage-controlled amplifier: audio gain = knob + bipolar control voltage"
+summary = "Voltage-controlled amplifier: audio gain = knob + unipolar control voltage"
 authors = ["sparq"]
 license = "MIT"
 
@@ -44,7 +53,7 @@ name = "Control In"
 direction = "in"
 type = "cv"
 rate = "audio"
-range = "bipolar"
+range = "unipolar"
 required = false
 
 [[ports]]

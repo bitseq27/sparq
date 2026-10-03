@@ -1,0 +1,100 @@
+# sparq module manifest — mod/rand (operator round 4 2026-10-02, D12).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The random-step source the operator asked for ("random step module + display"): a ring of
+# `steps` pseudo-random values, walked by triggers — sample-and-hold randomness with a
+# SEED, so a patch is a score: same seed ⇒ same ring ⇒ same performance (the determinism
+# pillar, on the random module especially).
+#
+# SEMANTICS, stated exactly:
+# * The ring is PURE INTEGER arithmetic, no float in the generation path:
+#   `step_hash(seed, i)` = the lowbias32 finalizer (the splitmix32-family integer mixer:
+#   `z ^= z >> 16; z *= 0x7FEB352D; z ^= z >> 15; z *= 0x846CA68B; z ^= z >> 16`) over
+#   `seed ^ (i * 0x9E37_79B9)`, published as its TOP 24 BITS over 2^24 — a value in 0..1.
+#   The seed-42 ring is PINNED by `tests/r4_new_modules.rs` ([1517363, 10542902, 13721998,
+#   8088911, 6531285, 16292829, 12864735, 5502068] / 2^24) and MIRRORED by the card's bar
+#   display, so the bars can never drift from the module.
+# * Every qualifying input trigger (value > 0 — the counting rule) advances the cursor by
+#   one, wrapping at `steps`, and the trigger out ECHOES it at the input event's sample.
+#   The cursor advances ONLY while the event out is presented (sink-gated — the seq rule:
+#   a module with nowhere to publish does not count).
+# * `value` publishes the ring value at the cursor AFTER this block's advances; `pos`
+#   publishes `cursor / steps` — the pair the step-bars display reads (the lit bar is the
+#   published value's bar). Both block-rate unipolar.
+# * State is the 8-byte cursor: a save/restore resumes the walk mid-ring, the seq promise.
+
+[identity]
+id = "sparq/mod/rand"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Rand Step"
+summary = "Seeded random-step ring: triggers walk it, value and cursor ride block-rate cv outs"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "modulation/random"
+top = "mod"
+kind = "source"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "trig-in"
+name = "Trig In"
+direction = "in"
+type = "event"
+event_kinds = ["trigger", "clock"]
+required = false
+
+# The ring value at the cursor, after this block's advances (0..1).
+[[ports]]
+id = "value"
+name = "Value"
+direction = "out"
+type = "cv"
+rate = "block"
+range = "unipolar"
+
+[[ports]]
+id = "trig-out"
+name = "Trig Out"
+direction = "out"
+type = "event"
+event_kinds = ["trigger"]
+
+# The cursor as 0..1 (cursor / steps) — the step-bars display lights its bar from this.
+[[ports]]
+id = "pos"
+name = "Position"
+direction = "out"
+type = "cv"
+rate = "block"
+range = "unipolar"
+
+[[params]]
+id = "steps"
+name = "Steps"
+type = "int"
+unit = "x"
+min = 3.0
+max = 16.0
+default = 8.0
+
+# The ring's seed: the same seed always walks the same values (determinism, declared).
+[[params]]
+id = "seed"
+name = "Seed"
+type = "int"
+unit = "x"
+min = 0.0
+max = 65535.0
+default = 0.0
+
+[state]
+schema_id = "sparq/mod/rand/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "trivial"

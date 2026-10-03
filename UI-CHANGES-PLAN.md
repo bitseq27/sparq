@@ -102,3 +102,59 @@ now crossing the ring (4 publications/block in that world, refusals still counte
 Sandbox note (stated in CHECKLIST/SYNC): a reset between turns wiped `/tmp`, the `/usr` additions
 and the workspace `.git`; the toolchain now lives in `.tc/` inside the workspace (gitignored),
 and rev 3 ships as a FULL-TREE overlay pack (no patch base survives here).
+
+---
+
+# UI change round 4 — operator rulings 2026-10-02 (run sheet, DONE except one declared piece)
+
+The second round of operator rulings (the 15-item list, transcribed in `ROUND4-HANDOFF.md` §9),
+built on the round-3 tree. **Provenance:** the round-4 code itself was lost with the sandbox that
+wrote it (only the docs reached git); this run sheet describes the REBUILD from
+`ROUND4-HANDOFF.md` on a clean clone of `871d725`, re-measured end to end — see the round-4
+paragraph in `CHECKLIST.md` for the numbers and the two provenance notes (mutation-stress hash,
+defect #95).
+
+| # | Request | Where it lives |
+|---|---------|----------------|
+| 1 | Adding a module while playing must not blank/re-stage the whole graph | `executor.rs adopt_runtime` — allocation-free adoption of unchanged nodes across a hotswap (per-node keys, in-node scratch), hooked at the kernel boundary (`engine.rs`, `hotswap.rs` boundary is now `FnOnce(&mut T, &mut T)`); the command-ring fast path stays declared LATER, its door is the bridge's `TrimGainMap` |
+| 2 | Clipping visible on the main meters | `levels.rs StereoMeter.clip_l/clip_r` latched from the live frame (`live.rs`), painted as the red cap + the CLIP word on the master's info band (`canvas_ui.rs`); the latch holds while playing and clears at STOP/session start |
+| 3 | The SVF graph animates with modulation | `shell_ui.rs rebuild_curves` — the response curve is drawn at the EFFECTIVE cutoff `clamp(knob + cv × half-range)` read from the analysis ring, per frame |
+| 4 | Clock wheel (4/8/16/32, left of the outs) | `inset.rs` ClockWheel well + `clock_ring_rects`/`ring_point` — four division rings driven by the engine's published wrap-correct `phase`, turning under PLAY, standing still at rest |
+| 5 | Seq steps animate | `inset.rs` Steps well — the cursor cell carries the event-accent ring over the pattern fill; the engine publishes `step` sink-gated |
+| 6 | `util/mult` a quarter width, centred, bidirectional, no labels | `layout.rs` quarter-width strip + centred dot column (S6), words off on the card (S7); the bidirectional semantics were already the bus's and stay pinned by its gate |
+| 7 | VCA accepts control | `util/vca` manifest D7 (cv in = amplitude modulator); the canvas-verdict gate lives in `bridge.rs` tests: verdict Compatible and the modulated render audible |
+| 8 | Fold module | `modules.rs Fold + fold_tri` (waveshaper, tri-fold at amount 1), `modules/fx/fold/sparqmod.toml`, doc generated |
+| 9 | Event cables solid | `colors.toml` — the event encoding token is `solid-stroke` at signal width (D9); legend and painter parse the token, the control wire's dash STAYS (different encoding); mockup-review finding 25 records the mockup supersession |
+| 10 | Ports 6 px beside the window | `layout.toml canvas.node_port_offset` 4 → 6 (D10), tokens regenerated |
+| 11 | Note quantizer + dropdown + keyboard | `modules.rs Quant + QUANT_SCALES + snap_to_scale` (15 scales + Custom reading `custom-mask`), `modules/util/quant/sparqmod.toml`; S6 `key_cells`/`key_param`/`flip_key` + `Hit::Key` with the Custom-mode gate (a preset-scale tap refuses in words and names the remedy); S7 the 12-cell keyboard well — membership fill + passing-pitch light, the display is the module. **The dropdown (inspector list-picker over the 15 names) is the one DECLARED OWED piece** — `QUANT_SCALES` is the name table it waits for; it was not on the S7 painter list and the seal ships without it, named here and in CHECKLIST |
+| 12 | Random step module + display | `modules.rs RandStep + step_hash` (lowbias32 over `seed ^ i·φ`, top 24 bits; the seed-42 ring is pinned in BOTH `sparq-audio` and the painter's mirror — cross-crate), `modules/mod/rand/sparqmod.toml`; S7 the step-bars well: bars + lit cursor, same seed same bars |
+| 13 | RMS slew + rolling graph | `modules.rs` rms stateful + `slew` param (per-block slew limit); `levels.rs LevelHistory/LevelHistories` — a 240-frame rolling graph the shell pushes per live frame, painted beside the rms card's floor bar, cleared at session start |
+| 14 | Delay sync input | `modules.rs` delay `sync` — a trigger dumps the tail and re-arms, sample-accurate; manifest bumped |
+| 15 | Cable nodes | Model `WireTrim`/`Op::SetTrim` + structural ledger row (S6); gestures: hover ghost, tap-insert at identity, drag axes (up/down amp 0…2, left/right offset −1…+1, 100 px per unit, the audio offset inert by the DC rule), tap-handle removes, one coalesced undo per drag; hit rank port > handle > grab > body > wire, never at Dot LOD; S7 the trim node painted (capture ×0.25 rest / ×0.5 hot, amp level disc, hover ghost); S8 the bridge's voice — audio → invisible synthesised `util/gain`, cv → `set_cv_trim`, control → param-mod args, mult-collapse composed affinely, event/data/spatial refused IN WORDS with the remedy, identity renders bit-identical; audit smoke 54 pins insert/edit/remove end to end (`docs/ui/gestures.md` §4f carries the vocabulary) |
+
+## Docs touched (round 4)
+
+* `docs/ui/gestures.md`: new §4f (the cable node + the quantizer keyboard tap), §6's event row
+  (solid, D9), §7's round-4 device list (test006 steps L–U).
+* `design/mockups/mockup-review.md`: findings 25–26 (the event-solid supersession; the round-4
+  wells and the 6 px float declared as operator rulings the mockup set predates).
+* `docs/modules/*`: 24/24 regenerated; `CHECKLIST.md` / `SYNC.md` / `README.md` round-4
+  paragraphs; `scripts/test006.bat` steps L–U; `ROUND4-HANDOFF.md` §0–§0e session record.
+
+## Verification (all pass, this machine — Linux sandbox, rustc 1.99.0, single-job)
+
+* `cargo fmt --all --check` — clean
+* `cargo clippy` workspace + `ui` + `bootstrap-audio` cells, `--all-targets -D warnings` — 0
+  diagnostics (the `ui-window` cell is device-only, as always)
+* `cargo test --workspace` — **899 passed / 0 failed / 1 ignored**
+* `cargo build --release` + `sparq selftest --golden` — 9/9, `ba577186c988db21`; the three pinned
+  exec renders exact: `mod-demo` `1621e1f65b1b64e1`, `drum-demo` `f2303f13aa0cf299`, `demo`
+  `53de3b1f3f40e3c9`
+* `sparq ui --audit` — PASS, 0 failures (59 smoke lines: the round-3 set + clip latch, phase
+  pipeline, encoding pin, cable-node render hashes)
+* `sparq modules --strict` — 24/24
+* python gates — token_gen --check, token_audit, unsafe_audit, module_docs 24/24, check_text_io,
+  sync_check (re-stamped `sparq-round4-2026-10-02`)
+* Known-failing, declared: defect **#95** (`ui::live` glide-lag live test) — pre-existing on the
+  pristine clone, stash-proven not a round-4 regression; the ui-feature cell reads 28/1 until the
+  operator triage lands.

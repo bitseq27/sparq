@@ -9,7 +9,7 @@
 //! **world** px (a node is the same patch object however far you've zoomed).
 
 use crate::canvas::camera::{Camera, Lod};
-use crate::canvas::model::{Graph, Node, NodeSpec, PortRef, WireId};
+use crate::canvas::model::{Graph, Node, NodeSpec, PortRef, WireId, WireTrim};
 use crate::geom::{Rect, Vec2};
 use crate::tokens::{
     LAYOUT_CANVAS_NODE_HEADER_HEIGHT, LAYOUT_CANVAS_NODE_INFO_HEIGHT, LAYOUT_CANVAS_NODE_PARAM_ROW,
@@ -106,6 +106,13 @@ pub struct NodeLayout {
     pub step_cells: Vec<Rect>,
     /// Which param the step cells edit (`mod/seq`'s pattern); `None` elsewhere.
     pub step_param: Option<usize>,
+    /// The quantizer keyboard's 12 keys (operator round 4, D11): the WELL band cut into 12
+    /// equal cells (screen px, card order left→right = pitch class 0→11), inset 15 %
+    /// vertically so the painter's black-key overlay has room to hang into. A tap flips the
+    /// class's CUSTOM-scale membership through [`Hit::Key`]. Empty for every other node.
+    pub key_cells: Vec<Rect>,
+    /// Which param the keyboard edits (`util/quant`'s `custom-mask`); `None` elsewhere.
+    pub key_param: Option<usize>,
     /// Ports, inputs then outputs, in spec order within each direction.
     pub ports: Vec<PortLayout>,
 }
@@ -151,6 +158,16 @@ pub struct WireLayout {
     /// A CONTROL wire (operator ruling 2026-10-01 r3): cv source → float parameter sink.
     /// Drawn dashed in the control colour with a dot at the sink; not re-patchable.
     pub is_param: bool,
+    /// The cable node (operator round 4, D15): the wire's own trim record, `None` when the
+    /// wire runs clean. The painter draws the handle (or, on a clean wire under the pointer,
+    /// the hover ghost) at [`Self::trim_point`]; the hit-test offers [`Hit::WireTrim`] on the
+    /// same point — one geometry, two readers.
+    pub trim: Option<WireTrim>,
+    /// Where the cable node sits: the ARC MIDPOINT of the sampled polyline, screen px — the
+    /// cable's visible centre, for béziers and straight runs alike ([`arc_midpoint`]).
+    /// Recomputed with the points in [`CanvasLayout::make_wires_straight`], so the handle can
+    /// never sit off the wire the style toggle restyled.
+    pub trim_point: Vec2,
 }
 
 /// Which end of a wire a hit or a re-patch drag names.
@@ -260,6 +277,11 @@ pub fn info_band_height(spec: &NodeSpec) -> Option<f32> {
     (spec.module_id == crate::canvas::OUT_MAIN_ID).then_some(LAYOUT_CANVAS_NODE_INFO_HEIGHT as f32)
 }
 
+/// The `util/mult` card's width factor (operator round 4, D6): the junction bus is a strip of
+/// dots, not a two-sided card — a quarter of the default width, the narrowest thing on the
+/// canvas, because it is the least thing: a bus, not a module.
+pub const MULT_WIDTH_FACTOR: f32 = 0.25;
+
 /// The node card's world size: header + param band + well band + info band + port band (the
 /// increment-6 anatomy). With one port row and no params/well this is the old 80 px box, whose
 /// shorter side clears the class-L minimum — the audit property the original size was chosen for.
@@ -268,7 +290,13 @@ pub fn node_size(spec: &NodeSpec) -> Vec2 {
     let inputs = spec.inputs().count();
     let outputs = spec.outputs().count();
     let rows = inputs.max(outputs).max(1);
-    let w = LAYOUT_CANVAS_NODE_WIDTH_DEFAULT as f32;
+    // The mult strip (D6): quarter width — the dots are the module, and card chrome around
+    // them would be chrome around nothing. Every other module wears the token width.
+    let w = if spec.module_id == crate::canvas::MULT_ID {
+        LAYOUT_CANVAS_NODE_WIDTH_DEFAULT as f32 * MULT_WIDTH_FACTOR
+    } else {
+        LAYOUT_CANVAS_NODE_WIDTH_DEFAULT as f32
+    };
     let (param_h, well_h, _) = node_bands(spec);
     let h = LAYOUT_CANVAS_NODE_HEADER_HEIGHT as f32
         + param_h
@@ -313,6 +341,9 @@ pub fn compute(graph: &Graph, camera: &Camera, view: Rect) -> CanvasLayout {
             };
             let points = sample_bezier(f_screen, t_screen);
             let (grab_from, grab_to) = grab_points(&points);
+            // The cable node (D15): the record rides the wire, the handle sits at the arc
+            // midpoint — the layout reads the model, it never re-derives either.
+            let trim_point = arc_midpoint(&points);
             // A conversion (multi→mono) is a property of the two channel sets; recompute it from
             // the source/dest ports so the painter can draw the warning hairline.
             let conversion = is_conversion(graph, w.from, w.to);
@@ -326,6 +357,8 @@ pub fn compute(graph: &Graph, camera: &Camera, view: Rect) -> CanvasLayout {
                 grab_from,
                 grab_to,
                 is_param: w.param.is_some(),
+                trim: w.trim,
+                trim_point,
             })
         })
         .collect();
@@ -424,41 +457,99 @@ fn layout_node(
         (Vec::new(), None)
     };
 
+    // The quantizer's keyboard (operator round 4, D11): the WELL band — not a param row, the
+    // keys are not sliders — cut into 12 equal cells with a 15 % vertical inset (the painter's
+    // black-key overlay hangs into it). The cells exist only when the card has BOTH the mask
+    // param to edit and the well band to put them in (the step_cells block's discipline: never
+    // route a tap to a param that does not exist).
+    let (key_cells, key_param) = if n.spec.module_id == crate::canvas::QUANT_ID {
+        let idx = n.spec.params.iter().position(|d| d.id == "custom-mask");
+        let cells = idx.zip(well_band).map(|(_, band)| {
+            let keys = crate::canvas::inset::KEYBOARD_KEYS;
+            let w = band.width() / keys as f32;
+            let inset_y = band.height() * 0.15;
+            (0..keys)
+                .map(|k| {
+                    Rect::new(
+                        Vec2::new(band.min.x + k as f32 * w, band.min.y + inset_y),
+                        Vec2::new(band.min.x + (k + 1) as f32 * w, band.max.y - inset_y),
+                    )
+                })
+                .collect::<Vec<Rect>>()
+        });
+        (cells.unwrap_or_default(), idx)
+    } else {
+        (Vec::new(), None)
+    };
+
     // Inputs down the left edge, outputs down the right, each in its own row stack — the stack
     // starts BELOW the param and well bands (the card's anatomy, increment 6). The circles
     // FLOAT beside the window (operator ruling 2026-10-01): the port offset token outside the
     // card edge, so a port is never half-buried in the body it belongs to.
+    //
+    // The junction bus is the one exception (operator round 4, D6): mult's six dots wear ONE
+    // CENTRED COLUMN — the bus is not a two-sided card (every dot is in and out at once, its
+    // role the first connection's), so the left/right split would be a lie the geometry tells.
+    // The rows ride the same stack formula (mult has no params, well or info band, so those
+    // terms are zero — the formula, not a special case), and `dir` stays what the manifest
+    // declares: the connect rules already make the dots bidirectional; positions move,
+    // semantics don't.
     let off = LAYOUT_CANVAS_NODE_PORT_OFFSET as f32;
     let info_h = info_band_height(&n.spec).unwrap_or(0.0);
-    for (side, dir) in [(0.0, Direction::In), (size.x, Direction::Out)] {
-        let mut r = 0usize;
-        for idx in
-            n.spec.ports.iter().enumerate().filter(|(_, p)| p.direction == dir).map(|(i, _)| i)
-        {
-            let port = match n.spec.port(idx) {
-                Some(p) => p,
-                None => continue,
-            };
-            let wx = n.pos.x + side + if dir == Direction::In { -off } else { off };
-            let wy = n.pos.y
-                + header
-                + param_h
-                + well_h.unwrap_or(0.0)
-                + info_h
-                + r as f32 * row
-                + row / 2.0;
-            let wpos = Vec2::new(wx, wy);
+    if n.spec.module_id == crate::canvas::MULT_ID {
+        for (idx, port) in n.spec.ports.iter().enumerate() {
+            let wpos = Vec2::new(
+                n.pos.x + size.x * 0.5,
+                n.pos.y
+                    + header
+                    + param_h
+                    + well_h.unwrap_or(0.0)
+                    + info_h
+                    + idx as f32 * row
+                    + row / 2.0,
+            );
             let class = signal_class(port);
             let pref = PortRef::new(n.id, idx);
             ports.push(PortLayout {
                 pref,
-                dir,
+                dir: port.direction,
                 class,
                 world: wpos,
                 screen: camera.to_screen(wpos, view),
             });
-            port_world.push((pref, wpos, dir, class));
-            r += 1;
+            port_world.push((pref, wpos, port.direction, class));
+        }
+    } else {
+        for (side, dir) in [(0.0, Direction::In), (size.x, Direction::Out)] {
+            let mut r = 0usize;
+            for idx in
+                n.spec.ports.iter().enumerate().filter(|(_, p)| p.direction == dir).map(|(i, _)| i)
+            {
+                let port = match n.spec.port(idx) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let wx = n.pos.x + side + if dir == Direction::In { -off } else { off };
+                let wy = n.pos.y
+                    + header
+                    + param_h
+                    + well_h.unwrap_or(0.0)
+                    + info_h
+                    + r as f32 * row
+                    + row / 2.0;
+                let wpos = Vec2::new(wx, wy);
+                let class = signal_class(port);
+                let pref = PortRef::new(n.id, idx);
+                ports.push(PortLayout {
+                    pref,
+                    dir,
+                    class,
+                    world: wpos,
+                    screen: camera.to_screen(wpos, view),
+                });
+                port_world.push((pref, wpos, dir, class));
+                r += 1;
+            }
         }
     }
 
@@ -473,6 +564,8 @@ fn layout_node(
         info_band,
         step_cells,
         step_param,
+        key_cells,
+        key_param,
         ports,
     }
 }
@@ -564,6 +657,15 @@ fn walk_along(points: &[Vec2], offset: f32, from_start: bool) -> Vec2 {
     points[0]
 }
 
+/// The ARC MIDPOINT of a sampled wire: the point at half the cumulative distance along the
+/// polyline — where the cable node sits (operator round 4, D15), so the handle is at the
+/// cable's visible centre on a sagging bézier too, not at the middle sample index. Degenerate
+/// inputs read the nearest real thing, never a fabrication: empty is the origin, a single
+/// point is that point (the `walk_along` discipline — this IS that walk, at half length).
+fn arc_midpoint(points: &[Vec2]) -> Vec2 {
+    walk_along(points, polyline_len(points) * 0.5, true)
+}
+
 /// What a screen point lands on. Ports beat wire ends beat node bodies beat wires, so a finger
 /// near an edge port wires rather than selects the node — and a finger on a wire's grab point
 /// re-patches rather than moves whatever is behind it.
@@ -573,12 +675,22 @@ pub enum Hit {
     Port(PortRef, Direction),
     /// A wire's re-patch grab point (which wire, which end), within the capture radius.
     WireEnd(WireId, WireEndSide),
+    /// A wire's CABLE NODE (operator round 4, D15): the trim handle at the wire's arc
+    /// midpoint, within the capture radius. Offered only while the wire CARRIES a trim —
+    /// what is not drawn is not touchable; the hover-ghost tap-to-insert rides the
+    /// [`Hit::Wire`] arm instead. Ranked above the re-patch grabs (a visible handle beats
+    /// the wire's ends), and dead under a covering card like every wire furniture.
+    WireTrim(WireId),
     /// An inline parameter row on a node card (which node, which param, the slider track) —
     /// the row under the finger is the row you edit (increment 6).
     Param(crate::canvas::model::NodeId, usize, Rect),
     /// A step button of the sequencer's 16-button row (which node, which step) — the button
     /// under the finger toggles that step's bit (operator ruling 2026-10-01 r3).
     Step(crate::canvas::model::NodeId, usize),
+    /// A key of the quantizer's keyboard well (which node, which pitch class 0..11, operator
+    /// round 4 D11) — the key under the finger flips that class's membership in the CUSTOM
+    /// scale through the param door; a preset scale refuses in words.
+    Key(crate::canvas::model::NodeId, usize),
     /// A node body.
     Node(crate::canvas::model::NodeId),
     /// A wire.
@@ -590,7 +702,9 @@ pub enum Hit {
 impl CanvasLayout {
     /// Restyle every wire to a straight run between its endpoints (the toolbar's wire select,
     /// increment 6): the points AND the re-patch grab points move together, so the hit-test and
-    /// the painter keep agreeing — what you see is what you can grab.
+    /// the painter keep agreeing — what you see is what you can grab. The cable node rides the
+    /// restyled run too (its arc midpoint is recomputed): a handle left on the old bézier would
+    /// sit off the wire you see, and what you cannot see on the cable you cannot touch.
     pub fn make_wires_straight(&mut self) {
         for w in &mut self.wires {
             let (Some(&first), Some(&last)) = (w.points.first(), w.points.last()) else {
@@ -600,6 +714,7 @@ impl CanvasLayout {
             let (gf, gt) = grab_points(&w.points);
             w.grab_from = gf;
             w.grab_to = gt;
+            w.trim_point = arc_midpoint(&w.points);
         }
     }
 }
@@ -646,6 +761,22 @@ pub fn hit_test(layout: &CanvasLayout, pos_screen: Vec2, lod: Lod) -> Hit {
                 }
             }
         }
+        // Cable nodes (operator round 4, D15): a wire's trim handle outranks its re-patch
+        // grabs — the handle is DRAWN furniture at the arc midpoint, while the grabs are
+        // invisible until you know they are there — and it obeys the same visibility
+        // discipline: never under a card body (wires draw under every card), never at Dot
+        // LOD (nothing of the wire is drawn to scale there). Only a wire that CARRIES a trim
+        // offers the handle; the clean wire's hover ghost is the painter's, and its tap
+        // rides the Wire arm in `interact`.
+        for w in &layout.wires {
+            if w.trim.is_some()
+                && w.trim_point.distance(pos_screen) <= capture
+                && body_at(pos_screen).is_none()
+                && body_at(w.trim_point).is_none()
+            {
+                return Hit::WireTrim(w.id);
+            }
+        }
         // Wire ends: the grab points sit clear of the ports (see WIRE_END_GRAB_OFFSET), so this
         // ring never overlaps a port capture — but it is checked first among the wire hits, and
         // before node bodies, so a dense patch keeps its ends grabbable. From wins To on the
@@ -673,12 +804,19 @@ pub fn hit_test(layout: &CanvasLayout, pos_screen: Vec2, lod: Lod) -> Hit {
     // Inline parameter rows (increment 6): a row under the finger is the row you edit. Full LOD
     // only — at Simplified the rows are not drawn, and what you cannot see you cannot touch.
     // The sequencer's step buttons win inside their own row: a press on a button toggles THAT
-    // step, not the mask's x-mapping (operator ruling 2026-10-01 r3).
+    // step, not the mask's x-mapping (operator ruling 2026-10-01 r3). The quantizer's keys win
+    // inside their own well band the same way: a press on a key flips THAT pitch class, not
+    // whatever row geometry the band overlaps (operator round 4, D11).
     if lod == Lod::Full {
         for n in layout.nodes.iter().rev() {
             for (k, cell) in n.step_cells.iter().enumerate() {
                 if cell.contains(pos_screen) {
                     return Hit::Step(n.id, k);
+                }
+            }
+            for (k, cell) in n.key_cells.iter().enumerate() {
+                if cell.contains(pos_screen) {
+                    return Hit::Key(n.id, k);
                 }
             }
             for pr in &n.param_rows {
@@ -736,7 +874,7 @@ mod tests {
     use super::*;
     use crate::canvas::model::{Graph, NodeSpec};
     use sparq_module_api::manifest::Port;
-    use sparq_module_api::port::{ChannelSet, Direction, Multiplicity, PortType};
+    use sparq_module_api::port::{ChannelSet, CvRange, CvRate, Direction, Multiplicity, PortType};
 
     fn audio(id: &str, dir: Direction, set: ChannelSet) -> Port {
         Port {
@@ -1006,5 +1144,252 @@ mod tests {
             crate::canvas::model::Op::AddNode(n) => n.id,
             _ => unreachable!(),
         }
+    }
+
+    // ------------------------------------------- round 4: mult strip, cable nodes, keyboard
+
+    fn wid_of(op: &crate::canvas::model::Op) -> WireId {
+        match op {
+            crate::canvas::model::Op::AddWire(w) => w.id,
+            _ => unreachable!(),
+        }
+    }
+
+    /// The junction bus as its manifest declares it: six dots, all `in` (the connect rules
+    /// make them bidirectional; the manifest's ports are statically directed).
+    fn mult_spec() -> NodeSpec {
+        NodeSpec::new(
+            crate::canvas::MULT_ID,
+            "Mult",
+            (1..=6).map(|i| audio(&format!("d{i}"), Direction::In, ChannelSet::Stereo)).collect(),
+        )
+    }
+
+    fn cvp(id: &str, dir: Direction) -> Port {
+        Port {
+            id: id.into(),
+            direction: dir,
+            port_type: PortType::Cv,
+            required: false,
+            channel_set: None,
+            channel_set_variable: false,
+            cv_rate: Some(CvRate::Block),
+            cv_range: Some(CvRange::Bipolar),
+            cv_reduce: Default::default(),
+            cv_interp: Default::default(),
+            event_kinds: Vec::new(),
+            multiplicity: Multiplicity::Single,
+            latency_contribution: 0,
+        }
+    }
+
+    /// A quantizer card: `scale` (0 = Custom) then `custom-mask` — the param order the D11
+    /// manifest declares; `with_mask: false` builds the crippled card the no-route rule needs.
+    fn quant_spec(with_mask: bool) -> NodeSpec {
+        use crate::canvas::model::{ParamDesc, ParamKind};
+        let mut params = vec![ParamDesc {
+            id: "scale".into(),
+            name: "Scale".into(),
+            kind: ParamKind::Int,
+            unit: None,
+            min: 0.0,
+            max: 14.0,
+            default: 0.0,
+        }];
+        if with_mask {
+            params.push(ParamDesc {
+                id: "custom-mask".into(),
+                name: "Custom Scale".into(),
+                kind: ParamKind::Int,
+                unit: None,
+                min: 0.0,
+                max: 4095.0,
+                default: 0.0,
+            });
+        }
+        NodeSpec::new(
+            crate::canvas::QUANT_ID,
+            "Quant",
+            vec![cvp("pitch", Direction::In), cvp("pitch", Direction::Out)],
+        )
+        .with_params(params)
+    }
+
+    #[test]
+    fn the_mult_strip_is_quarter_width_with_one_centred_dot_column() {
+        let mut g = Graph::new();
+        let m = g.op_add_node(mult_spec(), Vec2::ZERO);
+        let mid = nid(&m);
+        let layout = compute(&g, &Camera::new(), view());
+        let nm = layout.nodes.iter().find(|n| n.id == mid).unwrap();
+        // D6: a quarter of the default width — a strip of dots, not a card.
+        let want_w = LAYOUT_CANVAS_NODE_WIDTH_DEFAULT as f32 * MULT_WIDTH_FACTOR;
+        assert!((nm.world.width() - want_w).abs() < 1e-3, "strip width: {:?}", nm.world);
+        assert!(
+            (node_size(&mult_spec()).x - want_w).abs() < 1e-3,
+            "node_size agrees — zoom-to-fit and the marquee read the same strip"
+        );
+        // ALL SIX dots in ONE column on the strip's centre — no left/right split (every dot
+        // is in and out at once, so the split would be a lie the geometry tells).
+        assert_eq!(nm.ports.len(), 6);
+        let centre_x = nm.world.center().x;
+        for (k, p) in nm.ports.iter().enumerate() {
+            assert!((p.world.x - centre_x).abs() < 1e-3, "dot {k} sits on the centre line");
+            let want_y = nm.world.min.y
+                + LAYOUT_CANVAS_NODE_HEADER_HEIGHT as f32
+                + k as f32 * LAYOUT_CANVAS_NODE_PORT_ROW as f32
+                + LAYOUT_CANVAS_NODE_PORT_ROW as f32 / 2.0;
+            assert!((p.world.y - want_y).abs() < 1e-3, "dot {k} rides the row stack");
+            assert_eq!(p.dir, Direction::In, "the manifest's word stays the manifest's word");
+            assert_eq!(p.pref.index, k, "spec order down the column");
+        }
+    }
+
+    #[test]
+    fn trim_point_is_the_arc_midpoint_and_rides_the_restyle() {
+        let mut g = Graph::new();
+        let a = g.op_add_node(gain_spec(), Vec2::ZERO);
+        let b = g.op_add_node(gain_spec(), Vec2::new(400.0, 0.0));
+        let wid = wid_of(&g.op_add_wire(PortRef::new(nid(&a), 1), PortRef::new(nid(&b), 0)));
+        let l = compute(&g, &Camera::new(), view());
+        let w = l.wires.iter().find(|w| w.id == wid).unwrap();
+        assert_eq!(w.trim, None, "a fresh wire runs clean");
+        // The half-length walk — not the middle sample index — is the definition.
+        let half = walk_along(&w.points, polyline_len(&w.points) * 0.5, true);
+        assert!(w.trim_point.distance(half) < 1e-3, "trim_point IS the arc midpoint");
+        // On this straight run the middle sample agrees, and the point is ON the cable.
+        let mid = w.points[w.points.len() / 2];
+        assert!(w.trim_point.distance(mid) < 1.0);
+        assert!(polyline_distance(&w.points, w.trim_point) < 1.0);
+        // The restyle recomputes it: the handle never sits off the wire you see.
+        let mut straight = l.clone();
+        straight.make_wires_straight();
+        let ws = straight.wires.iter().find(|w| w.id == wid).unwrap();
+        assert!(
+            ws.trim_point.distance(w.trim_point) < 1.0,
+            "a straight run between the same ends keeps the midpoint"
+        );
+        assert!(polyline_distance(&ws.points, ws.trim_point) < 1e-3, "on the restyled cable");
+        // The trim record rides the wire into the layout (the painter and the hit-test read
+        // the model, never re-derive it).
+        g.op_set_trim(wid, Some(WireTrim::identity())).unwrap();
+        let l2 = compute(&g, &Camera::new(), view());
+        assert_eq!(
+            l2.wires.iter().find(|w| w.id == wid).unwrap().trim,
+            Some(WireTrim::identity()),
+            "the inserted node is published"
+        );
+    }
+
+    #[test]
+    fn a_trim_handle_wins_its_capture_dies_under_a_card_and_needs_a_trim() {
+        let mut g = Graph::new();
+        let a = g.op_add_node(gain_spec(), Vec2::ZERO);
+        let b = g.op_add_node(gain_spec(), Vec2::new(400.0, 0.0));
+        let wid = wid_of(&g.op_add_wire(PortRef::new(nid(&a), 1), PortRef::new(nid(&b), 0)));
+        let cam = Camera::new();
+        // Clean wire: the midpoint is plain wire — the handle is offered only while a trim
+        // exists (what is not drawn is not touchable).
+        let l = compute(&g, &cam, view());
+        let tp = l.wires[0].trim_point;
+        assert_eq!(hit_test(&l, tp, Lod::Full), Hit::Wire(wid));
+        // Trimmed: the same pixel is the cable node…
+        g.op_set_trim(wid, Some(WireTrim::identity())).unwrap();
+        let l = compute(&g, &cam, view());
+        assert_eq!(hit_test(&l, tp, Lod::Full), Hit::WireTrim(wid));
+        // …out to the capture radius, and no further.
+        let inside = Vec2::new(tp.x, tp.y + LAYOUT_TOUCH_PORT_CAPTURE_RADIUS as f32 - 2.0);
+        assert_eq!(hit_test(&l, inside, Lod::Full), Hit::WireTrim(wid));
+        let outside = Vec2::new(tp.x, tp.y + LAYOUT_TOUCH_PORT_CAPTURE_RADIUS as f32 + 6.0);
+        assert_ne!(hit_test(&l, outside, Lod::Full), Hit::WireTrim(wid));
+        // At Dot LOD nothing of the wire is drawn to scale, so the handle is not targetable.
+        assert_ne!(hit_test(&l, tp, Lod::Dot), Hit::WireTrim(wid));
+        // A card drawn over it kills it: wires and their furniture draw under every card, and
+        // what you cannot see you cannot touch.
+        let cid = nid(&g.op_add_node(gain_spec(), Vec2::new(tp.x - 60.0, 0.0)));
+        let l = compute(&g, &cam, view());
+        assert_eq!(hit_test(&l, tp, Lod::Full), Hit::Node(cid), "the covering card wins");
+    }
+
+    #[test]
+    fn a_trim_handle_outranks_the_repatch_grab_inside_its_capture() {
+        // A ~100 px wire: the grabs sit 32 px in from the ports, the handle at 50 — inside
+        // each other's 24 px capture. The rank is the ruling: the DRAWN handle wins the
+        // invisible grab.
+        let mut g = Graph::new();
+        let a = g.op_add_node(gain_spec(), Vec2::ZERO);
+        let b = g.op_add_node(gain_spec(), Vec2::new(348.0, 0.0));
+        let wid = wid_of(&g.op_add_wire(PortRef::new(nid(&a), 1), PortRef::new(nid(&b), 0)));
+        let cam = Camera::new();
+        let l = compute(&g, &cam, view());
+        let w = l.wires.iter().find(|w| w.id == wid).unwrap();
+        let (tp, grab) = (w.trim_point, w.grab_from);
+        assert!(
+            tp.distance(grab) <= LAYOUT_TOUCH_PORT_CAPTURE_RADIUS as f32,
+            "the test's premise: overlapping captures ({tp:?} vs {grab:?})"
+        );
+        // Clean wire: the grab rules its ring, midpoint included.
+        assert_eq!(hit_test(&l, grab, Lod::Full), Hit::WireEnd(wid, WireEndSide::From));
+        assert_eq!(hit_test(&l, tp, Lod::Full), Hit::WireEnd(wid, WireEndSide::From));
+        // Trimmed: the handle outranks the grab everywhere their captures overlap.
+        g.op_set_trim(wid, Some(WireTrim::identity())).unwrap();
+        let l = compute(&g, &cam, view());
+        assert_eq!(hit_test(&l, tp, Lod::Full), Hit::WireTrim(wid));
+        assert_eq!(
+            hit_test(&l, grab, Lod::Full),
+            Hit::WireTrim(wid),
+            "even on the grab's own pixel"
+        );
+    }
+
+    #[test]
+    fn quant_key_cells_tile_the_well_band_and_route_to_the_mask_param() {
+        let mut g = Graph::new();
+        let q = g.op_add_node(quant_spec(true), Vec2::ZERO);
+        let qid = nid(&q);
+        let cam = Camera::new();
+        let l = compute(&g, &cam, view());
+        let nq = l.nodes.iter().find(|n| n.id == qid).unwrap();
+        let band = nq.well_band.expect("the keyboard well band is reserved");
+        assert_eq!(nq.key_cells.len(), 12, "twelve pitch classes");
+        assert_eq!(nq.key_param, Some(1), "the keys edit `custom-mask` (param 1)");
+        // Equal cells tiling the band left→right = class 0→11, with the 15 % vertical inset.
+        let w = band.width() / 12.0;
+        for (k, cell) in nq.key_cells.iter().enumerate() {
+            assert!((cell.min.x - (band.min.x + k as f32 * w)).abs() < 1e-3, "cell {k} x");
+            assert!((cell.width() - w).abs() < 1e-3, "cell {k} is an equal slice");
+            assert!(
+                (cell.min.y - (band.min.y + band.height() * 0.15)).abs() < 1e-3,
+                "cell {k} inset top"
+            );
+            assert!(
+                (cell.max.y - (band.max.y - band.height() * 0.15)).abs() < 1e-3,
+                "cell {k} inset bottom"
+            );
+        }
+        assert!((nq.key_cells[11].max.x - band.max.x).abs() < 1e-3, "the tiling ends at the band");
+        // The hit routes a key centre to its class — at Full LOD only (Simplified draws no
+        // keys, and what you cannot see you cannot touch).
+        let c5 = nq.key_cells[5].center();
+        assert_eq!(hit_test(&l, c5, Lod::Full), Hit::Key(qid, 5));
+        assert_eq!(
+            hit_test(&l, c5, Lod::Simplified),
+            Hit::Node(qid),
+            "no keys without the drawing"
+        );
+        // Every other node: no cells, no param — the keyboard is the quantizer's alone.
+        let mut g2 = Graph::new();
+        let gg = g2.op_add_node(gain_spec(), Vec2::ZERO);
+        let l2 = compute(&g2, &cam, view());
+        let ng = l2.nodes.iter().find(|n| n.id == nid(&gg)).unwrap();
+        assert!(ng.key_cells.is_empty() && ng.key_param.is_none());
+        // A quant card WITHOUT the mask param routes no taps (never to a param that is not
+        // there — the step_cells discipline).
+        let mut g3 = Graph::new();
+        let q3 = g3.op_add_node(quant_spec(false), Vec2::ZERO);
+        let l3 = compute(&g3, &cam, view());
+        let nq3 = l3.nodes.iter().find(|n| n.id == nid(&q3)).unwrap();
+        assert!(nq3.key_cells.is_empty(), "no mask param, no cells");
+        assert_eq!(nq3.key_param, None);
     }
 }

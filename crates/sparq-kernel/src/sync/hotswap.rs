@@ -330,11 +330,14 @@ impl<T> HotSwapAudio<T> {
     ///
     /// `inherit` runs at the swap point, on the audio thread, with the incoming payload (live
     /// from the next sample on) and the outgoing one (which rendered the previous block): the
-    /// place where a successor adopts the stream's clock. It must be real-time safe — no
-    /// allocation, no locks — like everything called between boundaries.
+    /// place where a successor adopts the stream's clock — and, since the operator's round-4
+    /// D1 ruling, where it adopts the predecessor's RUNTIME (live module instances and their
+    /// state), which is why the outgoing payload is handed over MUTABLY: an adoption swaps
+    /// instances between the two. It must be real-time safe — no allocation, no locks — like
+    /// everything called between boundaries.
     ///
     /// This method never blocks, never allocates and never drops a payload.
-    pub fn boundary<F: FnOnce(&mut T, &T)>(&mut self, inherit: F) -> bool {
+    pub fn boundary<F: FnOnce(&mut T, &mut T)>(&mut self, inherit: F) -> bool {
         let epoch = self.epoch;
         let mut swapped = false;
         if !self.shared.staged.load(Ordering::Acquire).is_null() {
@@ -350,7 +353,11 @@ impl<T> HotSwapAudio<T> {
                     // fully built payload; our AcqRel swap synchronises with it, so the box
                     // and everything it owns is visible and exclusive to us.
                     let mut incoming = unsafe { Box::from_raw(incoming) };
-                    inherit(incoming.as_mut(), self.live.as_ref());
+                    // The outgoing payload is handed over MUTABLY (round-4 D1): an inherit hook
+                    // that adopts runtime state swaps the two payloads' live parts in place.
+                    // Both borrows are exclusive and disjoint — `incoming` is a local box, and
+                    // the replace below cannot run until this call returns.
+                    inherit(incoming.as_mut(), self.live.as_mut());
                     let outgoing = std::mem::replace(&mut self.live, incoming);
                     self.publish_retirement(slot, outgoing, epoch);
                     swapped = true;

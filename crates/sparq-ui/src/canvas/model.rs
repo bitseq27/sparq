@@ -271,10 +271,50 @@ impl Node {
     }
 }
 
+/// A wire's trim — the CABLE NODE (operator round 4 2026-10-02, D15): a per-wire amplitude
+/// and offset the bridge rides into the kernel (an audio wire gets a synthesised invisible
+/// `util/gain`, a cv wire the executor's trim, a control wire the param-mod formula). The
+/// operator's ruling: cable nodes are a PER-WIRE TRIM RECORD, not graph objects — so the wire
+/// carries the value and undo/redo, the journal and the adoption all see one truth.
+/// [`WireTrim::identity`] is the inserted-but-undragged node: a visible handle that changes
+/// nothing, the rest state a tap on the hover ghost inserts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WireTrim {
+    /// Amplitude scale — 1.0 is untouched; clamped 0..2 by [`Graph::op_set_trim`].
+    pub amp: f32,
+    /// DC offset — 0.0 is untouched; clamped −1..1. NEVER enters the audio path (D15: the
+    /// gesture layer pins it 0 on audio wires).
+    pub offset: f32,
+}
+
+impl WireTrim {
+    /// The identity trim: a cable node at rest — full amplitude, no offset, the signal
+    /// bit-identical to the untrimmed wire.
+    #[must_use]
+    pub const fn identity() -> Self {
+        Self { amp: 1.0, offset: 0.0 }
+    }
+
+    /// This trim clamped into the declared ranges (amp 0..2, offset −1..1). A non-finite
+    /// component sanitises to its identity value — NaN reaches neither the kernel nor the
+    /// history (the scope's rule).
+    #[must_use]
+    fn sanitised(self) -> Self {
+        Self {
+            amp: if self.amp.is_finite() { self.amp.clamp(0.0, 2.0) } else { 1.0 },
+            offset: if self.offset.is_finite() { self.offset.clamp(-1.0, 1.0) } else { 0.0 },
+        }
+    }
+}
+
 /// A directed connection from an output port to an input port — or, with `param` set, a
 /// CONTROL connection from a cv output to a float PARAMETER (operator ruling 2026-10-01 r3:
 /// every float parameter is a controllable input).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// `trim` (operator round 4, D15) carries the cable node. The field is what costs the wire
+/// its `Eq`: two f32s have no total equality worth deriving, and `PartialEq` — the only
+/// comparison any canvas rule asks of a wire — is kept.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Wire {
     /// Stable identity.
     pub id: WireId,
@@ -287,6 +327,11 @@ pub struct Wire {
     /// (additive around it, ±1 cv sweeping half the range, clamped — declared in
     /// `docs/ui/gestures.md` §4c). Port wires carry `None`.
     pub param: Option<usize>,
+    /// The cable node (operator round 4, D15): `None` = the wire runs clean; `Some` = the
+    /// per-wire amp/offset record the bridge rides into the kernel. `Some(identity)` is the
+    /// inserted-but-undragged node — it LOOKS like a handle and SOUNDS like nothing, and the
+    /// distinction from `None` is the point (a handle you can grab vs. a clean wire).
+    pub trim: Option<WireTrim>,
 }
 
 /// One graph mutation, as data. Every variant has an [`Op::inverse`].
@@ -351,6 +396,17 @@ pub enum Op {
         /// New value.
         to: f32,
     },
+    /// Set or remove a wire's trim — the CABLE NODE (operator round 4, D15). The values are
+    /// already clamped/sanitised by [`Graph::op_set_trim`], so the op never carries an
+    /// out-of-range trim that undo would have to re-validate (the [`Op::SetParam`] discipline).
+    SetTrim {
+        /// Which wire.
+        wire: WireId,
+        /// Previous trim (`None` = the wire ran clean).
+        from: Option<WireTrim>,
+        /// New trim (`None` = the node was removed and the wire runs clean again).
+        to: Option<WireTrim>,
+    },
     /// A group of ops applied and undone as one unit.
     Batch(Vec<Op>),
 }
@@ -377,6 +433,7 @@ impl Op {
             Self::SetParam { node, index, from, to } => {
                 Self::SetParam { node: *node, index: *index, from: *to, to: *from }
             },
+            Self::SetTrim { wire, from, to } => Self::SetTrim { wire: *wire, from: *to, to: *from },
             Self::Batch(ops) => Self::Batch(ops.iter().rev().map(Op::inverse).collect()),
         }
     }
@@ -393,6 +450,7 @@ impl Op {
             Self::SetFlags { .. } => "flags",
             Self::Rename { .. } => "rename",
             Self::SetParam { .. } => "param",
+            Self::SetTrim { .. } => "wire trim",
             Self::Batch(_) => "batch",
         }
     }
@@ -613,7 +671,7 @@ impl Graph {
     /// verdict; this only assigns the id and inserts.
     pub fn op_add_wire(&mut self, from: PortRef, to: PortRef) -> Op {
         let id = self.alloc_wire();
-        let wire = Wire { id, from, to, param: None };
+        let wire = Wire { id, from, to, param: None, trim: None };
         self.apply(&Op::AddWire(wire));
         Op::AddWire(wire)
     }
@@ -623,7 +681,7 @@ impl Graph {
     /// is the wire's `param`, and every consumer of wires as SIGNAL paths filters on it.
     pub fn op_add_param_wire(&mut self, from: PortRef, dst: NodeId, param: usize) -> Op {
         let id = self.alloc_wire();
-        let wire = Wire { id, from, to: PortRef::new(dst, 0), param: Some(param) };
+        let wire = Wire { id, from, to: PortRef::new(dst, 0), param: Some(param), trim: None };
         self.apply(&Op::AddWire(wire));
         Op::AddWire(wire)
     }
@@ -707,6 +765,27 @@ impl Graph {
         Some(op)
     }
 
+    /// Build and apply a wire-trim edit — a cable-node insert, drag or removal (operator
+    /// round 4, D15) — or `None` when there is nothing to record: no such wire, or the
+    /// sanitised/clamped value equals the current one (re-setting identity on an identity
+    /// node is not an edit).
+    ///
+    /// The clamp lives HERE, not in the gesture layer, so every path that can change a trim
+    /// (a node drag, a driver call, a future automation lane) obeys the same ranges — amp
+    /// 0..2, offset −1..1, a non-finite component sanitised to identity — and the
+    /// [`Op::SetTrim`] in history never carries an out-of-range value (the
+    /// [`Graph::op_set_param`] discipline). `None` removes the node: the wire runs clean.
+    pub fn op_set_trim(&mut self, id: WireId, to: Option<WireTrim>) -> Option<Op> {
+        let from = self.wire(id)?.trim;
+        let to = to.map(WireTrim::sanitised);
+        if from == to {
+            return None;
+        }
+        let op = Op::SetTrim { wire: id, from, to };
+        self.apply(&op);
+        Some(op)
+    }
+
     // ------------------------------------------------------------ the structural mutator
 
     /// Apply an op to the graph **without validation** — the low-level mutator that both the
@@ -763,6 +842,11 @@ impl Graph {
                     if *index < n.param_values.len() {
                         n.param_values[*index] = *to;
                     }
+                }
+            },
+            Op::SetTrim { wire, to, .. } => {
+                if let Some(w) = self.wires.iter_mut().find(|w| w.id == *wire) {
+                    w.trim = *to;
                 }
             },
             Op::Batch(ops) => {
@@ -1203,5 +1287,93 @@ mod tests {
         let wid = g.wires()[0].id;
         let _ = g.op_remove_wire(wid);
         assert_eq!(g.missing_required_inputs(), vec![(gain, 0)]);
+    }
+
+    // ------------------------------------------- operator round 4, D15: the wire trim record
+
+    fn wired_pair() -> (Graph, WireId) {
+        let mut g = Graph::new();
+        let a = g.op_add_node(gain(), Vec2::ZERO);
+        let b = g.op_add_node(gain(), Vec2::new(300.0, 0.0));
+        let (aid, bid) = (node_id(&a), node_id(&b));
+        let w = g.op_add_wire(PortRef::new(aid, 1), PortRef::new(bid, 0));
+        let wid = match w {
+            Op::AddWire(w) => w.id,
+            _ => unreachable!(),
+        };
+        (g, wid)
+    }
+
+    #[test]
+    fn a_fresh_wire_runs_clean_and_identity_is_not_normalised_away() {
+        let (mut g, wid) = wired_pair();
+        assert_eq!(g.wire(wid).unwrap().trim, None, "a new wire carries no cable node");
+        // Insert: None → Some(identity) IS an edit — the handle appears (and the bridge's
+        // identity rule keeps the render bit-identical, S8's gate).
+        let ins = g.op_set_trim(wid, Some(WireTrim::identity())).expect("insert is a change");
+        assert_eq!(g.wire(wid).unwrap().trim, Some(WireTrim::identity()));
+        assert_eq!(ins.label(), "wire trim");
+        // Re-setting identity records nothing (an undo step that undoes nothing is a lie).
+        assert!(g.op_set_trim(wid, Some(WireTrim::identity())).is_none(), "unchanged is no op");
+        // Removal: Some(identity) → None is an edit again, and the distinction survived —
+        // the model never collapsed the inserted node back into a clean wire.
+        let rm = g.op_set_trim(wid, None).expect("removal is a change");
+        assert_eq!(g.wire(wid).unwrap().trim, None);
+        // …and the inverse of the removal re-inserts exactly.
+        g.apply(&rm.inverse());
+        assert_eq!(g.wire(wid).unwrap().trim, Some(WireTrim::identity()), "inverse round-trips");
+        // No such wire: refused as None, never a panic.
+        assert!(g.op_set_trim(999, Some(WireTrim::identity())).is_none());
+    }
+
+    #[test]
+    fn trim_clamps_sanitises_and_undoes_through_history() {
+        let (mut g, wid) = wired_pair();
+        let mut h = UndoStack::new();
+        // Wild values clamp into the declared ranges (amp 0..2, offset −1..1) at the model
+        // door — the op in history never carries an out-of-range trim.
+        let op =
+            g.op_set_trim(wid, Some(WireTrim { amp: 5.0, offset: -3.0 })).expect("clamped set");
+        h.push(op.clone());
+        assert_eq!(g.wire(wid).unwrap().trim, Some(WireTrim { amp: 2.0, offset: -1.0 }));
+        match &op {
+            Op::SetTrim { to: Some(t), from: None, .. } => {
+                assert_eq!(*t, WireTrim { amp: 2.0, offset: -1.0 }, "history carries the clamp");
+            },
+            other => unreachable!("{other:?}"),
+        }
+        // A non-finite component sanitises to its identity value — INFINITY sanitises, it
+        // does not clamp (inset.rs's one rule): NaN reaches no kernel, no journal, no history.
+        let op = g
+            .op_set_trim(wid, Some(WireTrim { amp: f32::NAN, offset: f32::INFINITY }))
+            .expect("sanitised set");
+        h.push(op);
+        assert_eq!(g.wire(wid).unwrap().trim, Some(WireTrim { amp: 1.0, offset: 0.0 }));
+        // Undo walks the record back through both edits to the clean wire; redo re-applies.
+        h.undo(&mut g);
+        assert_eq!(g.wire(wid).unwrap().trim, Some(WireTrim { amp: 2.0, offset: -1.0 }));
+        h.undo(&mut g);
+        assert_eq!(g.wire(wid).unwrap().trim, None, "undo restores the clean wire");
+        h.redo(&mut g);
+        assert_eq!(g.wire(wid).unwrap().trim, Some(WireTrim { amp: 2.0, offset: -1.0 }));
+    }
+
+    #[test]
+    fn removing_a_node_takes_its_trim_and_undo_restores_both() {
+        // The trim rides the wire it belongs to (the per-wire record ruling): deleting the
+        // node deletes the wire deletes the trim, and ONE undo restores the whole world —
+        // trim included, because RemoveNode's inverse re-adds the stored wires verbatim.
+        let (mut g, wid) = wired_pair();
+        g.op_set_trim(wid, Some(WireTrim { amp: 0.5, offset: 0.25 })).unwrap();
+        let nid = g.wire(wid).unwrap().from.node;
+        let mut h = UndoStack::new();
+        h.push(g.op_remove_node(nid).expect("node exists"));
+        assert!(g.wire(wid).is_none(), "the trimmed wire went with its node");
+        h.undo(&mut g);
+        assert_eq!(
+            g.wire(wid).unwrap().trim,
+            Some(WireTrim { amp: 0.5, offset: 0.25 }),
+            "the restored wire carries its trim record"
+        );
     }
 }

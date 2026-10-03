@@ -1,0 +1,98 @@
+# sparq module manifest — util/quant (operator round 4 2026-10-02, D11).
+# Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
+#
+# The note quantizer the operator asked for ("note quantizer + dropdown + keyboard"): a pitch
+# cv snaps to the nearest semitone of a scale — the standard fifteen, or a CUSTOM twelve-bit
+# mask the card's keyboard edits key by key.
+#
+# SEMANTICS, stated exactly:
+# * `pitch` spans 0..1 over 120 semitones (ten octaves) — the same span the keyboard's
+#   `round(p * 120) mod 12` class mapping reads, so the lit key and the snapped note can
+#   never disagree. The input is audio-rate (an lfo sweep is read at full resolution); the
+#   output is the block's settled word, block-rate.
+# * `scale` selects the snapping set: 0 = CUSTOM (the `custom-mask` bits, bit k = semitone
+#   class k), 1..15 = the standard fifteen in the declared order — Chromatic, Major, Minor,
+#   Dorian, Phrygian, Lydian, Mixolydian, Locrian, Harmonic Minor, Melodic Minor, Major
+#   Pentatonic, Minor Pentatonic, Blues, Whole Tone, Diminished (the operator's ruling:
+#   "quantizer scales = the standard 15"). The dropdown the inspector grows lists exactly
+#   these names, Custom first.
+# * The snap is the NEAREST scale semitone to the input's continuous semitone value, measured
+#   circularly within the octave; an exact tie resolves DOWN (deterministic, declared). The
+#   snapped semitone is clamped back into 0..120 and republished as `s' / 120`.
+# * An EMPTY custom mask has nothing to snap to and says so by passing the pitch through
+#   unquantized — a silent lie would be snapping to a note the user turned off.
+# * `trig` is OPTIONAL sample-and-hold: in a block carrying at least one qualifying trigger
+#   (value > 0 — the counting rule), the publication is the quantized input AT THE LAST
+#   TRIGGER'S SAMPLE; blocks without a trigger follow the input continuously. The latch is
+#   block-scoped v0 — a hold across silent blocks is state work, declared, not faked.
+# * Stateless in v0: the blob is empty; a restore re-reads the input on the next block.
+
+[identity]
+id = "sparq/util/quant"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Quantizer"
+summary = "Pitch quantizer: snaps a 0..1 pitch cv to the Custom mask or the standard fifteen scales"
+authors = ["sparq"]
+license = "MIT"
+
+[classification]
+category = "utility/quantizer"
+top = "util"
+kind = "processor"
+tier = "t1"
+stability = "stable"
+
+[[ports]]
+id = "pitch-in"
+name = "Pitch In"
+direction = "in"
+type = "cv"
+rate = "audio"
+range = "unipolar"
+
+[[ports]]
+id = "trig-in"
+name = "Trig In"
+direction = "in"
+type = "event"
+event_kinds = ["trigger", "clock"]
+required = false
+
+# The quantized pitch — the publication the keyboard's lit key and the painter both read.
+[[ports]]
+id = "pitch-out"
+name = "Pitch Out"
+direction = "out"
+type = "cv"
+rate = "block"
+range = "unipolar"
+
+# 0 = Custom (the mask below); 1..15 = the standard fifteen, in the header's declared order.
+[[params]]
+id = "scale"
+name = "Scale"
+type = "int"
+unit = "x"
+min = 0.0
+max = 15.0
+default = 0.0
+
+# The CUSTOM scale as twelve membership bits (bit k = semitone class k); the card's keyboard
+# flips them one key at a time. Default all-twelve: Custom starts chromatic, transparent.
+[[params]]
+id = "custom-mask"
+name = "Custom Scale"
+type = "int"
+unit = "x"
+min = 0.0
+max = 4095.0
+default = 4095.0
+
+[state]
+schema_id = "sparq/util/quant/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "trivial"

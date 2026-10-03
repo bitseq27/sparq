@@ -1,15 +1,17 @@
 @echo off
 REM ===========================================================================
-REM  sparq test006 - WO-013 inc3+5 + WO-012 inc2: browser, inspector, re-patch,
-REM  rename, inspector scroll, the LOD walk, the cv wire - and the LIVE audio
-REM  session: PLAY on wasapi-shared, continuous meters, live edits, on SATURN.
+REM  sparq test006 - round 4 (2026-10-02) + WO-013 inc3+5 + WO-012 inc2:
+REM  browser, inspector, re-patch, rename, scroll, the LOD walk, the cv wire,
+REM  the LIVE audio session - and the round-4 asks: clip LED, clock wheel,
+REM  walking lights, the quantizer keyboard, cable nodes, the mult strip,
+REM  vca, fold, solid events, 6 px ports. On SATURN.
 REM
 REM  THE CONTRACT: one file from Qwen - this script. Run it, answer the prompts,
 REM  send back ONE file: test006.log from the repo root - plus logs\ui.log if
 REM  the window session ran.
 REM
-REM  WHY. The increments are sandbox-green - 777 tests, audit PASS
-REM  with 37 smokes, goldens unchanged. What the sandbox CANNOT prove: real
+REM  WHY. Round 4 is sandbox-green - 899 tests, audit PASS with 59 smoke
+REM  lines, goldens unchanged. What the sandbox CANNOT prove: real
 REM  fingers on the browser sheet, the slider following a real drag, the wire-
 REM  end rings under a real touch, the rename sheet under real keys, the
 REM  inspector scroll under real two fingers, the LOD renderings next to the
@@ -53,7 +55,7 @@ del exec.wav >nul 2>&1
 >>"%LOG%" echo ===== test%TVER% RUN %DATE% %TIME% on %COMPUTERNAME% user %USERNAME% =====
 
 call :say ================================================================
-call :say  sparq test%TVER% - WO-013 inc 3+4+5 and WO-012 inc 2: browser, inspector, levels, rename, scroll, LOD, LIVE audio
+call :say  sparq test%TVER% - round 4 + WO-013 inc 3+4+5 and WO-012 inc 2: browser, inspector, levels, rename, scroll, LOD, LIVE audio, round-4 asks
 call :say  at the end you send back ONE file: test%TVER%.log from the repo root
 call :say ================================================================
 
@@ -101,7 +103,7 @@ call :run "version stamp"
 
 REM ---- [02] modules --strict -------------------------------------------------
 call :say " "
-call :say [02] module registry - the seventeen manifests, strict
+call :say [02] module registry - the twenty-four manifests, strict
 set "CMD=target\release\sparq.exe modules --strict"
 call :run "modules --strict"
 set "RC02=!RC!"
@@ -115,14 +117,14 @@ set "RC03=!RC!"
 
 REM ---- [04] the canvas bridge via the audit --------------------------------------
 call :say " "
-call :say [04] canvas bridge - the audit drives synthetic touch through 37 smokes,
+call :say [04] canvas bridge - the audit drives synthetic touch through 59 smokes,
 call :say      including the five live-session ones: PLAY on the manual null device,
 call :say      a live param edit crossing the command ring with the level FOLLOWING,
 call :say      a live structural edit re-staging at the boundary, the STOP evidence
 call :say      line, and an unplug ending the session with the canvas untouched.
 call :say      Its RENDER WAV smoke writes canvas-render.wav
 call :say      at MANIFEST DEFAULTS - the baseline for step [07].
-call :run "ui --audit - 37 smokes incl. rename, cv levels, scroll, LOD, live, scope, chrome, mouse"
+call :run "ui --audit - 59 smokes incl. rename, cv levels, scroll, LOD, live, scope, chrome, mouse, round-4 wells, cable nodes"
 set "RC04=!RC!"
 
 REM ---- [05] baseline hash --------------------------------------------------------
@@ -176,6 +178,39 @@ call :say      K. while it plays: drag a slider - the sound changes LIVE, no sto
 call :say         no click at the moment of the edit; drag a new wire - it goes
 call :say         audible at the next block boundary. Tap STOP: sound stops and
 call :say         the evidence line names blocks, xruns, swaps and allocations.
+call :say      L. THE CLIP LED: make the patch hot - raise a gain until the master
+call :say         meter pins. A red cap rides the bar tops and the CLIP word shows
+call :say         on the info band WHILE it plays; the latch holds; STOP clears it.
+call :say      M. Add mod/clk: four rings - 4th, 8th, 16th, 32nd - left of the outs.
+call :say         Under PLAY all four turn, the outer fastest; at rest they stand
+call :say         still at twelve o'clock.
+call :say      N. Add mod/seq, wire the clock in: under PLAY a cursor cell walks the
+call :say         sixteen step buttons - the walking light rides OVER the pattern
+call :say         fill, both readable. Add mod/rand: bars with a lit cursor bar;
+call :say         the same seed shows the same bars - the display is the module.
+call :say      O. Add util/quant, wire a pitch through it: the card shows a 12-key
+call :say         keyboard; the current scale's keys are filled; a passing pitch
+call :say         lights its key. Tap a key: in Custom the membership flips; under
+call :say         a preset scale the tap REFUSES in words that name the remedy.
+call :say      P. THE CABLE NODE: hover a wire - a ghost dot at its midpoint. Tap -
+call :say         the node appears and NOTHING is heard: identity renders bit-
+call :say         identical. Drag up/down: amp, and you hear it. Drag left/right:
+call :say         offset - on an AUDIO wire that axis is inert by rule, DC never
+call :say         enters the audio path, and the log says so. Tap the node: gone;
+call :say         one three-finger tap restores; one undo per whole drag.
+call :say      Q. util/mult: the card is a QUARTER width with no words, six dots in
+call :say         one centred column; fan one source out to two and back.
+call :say      R. Wire lfo OUT to vca CV: the connect is ACCEPTED - round 3 refused
+call :say         it, round 4 fixed the manifest - and the tremolo is audible
+call :say         under PLAY.
+call :say      S. fx/fold: put it in the chain and raise amount - the sound blooms
+call :say         into the fold; at zero it is a wire.
+call :say      T. ana/rms: the rolling level graph beside the floor bar under PLAY -
+call :say         a 240-frame window, cleared at session start. flt/svf: wire a cv
+call :say         to cutoff-mod and watch the response curve MOVE with it.
+call :say      U. Round-4 chrome: event cables are SOLID magenta - no dash - while
+call :say         control wires stay dashed cyan, and ports float 6 px beside the
+call :say         card edge.
 call :say      WITH A MOUSE, if one is handy: right-click a node opens its menu
 call :say         where a finger long-presses; the wheel scrolls the inspector over
 call :say         the panel and pans the canvas over the canvas; plain hover is
@@ -202,6 +237,16 @@ set "H=n"
 set "I=n"
 set "J=n"
 set "K=n"
+set "L=n"
+set "M=n"
+set "N=n"
+set "O=n"
+set "P=n"
+set "Q=n"
+set "R=n"
+set "S=n"
+set "T=n"
+set "U=n"
 set /p "A=      A: browser search spawned the Sine node where you pressed, y/n? "
 set /p "B=      B: the slider followed your finger and the log named the value, y/n? "
 set /p "C=      C: you tapped RENDER WAV after the edit, y/n? "
@@ -213,8 +258,19 @@ set /p "H=      H: zoomed-out states read as patterns, dot wires are hairlines; 
 set /p "I=      I: the cv wire lit from the rms value after RENDER WAV, y/n? "
 set /p "J=      J: PLAY made device sound and the wires animated while playing, y/n? "
 set /p "K=      K: a live slider edit changed the sound without stopping, y/n? "
+set /p "L=      L: the clip cap and CLIP word showed on the hot render and STOP cleared them, y/n? "
+set /p "M=      M: the four clock rings turned under PLAY and stood still at rest, y/n? "
+set /p "N=      N: the seq cursor walked the steps and the rand bars lit with the cursor, y/n? "
+set /p "O=      O: the keyboard lit, a Custom tap flipped a key, a preset tap refused in words, y/n? "
+set /p "P=      P: ghost dot, silent insert, audible amp drag, inert audio offset, tap removed, one undo, y/n? "
+set /p "Q=      Q: the mult strip read quarter width with a centred dot column, y/n? "
+set /p "R=      R: the vca took the lfo wire and you heard the tremolo, y/n? "
+set /p "S=      S: fold bloomed above zero and acted as a wire at zero, y/n? "
+set /p "T=      T: the rms graph rolled and the svf curve moved under its cv, y/n? "
+set /p "U=      U: events solid, controls dashed, ports float 6 px, y/n? "
 call :say operator answers: A=!A! B=!B! C=!C! D=!D! E=!E! F=!F! G=!G!
 call :say                 H=!H! I=!I! J=!J! K=!K!
+call :say                 L=!L! M=!M! N=!N! O=!O! P=!P! Q=!Q! R=!R! S=!S! T=!T! U=!U!
 
 REM ---- [07] the mechanical claim: the edit reached the render ----------------------
 call :say " "
@@ -243,9 +299,10 @@ if defined RC00 call :verdict "[00b] tree matches SYNC-STAMP.txt" "!RC00!"
 if defined RC01 call :verdict "[01] build + stamp guard" "!RC01!"
 if defined RC02 call :verdict "[02] modules --strict" "!RC02!"
 if defined RC03 call :verdict "[03] exec offline render" "!RC03!"
-if defined RC04 call :verdict "[04] ui --audit, 37 smokes" "!RC04!"
+if defined RC04 call :verdict "[04] ui --audit, 59 smokes" "!RC04!"
 call :say [07] param edit reached the render : !CHG!
 call :say operator answers: A=!A! B=!B! C=!C! D=!D! E=!E! F=!F! G=!G! H=!H! I=!I! J=!J! K=!K!
+call :say                 L=!L! M=!M! N=!N! O=!O! P=!P! Q=!Q! R=!R! S=!S! T=!T! U=!U!
 call :say steps failing on rc: !FAILED!
 call :say " "
 REM ---- the compact copies: the full logs stay here, the digests travel -----

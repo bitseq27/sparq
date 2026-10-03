@@ -16,13 +16,13 @@ use crate::canvas::browser::{BrowserHit, BrowserItem, BrowserState};
 use crate::canvas::camera::{Camera, Lod};
 use crate::canvas::connect::{self, ConnectContext, ConnectOutcome};
 use crate::canvas::inspector::{self, InspectorLayout};
-use crate::canvas::layout::{self, CanvasLayout, Hit, WireEndSide};
-use crate::canvas::model::{Graph, NodeId, Op, PortRef, UndoStack, Wire, WireId};
+use crate::canvas::layout::{self, CanvasLayout, Hit, SignalClass, WireEndSide};
+use crate::canvas::model::{Graph, NodeId, Op, PortRef, UndoStack, Wire, WireId, WireTrim};
 use crate::geom::{Rect, Vec2};
 use crate::gesture::GestureIntent;
 use crate::tokens::{
     LAYOUT_CANVAS_SNAP, LAYOUT_SPACE_2, LAYOUT_SPACE_3, LAYOUT_SPACE_PADDING_SECTION,
-    LAYOUT_TOUCH_ROW_HEIGHT_LIST,
+    LAYOUT_TOUCH_PORT_CAPTURE_RADIUS, LAYOUT_TOUCH_ROW_HEIGHT_LIST,
 };
 use sparq_module_api::port::{Direction, Phase};
 
@@ -117,6 +117,21 @@ pub enum Interaction {
         cursor_screen: Vec2,
         /// Whether this drag already pushed its history entry.
         pushed: bool,
+    },
+    /// Dragging a wire's CABLE NODE (operator round 4, D15): vertical is amp (up louder,
+    /// 100 px per unit), horizontal is offset (right positive, 100 px per unit) — the offset
+    /// pinned 0 on audio wires, because DC never enters the audio path. `orig` is the trim
+    /// the gesture found (the cancel's restore data); the drag coalesces into ONE history
+    /// entry keeping that original `from`, the `Param` drag's discipline.
+    Trim {
+        /// The wire whose trim is being edited.
+        wire: WireId,
+        /// The trim as the gesture found it.
+        orig: Option<WireTrim>,
+        /// Accumulated screen delta.
+        acc_screen: Vec2,
+        /// Whether the wire carries audio (its offset stays 0 — D15).
+        audio: bool,
     },
     /// Dragging the inspector's response-plot marker (WO-012 increment 5, D3). A READ-ONLY
     /// probe: it moves no param, pushes no history, notes nothing on the live-sync ledger —
@@ -457,7 +472,13 @@ impl CanvasState {
             | Op::RemoveNode { .. }
             | Op::AddWire(_)
             | Op::RemoveWire(_)
-            | Op::SetFlags { .. } => self.patch_changes.structural = true,
+            | Op::SetFlags { .. }
+            // A trim re-stages (the door's decided sentence, operator round 4 D15): the
+            // bridge's kernel shape moves — a gain node appears or disappears for an audio
+            // trim, the executor's cv trim or the param-mod formula changes for the others.
+            // Silent to the listener since D1's adoption; a command-ring fast path for audio
+            // trims is a declared LATER optimisation, not today's lie.
+            | Op::SetTrim { .. } => self.patch_changes.structural = true,
         }
     }
 
@@ -1229,6 +1250,14 @@ impl CanvasState {
                 self.selection.nodes.insert(node);
                 self.flip_step(graph, node, step)
             },
+            Hit::Key(node, key) => {
+                // A keyboard key (operator round 4, D11): the tap flips that pitch class's
+                // membership in the CUSTOM scale — the key is the scale, one undo step per
+                // flip, through the param door (the Step button's rule, on twelve keys).
+                self.selection.clear();
+                self.selection.nodes.insert(node);
+                self.flip_key(graph, node, key)
+            },
             Hit::Param(node, index, track) => {
                 // The node card's own slider (increment 6): tap-to-set, the inspector's rule —
                 // the row under the finger is the row you edit, and one op serves both surfaces.
@@ -1270,10 +1299,40 @@ impl CanvasState {
                 }
                 vec![CanvasEvent::Selection(self.selection.len())]
             },
+            Hit::WireTrim(id) => {
+                // The cable node itself (operator round 4, D15): the tap REMOVES it — the
+                // vocabulary the insert note taught — and the wire runs clean again. One
+                // undo step, and the engine hears a re-stage (trims are structural).
+                self.selection.clear();
+                self.selection.wires.insert(id);
+                let mut ev = vec![CanvasEvent::Selection(1)];
+                ev.extend(self.apply_trim(graph, id, None, false));
+                ev
+            },
             Hit::Wire(id) | Hit::WireEnd(id, _) => {
                 self.selection.clear();
                 self.selection.wires.insert(id);
-                vec![CanvasEvent::Selection(1)]
+                // The cable node's INSERT door (operator round 4, D15): a tap on a CLEAN
+                // wire inside the hover ghost's capture puts the node there — at identity,
+                // so the handle appears and nothing is heard — and the note teaches the
+                // vocabulary the handle's own tap will rely on (drag to edit, tap the node
+                // to remove). Anywhere else on the wire, the tap only selects, as ever.
+                let ghost = graph.wire(id).is_some_and(|w| w.trim.is_none())
+                    && layout.wires.iter().any(|wl| {
+                        wl.id == id
+                            && wl.trim_point.distance(pos)
+                                <= LAYOUT_TOUCH_PORT_CAPTURE_RADIUS as f32
+                    });
+                let mut ev = vec![CanvasEvent::Selection(1)];
+                if ghost {
+                    ev.extend(self.apply_trim(graph, id, Some(WireTrim::identity()), false));
+                    ev.push(CanvasEvent::Note(
+                        "cable node inserted — drag it (up/down = amp, left/right = offset); \
+                         tap the node to remove it"
+                            .to_string(),
+                    ));
+                }
+                ev
             },
             Hit::Empty => {
                 self.selection.clear();
@@ -1479,6 +1538,50 @@ impl CanvasState {
         vec![CanvasEvent::Applied(text)]
     }
 
+    /// One wire-trim edit through the model (which clamps/sanitises), with history — the
+    /// cable node's single door (operator round 4, D15). `coalesce` is true only for the
+    /// updates *inside* an open node drag whose first change already pushed: those replace
+    /// the open entry keeping its ORIGINAL `from`, so one drag is one undo step restoring
+    /// the trim the finger found, and the log stays quiet until the lift (`apply_param`'s
+    /// coalescing, mirrored exactly). `Some(identity)` is the tap-insert on the hover
+    /// ghost; `None` is the tap-remove on the handle itself.
+    fn apply_trim(
+        &mut self,
+        graph: &mut Graph,
+        wire: WireId,
+        to: Option<WireTrim>,
+        coalesce: bool,
+    ) -> Vec<CanvasEvent> {
+        let Some(op) = graph.op_set_trim(wire, to) else {
+            return Vec::new(); // no change (or no such wire): silent, the handle says it
+        };
+        if coalesce {
+            if let Some(Op::SetTrim { wire: pw, from: pfrom, .. }) = self.history.top() {
+                if *pw == wire {
+                    // Merge into the open entry — keeping its ORIGINAL `from`, so one undo
+                    // restores the trim the finger found, not the drag's first waypoint.
+                    if let Op::SetTrim { to, .. } = &op {
+                        self.history.replace_top(Op::SetTrim { wire, from: *pfrom, to: *to });
+                        // The merged value is a fresh edit the ledger has not seen (the
+                        // earlier take may already have carried the first waypoint away) —
+                        // note it, or the live engine keeps playing the drag's first frame.
+                        self.note_patch(&op);
+                    }
+                    return Vec::new();
+                }
+            }
+        }
+        let text = match &op {
+            Op::SetTrim { to: Some(t), .. } => {
+                format!("wire trim: amp {:.2} · offset {:.2}", t.amp, t.offset)
+            },
+            Op::SetTrim { to: None, .. } => "wire trim removed".to_string(),
+            _ => "wire trim".to_string(),
+        };
+        self.commit(op);
+        vec![CanvasEvent::Applied(text)]
+    }
+
     /// Toggle one step button of `mod/seq`'s pattern (operator ruling 2026-10-01 r3): the
     /// mask param's bit `step` flips, through the same op door as every param edit — one
     /// undo step per flip, the live ring hears it like any edit.
@@ -1497,6 +1600,40 @@ impl CanvasState {
         self.apply_param(graph, node, idx, next as f32, false)
     }
 
+    /// Toggle one key of `util/quant`'s keyboard (operator round 4, D11): the key's bit in
+    /// the CUSTOM scale's `custom-mask` flips, through the same param door as every edit —
+    /// one undo step per flip, the live ring hears it like any edit. The CUSTOM-MODE GATE
+    /// comes first: the keyboard edits the Custom scale, so a preset scale refuses in words
+    /// with the remedy — never a silent mask edit the scale list would ignore.
+    fn flip_key(&mut self, graph: &mut Graph, node: NodeId, key: usize) -> Vec<CanvasEvent> {
+        // The gate (D11): scale value 0 IS Custom; any other value is a preset the mask does
+        // not voice, so editing it would be a lie the user could act on.
+        let preset = graph
+            .node(node)
+            .and_then(|n| n.spec.params.iter().position(|d| d.id == "scale"))
+            .and_then(|si| graph.node(node).and_then(|n| n.param_value(si)));
+        if preset.is_some_and(|v| v.round() != 0.0) {
+            return vec![CanvasEvent::Refused(
+                "the keyboard edits the CUSTOM scale — pick Custom from the scale list first"
+                    .to_string(),
+            )];
+        }
+        let idx = match graph
+            .node(node)
+            .and_then(|n| n.spec.params.iter().position(|d| d.id == "custom-mask"))
+        {
+            Some(i) => i,
+            None => {
+                return vec![CanvasEvent::Refused("that node has no scale keyboard".to_string())]
+            },
+        };
+        let cur = graph.node(node).and_then(|n| n.param_value(idx)).unwrap_or(0.0);
+        let bit = key_mask_bit(key);
+        let masked = cur as i64 & bit as i64;
+        let next = if masked != 0 { (cur as i64) - bit as i64 } else { (cur as i64) | bit as i64 };
+        self.apply_param(graph, node, idx, next as f32, false)
+    }
+
     fn open_menu(&mut self, graph: &Graph, pos: Vec2, layout: &CanvasLayout) -> Vec<CanvasEvent> {
         // A long-press over an open browser closes it and opens the menu where you pressed —
         // the menu is the deeper modal (it can re-open the browser). An open rename sheet
@@ -1508,12 +1645,16 @@ impl CanvasState {
         }
         let lod = self.camera.lod();
         let target = match layout::hit_test(layout, pos, lod) {
-            Hit::Node(id) | Hit::Step(id, _) => {
+            // A long-press on a key targets its NODE (the keyboard is the node's surface,
+            // the step strip's rule).
+            Hit::Node(id) | Hit::Step(id, _) | Hit::Key(id, _) => {
                 self.selection.clear();
                 self.selection.nodes.insert(id);
                 MenuTarget::Node(id)
             },
-            Hit::Wire(id) | Hit::WireEnd(id, _) => {
+            // A long-press on a cable node targets its WIRE: the menu's DELETE WIRE row
+            // removes the wire and its trim record together (the per-wire ruling, D15).
+            Hit::Wire(id) | Hit::WireEnd(id, _) | Hit::WireTrim(id) => {
                 self.selection.clear();
                 self.selection.wires.insert(id);
                 MenuTarget::Wire(id)
@@ -1957,6 +2098,38 @@ impl CanvasState {
                 ev.extend(self.flip_step(graph, node, step));
                 return ev;
             },
+            Hit::Key(node, key) => {
+                // A keyboard key pressed: flips once, no continuous drag (the step button's
+                // rule — a key is a decision, not a distance; operator round 4, D11).
+                self.selection.clear();
+                self.selection.nodes.insert(node);
+                ev.extend(self.flip_key(graph, node, key));
+                return ev;
+            },
+            Hit::WireTrim(id) => {
+                // The cable node grabbed (operator round 4, D15): the drag edits the wire's
+                // trim — vertical amp, horizontal offset, the offset pinned 0 on audio wires
+                // because DC never enters the audio path. The wire itself stays put: this is
+                // not a re-patch, and the note names the axes so the drag is no mystery.
+                let Some(w) = graph.wire(id) else {
+                    ev.push(CanvasEvent::Refused("no such wire".to_string()));
+                    return ev;
+                };
+                let audio =
+                    layout.wires.iter().any(|wl| wl.id == id && wl.class == SignalClass::Audio);
+                self.selection.clear();
+                self.selection.wires.insert(id);
+                self.interaction =
+                    Interaction::Trim { wire: id, orig: w.trim, acc_screen: Vec2::ZERO, audio };
+                ev.push(CanvasEvent::Selection(1));
+                ev.push(CanvasEvent::Note(if audio {
+                    "dragging the cable node — up/down = amp (an audio cable takes no offset: \
+                     DC stays out of the audio path)"
+                        .to_string()
+                } else {
+                    "dragging the cable node — up/down = amp, left/right = offset".to_string()
+                }));
+            },
             Hit::Param(node, index, track) => {
                 // The card's slider, dragged: set at the grab x (no jump-on-move), then ride the
                 // shared Param interaction — one undo step per gesture, coalesced updates, the
@@ -2119,6 +2292,24 @@ impl CanvasState {
                     self.apply_param(graph, node, index, v, pushed);
                 }
             },
+            Interaction::Trim { wire, orig, acc_screen, audio } => {
+                // The cable node's own scale (D15): 100 px per unit on both axes — up is
+                // louder, right is more positive offset. The raw delta accumulates (this
+                // gesture has no fine-scale; its axes ARE the scaling), and every update
+                // coalesces into the drag's one history entry.
+                acc_screen.x += delta.x;
+                acc_screen.y += delta.y;
+                let (wire, orig, audio, acc) = (*wire, *orig, *audio, *acc_screen);
+                if let Some(o) = orig {
+                    let amp = (o.amp - acc.y / 100.0).clamp(0.0, 2.0);
+                    let offset = if audio {
+                        0.0 // DC never enters the audio path (D15): the horizontal drag is inert
+                    } else {
+                        (o.offset + acc.x / 100.0).clamp(-1.0, 1.0)
+                    };
+                    self.apply_trim(graph, wire, Some(WireTrim { amp, offset }), true);
+                }
+            },
             Interaction::Marker { node, cursor_screen } => {
                 *cursor_screen = Vec2::new(cursor_screen.x + delta.x, cursor_screen.y + delta.y);
                 let (node, x) = (*node, cursor_screen.x);
@@ -2157,6 +2348,7 @@ impl CanvasState {
                 self.finish_repatch(graph, side, orig, pos, cancelled, layout, ctx)
             },
             Interaction::Param { node, index, .. } => self.finish_param(graph, node, index),
+            Interaction::Trim { wire, orig, .. } => self.finish_trim(graph, wire, orig, cancelled),
             Interaction::Marker { node, .. } => self.finish_marker(node, cancelled),
             Interaction::Marquee { start_screen, acc_screen } => {
                 self.finish_marquee(graph, start_screen, acc_screen, view)
@@ -2188,6 +2380,35 @@ impl CanvasState {
             return Vec::new();
         };
         vec![CanvasEvent::Applied(format!("{} = {}", d.name, inspector::value_text(d, v)))]
+    }
+
+    /// The cable-node drag committed: one Applied sentence with the final trim (mid-drag
+    /// updates were silent and coalesced — the history already holds exactly one entry for
+    /// the gesture; `finish_param`'s shape). A CANCEL restores the trim the gesture found
+    /// through the same door: the drag was a question, and "no" leaves the wire as it was —
+    /// stated, never silent. When the drag never moved the value the restore records
+    /// nothing (an undo step that undoes nothing is a lie), and only the sentence speaks.
+    fn finish_trim(
+        &mut self,
+        graph: &mut Graph,
+        wire: WireId,
+        orig: Option<WireTrim>,
+        cancelled: bool,
+    ) -> Vec<CanvasEvent> {
+        if cancelled {
+            let mut ev = self.apply_trim(graph, wire, orig, false);
+            ev.push(CanvasEvent::Note(
+                "trim drag cancelled — the wire keeps the trim it had".to_string(),
+            ));
+            return ev;
+        }
+        match graph.wire(wire).and_then(|w| w.trim) {
+            Some(t) => vec![CanvasEvent::Applied(format!(
+                "wire trim: amp {:.2} · offset {:.2}",
+                t.amp, t.offset
+            ))],
+            None => Vec::new(),
+        }
     }
 
     /// Drop a re-patched wire end. The verdict runs on the graph with the old wire ALREADY
@@ -2418,6 +2639,14 @@ fn snap(v: Vec2, grid: f32) -> Vec2 {
 /// the bit arithmetic lives, so the card, the inspector and the tests cannot drift apart.
 fn step_mask_bit(step: usize) -> f32 {
     (1u32 << step.min(15)) as f32
+}
+
+/// The quantizer keyboard's pitch-class `key` (0..12) as a float mask delta — the
+/// `step_mask_bit` sibling for the CUSTOM scale's mask (operator round 4, D11): one place
+/// for the bit arithmetic, so the card's keys, the painter's mask display and the tests
+/// cannot drift apart.
+fn key_mask_bit(key: usize) -> f32 {
+    (1u32 << key.min(11)) as f32
 }
 
 fn flipped(desc: &crate::canvas::model::ParamDesc, current: f32) -> f32 {
@@ -4113,5 +4342,331 @@ mod tests {
         assert!(matches!(s.interaction, Interaction::Idle), "{:?}", s.interaction);
         assert_eq!(g.node(id).unwrap().param_value(0).unwrap(), 1.0);
         assert_eq!(s.history.undo_len(), before + 1, "one flip = one undo step");
+    }
+
+    // --------------------- operator round 4: cable nodes (D15) + the quantizer keyboard (D11)
+
+    /// A cv wire between two cv nodes — the NON-audio case for the trim drag (its offset is
+    /// live; an audio wire's is pinned 0). The lfo's own well lifts its port, so the wire is a
+    /// slung bézier — the arc midpoint, not the sample middle, is what the handle sits on.
+    fn cv_pair() -> (Graph, NodeId, NodeId) {
+        let mut g = Graph::new();
+        let src =
+            NodeSpec::new("sparq/mod/lfo", "LFO", vec![cv("o", Direction::Out, CvRange::Unipolar)]);
+        let dst =
+            NodeSpec::new("sparq/x/sink", "Sink", vec![cv("i", Direction::In, CvRange::Unipolar)]);
+        let a = g.op_add_node(src, Vec2::ZERO);
+        let b = g.op_add_node(dst, Vec2::new(400.0, 0.0));
+        (g, nid(&a), nid(&b))
+    }
+
+    /// A `util/quant` card the D11 shape: `scale` (0 = Custom, the dropdown's first row) then
+    /// `custom-mask` — the twelve-bit mask the keyboard's keys flip. The params are the whole
+    /// contract here; the ports only keep the card honest.
+    fn quant_node(g: &mut Graph) -> NodeId {
+        let params = vec![
+            ParamDesc {
+                id: "scale".into(),
+                name: "Scale".into(),
+                kind: ParamKind::Int,
+                unit: None,
+                min: 0.0,
+                max: 14.0,
+                default: 0.0,
+            },
+            ParamDesc {
+                id: "custom-mask".into(),
+                name: "Custom Scale".into(),
+                kind: ParamKind::Int,
+                unit: None,
+                min: 0.0,
+                max: 4095.0,
+                default: 0.0,
+            },
+        ];
+        let spec = NodeSpec::new(
+            crate::canvas::QUANT_ID,
+            "Quant",
+            vec![
+                cv("pitch", Direction::In, CvRange::Bipolar),
+                cv("pitch", Direction::Out, CvRange::Bipolar),
+            ],
+        )
+        .with_params(params);
+        nid(&g.op_add_node(spec, Vec2::ZERO))
+    }
+
+    #[test]
+    fn tapping_the_hover_ghost_inserts_an_identity_node_and_one_undo_removes_it() {
+        let (mut g, aid, bid) = two_nodes();
+        let wid = wire_id(&g.op_add_wire(PortRef::new(aid, 0), PortRef::new(bid, 0)));
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let tp = layout.wires.iter().find(|w| w.id == wid).unwrap().trim_point;
+        assert_eq!(g.wire(wid).unwrap().trim, None, "the wire starts clean");
+        // A tap on the clean wire's ghost: the node is inserted AT REST — identity — so the
+        // handle appears and nothing is heard, and the note teaches the gesture vocabulary.
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: tp }, &layout, v, &ctx());
+        assert_eq!(g.wire(wid).unwrap().trim, Some(WireTrim::identity()), "inserted at identity");
+        assert!(s.selection.wires.contains(&wid), "the insert selects the wire");
+        assert!(
+            ev.iter().any(
+                |e| matches!(e, CanvasEvent::Applied(t) if t == "wire trim: amp 1.00 · offset 0.00")
+            ),
+            "{ev:?}"
+        );
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, CanvasEvent::Note(n) if n.contains("tap the node to remove"))),
+            "the vocabulary is taught on insert: {ev:?}"
+        );
+        // The ledger: a trim is STRUCTURAL (the door's decided sentence — trims re-stage).
+        assert!(s.take_patch_changes().structural, "SetTrim marks structural");
+        // ONE undo removes the insert: the wire runs clean again.
+        s.on_intent(&mut g, GestureIntent::Undo, &layout, v, &ctx());
+        assert_eq!(g.wire(wid).unwrap().trim, None, "one undo removes the insert");
+        assert!(s.take_patch_changes().structural, "the undo re-stages too");
+        // A tap elsewhere on the wire only selects — the ghost's door is its capture, not the
+        // whole cable.
+        let grab = layout.wires.iter().find(|w| w.id == wid).unwrap().grab_from;
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: grab }, &layout, v, &ctx());
+        assert_eq!(g.wire(wid).unwrap().trim, None, "no node away from the ghost");
+        assert!(ev.iter().any(|e| matches!(e, CanvasEvent::Selection(1))), "{ev:?}");
+        // Insert again, then tap the HANDLE: the removal the insert note promised.
+        s.on_intent(&mut g, GestureIntent::Activate { pos: tp }, &layout, v, &ctx());
+        let layout = compute(&g, &s.camera, v);
+        assert_eq!(
+            layout::hit_test(&layout, tp, s.camera.lod()),
+            Hit::WireTrim(wid),
+            "the door and the eye agree on where the node is"
+        );
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: tp }, &layout, v, &ctx());
+        assert_eq!(g.wire(wid).unwrap().trim, None, "the tap on the node removes it");
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Applied(t) if t == "wire trim removed")),
+            "{ev:?}"
+        );
+    }
+
+    #[test]
+    fn a_trim_drag_is_one_undo_step_keeping_the_original_from() {
+        let (mut g, lid, sid) = cv_pair();
+        let wid = wire_id(&g.op_add_wire(PortRef::new(lid, 0), PortRef::new(sid, 0)));
+        // The wire already carries the trim the finger is about to find (setup, not a
+        // gesture — it rides no history, so the drag's entry is unambiguously its own).
+        g.op_set_trim(wid, Some(WireTrim { amp: 0.9, offset: 0.1 })).unwrap();
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let tp = layout.wires.iter().find(|w| w.id == wid).unwrap().trim_point;
+        let undo_before = s.history.undo_len();
+        let ev = s.on_intent(&mut g, GestureIntent::DragStart { pos: tp }, &layout, v, &ctx());
+        assert!(
+            matches!(s.interaction, Interaction::Trim { audio: false, .. }),
+            "{:?}",
+            s.interaction
+        );
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Note(n)
+                    if n.contains("up/down = amp") && n.contains("left/right = offset"))),
+            "the press names the axes: {ev:?}"
+        );
+        // Many updates, ONE gesture: 50 px up and 30 px right in five steps → amp 1.4, offset 0.4.
+        for _ in 0..5 {
+            s.on_intent(
+                &mut g,
+                GestureIntent::DragUpdate { delta: Vec2::new(6.0, -10.0), scale: 1.0 },
+                &layout,
+                v,
+                &ctx(),
+            );
+        }
+        let t = g.wire(wid).unwrap().trim.unwrap();
+        assert!((t.amp - 1.4).abs() < 1e-3, "{t:?}");
+        assert!((t.offset - 0.4).abs() < 1e-3, "{t:?}");
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: Vec2::new(tp.x + 30.0, tp.y - 50.0), cancelled: false },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(s.history.undo_len(), undo_before + 1, "one drag = one undo step");
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Applied(t)
+                    if t.contains("amp 1.40") && t.contains("offset 0.40"))),
+            "the lift states the final trim once: {ev:?}"
+        );
+        // The coalesced entry kept the ORIGINAL from: one undo returns the trim the finger
+        // found, not the drag's first waypoint.
+        match s.history.top() {
+            Some(Op::SetTrim { from, to, .. }) => {
+                assert_eq!(*from, Some(WireTrim { amp: 0.9, offset: 0.1 }), "the original from");
+                assert_eq!(*to, Some(t), "and the dragged value");
+            },
+            other => unreachable!("{other:?}"),
+        }
+        assert!(s.take_patch_changes().structural, "a trim drag is structural");
+        s.on_intent(&mut g, GestureIntent::Undo, &layout, v, &ctx());
+        assert_eq!(
+            g.wire(wid).unwrap().trim,
+            Some(WireTrim { amp: 0.9, offset: 0.1 }),
+            "undo restores the trim the finger found"
+        );
+    }
+
+    #[test]
+    fn an_audio_cables_offset_stays_pinned_at_zero() {
+        let (mut g, aid, bid) = two_nodes(); // sine → gain: an AUDIO wire
+        let wid = wire_id(&g.op_add_wire(PortRef::new(aid, 0), PortRef::new(bid, 0)));
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let tp = layout.wires.iter().find(|w| w.id == wid).unwrap().trim_point;
+        // Insert through the tap door, then grab the handle.
+        s.on_intent(&mut g, GestureIntent::Activate { pos: tp }, &layout, v, &ctx());
+        let layout = compute(&g, &s.camera, v);
+        let ev = s.on_intent(&mut g, GestureIntent::DragStart { pos: tp }, &layout, v, &ctx());
+        assert!(
+            matches!(s.interaction, Interaction::Trim { audio: true, .. }),
+            "{:?}",
+            s.interaction
+        );
+        assert!(
+            ev.iter().any(
+                |e| matches!(e, CanvasEvent::Note(n) if n.contains("DC stays out of the audio path"))
+            ),
+            "the press says why the horizontal axis is dead: {ev:?}"
+        );
+        // A diagonal drag: the amp moves, the offset stays 0 — DC never enters the audio path.
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragUpdate { delta: Vec2::new(80.0, -30.0), scale: 1.0 },
+            &layout,
+            v,
+            &ctx(),
+        );
+        let t = g.wire(wid).unwrap().trim.unwrap();
+        assert!((t.amp - 1.3).abs() < 1e-3, "the vertical axis is live: {t:?}");
+        assert_eq!(t.offset, 0.0, "the horizontal axis is inert on audio: {t:?}");
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: Vec2::new(tp.x + 80.0, tp.y - 30.0), cancelled: false },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(g.wire(wid).unwrap().trim.unwrap().offset, 0.0, "and stays so at the lift");
+    }
+
+    #[test]
+    fn a_cancelled_trim_drag_restores_the_trim_the_finger_found() {
+        let (mut g, lid, sid) = cv_pair();
+        let wid = wire_id(&g.op_add_wire(PortRef::new(lid, 0), PortRef::new(sid, 0)));
+        // The wire already carries a trim the finger is about to find (setup, not a gesture —
+        // it rides no history).
+        g.op_set_trim(wid, Some(WireTrim { amp: 0.7, offset: -0.4 })).unwrap();
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let tp = layout.wires.iter().find(|w| w.id == wid).unwrap().trim_point;
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: tp }, &layout, v, &ctx());
+        // 60 px left, 45 px down: amp falls, the offset runs INTO its clamp at −1.
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragUpdate { delta: Vec2::new(-60.0, 45.0), scale: 1.0 },
+            &layout,
+            v,
+            &ctx(),
+        );
+        let moved = g.wire(wid).unwrap().trim.unwrap();
+        assert!((moved.amp - 0.25).abs() < 1e-3, "{moved:?}");
+        assert!(
+            (moved.offset - (-1.0)).abs() < 1e-3,
+            "the drag clamps at the model's range: {moved:?}"
+        );
+        // Cancel: the drag was a question; "no" leaves the wire as it was — stated in words.
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: tp, cancelled: true },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(
+            g.wire(wid).unwrap().trim,
+            Some(WireTrim { amp: 0.7, offset: -0.4 }),
+            "the cancel restores the found trim exactly"
+        );
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Note(n) if n.contains("cancelled"))),
+            "{ev:?}"
+        );
+        assert!(matches!(s.interaction, Interaction::Idle), "the drag is over");
+    }
+
+    #[test]
+    fn a_key_tap_flips_its_mask_bit_through_the_param_door() {
+        let mut g = Graph::new();
+        let q = quant_node(&mut g);
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let nq = layout.nodes.iter().find(|n| n.id == q).unwrap();
+        assert_eq!(nq.key_param, Some(1), "the keys edit `custom-mask`");
+        let tap3 = nq.key_cells[3].center();
+        assert_eq!(layout::hit_test(&layout, tap3, s.camera.lod()), Hit::Key(q, 3));
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: tap3 }, &layout, v, &ctx());
+        assert_eq!(g.node(q).unwrap().param_value(1), Some(8.0), "bit 3 → mask 8");
+        assert!(s.selection.nodes.contains(&q), "the tap selects the node");
+        assert!(ev.iter().any(|e| matches!(e, CanvasEvent::Applied(_))), "{ev:?}");
+        // The live ledger hears it: a key is a PARAM edit, not structural — the mask rides
+        // the command ring like any knob.
+        let c = s.take_patch_changes();
+        assert!(!c.structural, "a key edit is not structural");
+        assert_eq!(c.param_nodes, vec![q], "the quant node owes a set_params snapshot");
+        // A second tap clears the bit; one undo per flip.
+        s.on_intent(&mut g, GestureIntent::Activate { pos: tap3 }, &layout, v, &ctx());
+        assert_eq!(g.node(q).unwrap().param_value(1), Some(0.0));
+        s.on_intent(&mut g, GestureIntent::Undo, &layout, v, &ctx());
+        assert_eq!(g.node(q).unwrap().param_value(1), Some(8.0), "one undo per flip");
+        // The twelfth key is the top bit: the mask is twelve bits wide, like the keyboard.
+        let tap11 = nq.key_cells[11].center();
+        s.on_intent(&mut g, GestureIntent::Activate { pos: tap11 }, &layout, v, &ctx());
+        assert_eq!(g.node(q).unwrap().param_value(1), Some(8.0 + 2048.0));
+        // The PRESS path flips once and never drags (the step button's rule).
+        let before = s.history.undo_len();
+        let tap0 = nq.key_cells[0].center();
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: tap0 }, &layout, v, &ctx());
+        assert!(matches!(s.interaction, Interaction::Idle), "{:?}", s.interaction);
+        assert_eq!(s.history.undo_len(), before + 1, "a press is one flip, no drag");
+        assert_eq!(g.node(q).unwrap().param_value(1), Some(8.0 + 2048.0 + 1.0));
+    }
+
+    #[test]
+    fn a_key_tap_on_a_preset_scale_refuses_in_words() {
+        let mut g = Graph::new();
+        let q = quant_node(&mut g);
+        g.op_set_param(q, 0, 5.0).unwrap(); // a preset scale — NOT Custom
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let tap = layout.nodes.iter().find(|n| n.id == q).unwrap().key_cells[2].center();
+        let before = s.history.undo_len();
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: tap }, &layout, v, &ctx());
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Refused(r)
+                    if r.contains("CUSTOM") && r.contains("scale list"))),
+            "the refusal carries the remedy: {ev:?}"
+        );
+        assert_eq!(g.node(q).unwrap().param_value(1), Some(0.0), "the mask is untouched");
+        assert_eq!(s.history.undo_len(), before, "a refusal is not an operation");
+        assert!(s.take_patch_changes().is_empty(), "the engine hears nothing about a refusal");
+        // Picking Custom (scale → 0) opens the keyboard again — the remedy is the way through.
+        g.op_set_param(q, 0, 0.0).unwrap();
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: tap }, &layout, v, &ctx());
+        assert_eq!(g.node(q).unwrap().param_value(1), Some(4.0), "Custom: the key edits the mask");
+        assert!(ev.iter().any(|e| matches!(e, CanvasEvent::Applied(_))), "{ev:?}");
     }
 }

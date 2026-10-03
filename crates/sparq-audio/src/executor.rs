@@ -431,9 +431,11 @@ struct InStaging {
 /// One control connection (operator ruling 2026-10-01 r3): a cv output modulates a float
 /// parameter. `scalar` is the source's most recent block value (latched after each render —
 /// the declared one-block latency that keeps the plan ordering-independent); the effective
-/// value per block is `clamp(base + scalar * depth, lo, hi)` with `depth = (hi - lo) / 2`,
-/// i.e. a full-scale cv sweeps half the range either side of the knob — the bipolar cv
-/// contract's own ±1 vocabulary, applied to a parameter.
+/// value per block is `clamp(base + trim(scalar) * depth, lo, hi)` with `depth = (hi - lo) / 2`
+/// and `trim(v) = v * scale + offset` — the D15 cable node's formula on the control side (the
+/// operator round-4 ruling: a per-wire trim record), riding the r3 additive modulation. At the
+/// identity (`scale` 1, `offset` 0 — every wire without a cable node) the trim is a BRANCH and
+/// the arithmetic is bit-exactly the r3 formula the goldens pin.
 #[derive(Clone, Copy, Debug)]
 struct ParamMod {
     dst_slot: usize,
@@ -445,12 +447,21 @@ struct ParamMod {
     hi: f32,
     depth: f32,
     scalar: f32,
+    /// The control wire's trim scale (D15): 1.0 = untouched.
+    scale: f32,
+    /// The control wire's trim offset (D15): 0.0 = untouched.
+    offset: f32,
 }
 
 /// One node's runtime home.
 struct ExecNode {
     id: NodeId,
     module: Box<dyn Module>,
+    /// The node's version hash (operator round 4, D1): identity + declared shape, computed at
+    /// build from the validated manifest. Half of the adoption gate — a live instance crosses
+    /// into a fresh build only when the canvas key AND this hash match, so a module upgrade
+    /// (or a manifest edit) starts fresh instead of adopting state against a changed contract.
+    mver: u64,
     params: ParamSet,
     /// Per-block modulation scratch (operator ruling 2026-10-01 r3): when `has_mods`, the
     /// block's effective snapshot is the base plus every control wire's cv deviation.
@@ -491,6 +502,15 @@ struct ExecNode {
     bypassed_blocks: u64,
     /// The input staging (taken and put back each block; see [`InStaging`]).
     inputs: InStaging,
+    /// Adoption scratch (operator round 4, D1): the predecessor slot this node adopted from,
+    /// written by [`Executor::adopt_runtime`] — which runs on the AUDIO thread inside the
+    /// boundary and must not allocate, so its pairing map lives here, in storage the build
+    /// already paid for, instead of in a fresh `Vec`.
+    adopt_src: Option<u32>,
+    /// Adoption scratch: whether this node's instance was already claimed by a successor's
+    /// adoption (the bijection half of the pairing — a predecessor node feeds at most one
+    /// successor node).
+    adopt_taken: bool,
 }
 
 impl Drop for ExecNode {
@@ -549,8 +569,15 @@ struct CvPlan {
     prev2: f32,
     /// The previous block's source value — `linear` ramps from here, `spline` passes through it
     /// at frame 0 (executor-owned state, refreshed in the wire pass; the audio path allocates
-    /// nothing).
+    /// nothing). The knots hold the TRIMMED words — the wire's own delivered history (D15).
     prev: f32,
+    /// The cable node's scale on this wire (operator round 4, D15): every delivered value is
+    /// `v * scale + offset`, applied through [`cv_trim`] — at the identity (1.0, 0.0, every
+    /// untrimmed wire) the pass takes a BRANCH and renders bit-exactly the rev-3 samples.
+    /// Set by [`Executor::set_cv_trim`] after build; the knots below carry the trimmed words.
+    scale: f32,
+    /// The cable node's offset on this wire (D15): 0.0 = untouched.
+    offset: f32,
 }
 
 /// One event-in port's merge plan: its sources in EdgeId order (the matrix's connection-id
@@ -694,6 +721,15 @@ pub struct Executor {
     /// light-red highlight on them and says so in words, instead of the build refusing the
     /// whole patch — playback must not be blocked by a module the user can see is unfinished.
     missing_required: Vec<(NodeId, String, String)>,
+    /// The canvas identities of this build (operator round 4, D1): `canvas_keys[kernel id] =
+    /// the canvas's own key for that node`, stamped by the bridge after build
+    /// ([`Executor::set_canvas_keys`]). Empty by default — an unstamped executor adopts
+    /// nothing, because identity is a prerequisite, never a guess.
+    canvas_keys: Vec<u64>,
+    /// Whether [`Executor::adopt_runtime`] ran on this executor — the live-session path's
+    /// mark. The single-owner [`crate::engine::Engine`] deliberately does NOT adopt (its
+    /// determinism is the mutation stress's pin); only the SharedEngine's boundary hook does.
+    adopted: bool,
 }
 
 impl std::fmt::Debug for Executor {
@@ -1239,6 +1275,10 @@ impl Executor {
                         range,
                         prev2: 0.0,
                         prev: 0.0,
+                        // The cable node starts at rest (D15): identity is a branch in the
+                        // wire pass, so an untrimmed build renders the rev-3 samples exactly.
+                        scale: 1.0,
+                        offset: 0.0,
                     });
                 },
                 PortType::Event => {
@@ -1351,6 +1391,7 @@ impl Executor {
             nodes.push(ExecNode {
                 id,
                 module: build.module,
+                mver: version_hash(&build.manifest),
                 params: build.params,
                 param_scratch: build.params,
                 has_mods: false,
@@ -1370,6 +1411,8 @@ impl Executor {
                 auto_bypassed: false,
                 bypassed_blocks: 0,
                 inputs: InStaging { audio: audio_in, cv_cells, cv_bufs, events },
+                adopt_src: None,
+                adopt_taken: false,
             });
         }
         for d in &delays {
@@ -1434,6 +1477,8 @@ impl Executor {
             wd_events: Vec::with_capacity(WATCHDOG_EVENT_CAP),
             wd_dropped: 0,
             missing_required,
+            canvas_keys: Vec::new(),
+            adopted: false,
         })
     }
 
@@ -1531,18 +1576,26 @@ impl Executor {
             // -- wire (cv): the receiving port's declared rate is what the module sees; the host
             //    performs any rate change here (G3's reduce, G4's expand), in build-planned
             //    storage. The source ran earlier in the order, so its outputs are this block's.
+            //    The cable node (operator round 4, D15) rides every word this pass delivers:
+            //    `v × scale + offset` through `cv_trim`, whose identity is a BRANCH — an
+            //    untrimmed wire is bit-exactly the rev-3 pass the goldens pin. Declared edge:
+            //    an audio-rate source into a block-rate input trims AFTER the reduction (the
+            //    trim rides the settled word; an offset shifts the word, not every pre-reduce
+            //    sample), and the expansion knots hold TRIMMED words — the wire's own history.
             for plan in &mut self.cv_wiring[slot] {
                 let (dp, sp, ss) = (plan.dst_port, plan.src_port, plan.src_slot);
                 match (plan.src_rate, plan.dst_rate) {
                     (CvRate::Block, CvRate::Block) => {
-                        bundle.cv_cells[dp] = self.nodes[ss].cv_out_cells[sp];
+                        bundle.cv_cells[dp] =
+                            cv_trim(self.nodes[ss].cv_out_cells[sp], plan.scale, plan.offset);
                     },
                     (CvRate::Audio, CvRate::Block) => {
                         let src = &self.nodes[ss].cv_out_bufs[sp];
-                        bundle.cv_cells[dp] = plan.reduce.apply(src);
+                        bundle.cv_cells[dp] =
+                            cv_trim(plan.reduce.apply(src), plan.scale, plan.offset);
                     },
                     (CvRate::Block, CvRate::Audio) => {
-                        let cur = self.nodes[ss].cv_out_cells[sp];
+                        let cur = cv_trim(self.nodes[ss].cv_out_cells[sp], plan.scale, plan.offset);
                         let (prev2, prev, interp, range) =
                             (plan.prev2, plan.prev, plan.interp, plan.range);
                         interp.expand(prev2, prev, cur, range, &mut bundle.cv_bufs[dp]);
@@ -1555,7 +1608,13 @@ impl Executor {
                         let src = &self.nodes[ss].cv_out_bufs[sp];
                         let dst = &mut bundle.cv_bufs[dp];
                         let n = dst.len().min(src.len());
-                        dst[..n].copy_from_slice(&src[..n]);
+                        if plan.scale == 1.0 && plan.offset == 0.0 {
+                            dst[..n].copy_from_slice(&src[..n]); // the identity branch
+                        } else {
+                            for (d, s) in dst[..n].iter_mut().zip(&src[..n]) {
+                                *d = s * plan.scale + plan.offset;
+                            }
+                        }
                     },
                 }
             }
@@ -1659,7 +1718,11 @@ impl Executor {
                     let mut scr = base;
                     for m in &self.param_mods {
                         if m.dst_slot == slot {
-                            let v = (base.at(m.param) + m.scalar * m.depth).clamp(m.lo, m.hi);
+                            // The cable node's formula on the control side (D15): the latched
+                            // cv word is trimmed, THEN the r3 additive modulation runs — at
+                            // the identity trim this is bit-exactly the r3 arithmetic.
+                            let cv = cv_trim(m.scalar, m.scale, m.offset);
+                            let v = (base.at(m.param) + cv * m.depth).clamp(m.lo, m.hi);
                             scr = scr.with_value(m.param, v);
                         }
                     }
@@ -1837,11 +1900,17 @@ impl Executor {
 
     /// Register a CONTROL connection (operator ruling 2026-10-01 r3): `src`'s cv output
     /// modulates `dst`'s float parameter `param`, additive around the knob over ±half the
-    /// manifest range. Build-time only (a live add is a re-stage, the structural door).
+    /// manifest range. `scale`/`offset` are the wire's cable-node trim (operator round 4,
+    /// D15) — the bridge passes `(1.0, 0.0)` for a wire with no trim, and the trim of the
+    /// wire when it has one; both are sanitised and clamped here (amp 0..2, offset −1..1), so
+    /// the plan never carries an out-of-range value into the audio thread. Build-time only (a
+    /// live add is a re-stage, the structural door).
     ///
     /// # Errors
     /// A node the build does not contain — the bridge maps ids before calling, so this is a
     /// build-internal bug, refused loudly rather than dropped silently.
+    #[allow(clippy::too_many_arguments)] // the two trim values are the wire's, not a bundle:
+                                         // repo precedent, `finish_repatch`'s own sentence
     pub fn add_param_mod(
         &mut self,
         dst: NodeId,
@@ -1850,6 +1919,8 @@ impl Executor {
         src_port: u32,
         lo: f32,
         hi: f32,
+        scale: f32,
+        offset: f32,
     ) -> Result<(), ExecError> {
         let dst_slot =
             *self.slot_of.get(&dst).ok_or(ExecError::Graph(GraphError::NoSuchNode(dst)))?;
@@ -1864,9 +1935,250 @@ impl Executor {
             hi,
             depth: (hi - lo) / 2.0,
             scalar: 0.0,
+            scale: if scale.is_finite() { scale.clamp(0.0, 2.0) } else { 1.0 },
+            offset: if offset.is_finite() { offset.clamp(-1.0, 1.0) } else { 0.0 },
         });
         self.nodes[dst_slot].has_mods = true;
         Ok(())
+    }
+
+    /// Set the cable-node trim on the cv wire landing on `node`'s cv-in port `port` (operator
+    /// round 4, D15 — the cv side of the per-wire trim record; the audio side is S8's
+    /// synthesised `util/gain`, the control side rides [`Executor::add_param_mod`]). Every
+    /// value this wire delivers is then `v * scale + offset`, at the identity a branch and
+    /// bit-exact. Control thread, after build and before the first render.
+    ///
+    /// # Errors
+    /// Refused IN WORDS, each with the remedy: an unknown node; a port that is not a cv input
+    /// of that node; a cv input with no wire on it (a trim rides a wire, it is not a node
+    /// setting — connect first). Values are sanitised and clamped to the declared ranges
+    /// (scale 0..2, offset −1..1), the `op_set_trim` discipline, so a refusal is never about
+    /// arithmetic.
+    pub fn set_cv_trim(
+        &mut self,
+        node: NodeId,
+        port: u32,
+        scale: f32,
+        offset: f32,
+    ) -> Result<(), ExecError> {
+        let Some(&slot) = self.slot_of.get(&node) else {
+            return Err(ExecError::Graph(GraphError::NoSuchNode(node)));
+        };
+        let Some(type_idx) = NodePlan::index_in(&self.plans[slot].cv_in, port) else {
+            return Err(ExecError::Unsupported {
+                node: Some(node),
+                why: format!(
+                    "port index {port} is not a cv input of this module — a cable node trims a \
+                     cv wire, so the port must be one"
+                ),
+            });
+        };
+        let Some(plan) = self.cv_wiring[slot].iter_mut().find(|p| p.dst_port == type_idx) else {
+            return Err(ExecError::Unsupported {
+                node: Some(node),
+                why: format!(
+                    "no cv wire lands on port index {port} — a trim rides a wire, it is not a \
+                     node setting; connect the wire first"
+                ),
+            });
+        };
+        plan.scale = if scale.is_finite() { scale.clamp(0.0, 2.0) } else { 1.0 };
+        plan.offset = if offset.is_finite() { offset.clamp(-1.0, 1.0) } else { 0.0 };
+        Ok(())
+    }
+
+    /// Stamp the canvas identities onto this build (operator round 4, D1): `keys[kernel id]`
+    /// is the canvas's own key for that node, in kernel-id order — the bridge writes it on
+    /// every canvas build, so a re-stage can tell "the same module the user was hearing" from
+    /// "a new module". Without keys nothing adopts: identity is a prerequisite, never a guess.
+    pub fn set_canvas_keys(&mut self, keys: Vec<u64>) {
+        self.canvas_keys = keys;
+    }
+
+    /// The stamped canvas keys (diagnostics, tests).
+    #[must_use]
+    pub fn canvas_keys(&self) -> &[u64] {
+        &self.canvas_keys
+    }
+
+    /// Whether [`Executor::adopt_runtime`] ran on this executor.
+    #[must_use]
+    pub fn adopted(&self) -> bool {
+        self.adopted
+    }
+
+    /// Adopt the runtime of the predecessor executor (operator round 4, D1 — the
+    /// "add a module and nothing you were hearing resets" transparency). For every node of
+    /// THIS build whose canvas key and version hash match a node of `from`, the LIVE module
+    /// instance is swapped in, so everything the instance owns crosses with it: the delay's
+    /// line memory, the seq's cursor, the sine's phase, the follower's glide. Beside the
+    /// instances, the executor-owned runtime crosses too — delay histories and held frames,
+    /// latency-compensation lines, cv expansion knots, modulation scalars — because those
+    /// live in the plans, not in the modules.
+    ///
+    /// PARAMETERS DELIBERATELY DO NOT CROSS: the staged build's canvas snapshot rules, since
+    /// the canvas is the truth about what the user set and an adopted live value could be a
+    /// command-ring edit the canvas never saw. Pinned by
+    /// `adoption_carries_state_but_params_belong_to_the_staged_build`.
+    ///
+    /// The gate is identity AND shape: a node adopts only when its resolved channel counts
+    /// match too, so an adopted instance's `prepare`d resources stay true — a module whose
+    /// wiring changed shape starts fresh rather than running against a stale reservation.
+    /// Unmatched nodes keep their freshly built instances; that is the point (a NEW module
+    /// starts clean, the rest do not).
+    ///
+    /// Runs INSIDE the hot-swap boundary, on the audio thread: every step is a pointer swap or
+    /// a copy into storage allocated at build. Nothing allocates, nothing locks, nothing
+    /// panics — a length mismatch (impossible under the shape gate, and still not a reason to
+    /// crash a device callback) skips that one carry.
+    pub fn adopt_runtime(&mut self, from: &mut Self) {
+        // -- instances: pair slots by (canvas key, version hash) and resolved shape. The
+        //    pairing scratch lives IN the nodes (`adopt_src`/`adopt_taken`, paid for at build):
+        //    this runs inside the boundary on the audio thread, where a `Vec` is a xrun risk.
+        for slot in 0..self.nodes.len() {
+            self.nodes[slot].adopt_src = None;
+            let Some(key) = self.adopt_key(slot) else { continue };
+            // The immutable scan ends before the swap: borrows, then acts.
+            let src = (0..from.nodes.len()).find(|&s| {
+                !from.nodes[s].adopt_taken
+                    && from.adopt_key(s) == Some(key)
+                    && from.nodes[s].in_chs == self.nodes[slot].in_chs
+                    && from.nodes[s].out_chs == self.nodes[slot].out_chs
+            });
+            let Some(src) = src else { continue };
+            from.nodes[src].adopt_taken = true;
+            self.nodes[slot].adopt_src = Some(src as u32);
+            // The swap, not a move: the predecessor retires holding the fresh instance this
+            // build made, so its Drop deactivates a module that never ran — and nothing is
+            // leaked either way.
+            std::mem::swap(&mut self.nodes[slot].module, &mut from.nodes[src].module);
+        }
+
+        // -- delay histories and unit-delay held frames, matched by source identity + port +
+        //    kind (the plan order can move between builds; the wire's ends cannot lie).
+        for i in 0..self.delays.len() {
+            let j = {
+                let d = &self.delays[i];
+                let Some(sk) = self.slot_key(d.src_slot) else { continue };
+                let (kind, src_port) = (d.kind, d.src_port);
+                from.delays.iter().position(|o| {
+                    o.kind == kind
+                        && o.src_port == src_port
+                        && from.slot_key(o.src_slot) == Some(sk)
+                })
+            };
+            if let Some(j) = j {
+                if self.delays[i].hist.len() == from.delays[j].hist.len() {
+                    self.delays[i].hist.copy_from_slice(&from.delays[j].hist);
+                }
+            }
+        }
+
+        // -- latency-compensation lines (the fan-in alignment memory), matched by both ends.
+        for slot in 0..self.wiring.len() {
+            for ei in 0..self.wiring[slot].len() {
+                let found = {
+                    let p = &self.wiring[slot][ei];
+                    if p.comp.is_none() {
+                        continue;
+                    }
+                    let (Some(dk), Some(sk)) = (self.slot_key(slot), self.slot_key(p.src_slot))
+                    else {
+                        continue;
+                    };
+                    let (dst_port, src_port) = (p.dst_port, p.src_port);
+                    from.wiring.iter().enumerate().find_map(|(fs, fplans)| {
+                        if from.slot_key(fs) != Some(dk) {
+                            return None;
+                        }
+                        fplans
+                            .iter()
+                            .position(|fp| {
+                                fp.comp.is_some()
+                                    && fp.dst_port == dst_port
+                                    && fp.src_port == src_port
+                                    && from.slot_key(fp.src_slot) == Some(sk)
+                            })
+                            .map(|fe| (fs, fe))
+                    })
+                };
+                if let Some((fs, fe)) = found {
+                    if let (Some((line, _)), Some((fline, _))) =
+                        (&mut self.wiring[slot][ei].comp, &from.wiring[fs][fe].comp)
+                    {
+                        if line.ring.len() == fline.ring.len() && line.delay == fline.delay {
+                            line.ring.copy_from_slice(&fline.ring);
+                            line.pos = fline.pos;
+                        }
+                    }
+                }
+            }
+        }
+
+        // -- cv expansion knots, but only for a wire whose BOTH ends adopted: the knots are
+        //    the wire's own recent history, and history from a module that was replaced is a
+        //    lie about a signal that never happened. (`adopt_src` membership IS the identity
+        //    proof — a paired slot matched on canvas key and version hash.)
+        for slot in 0..self.cv_wiring.len() {
+            let Some(fdst) = self.nodes[slot].adopt_src else { continue };
+            let fdst = fdst as usize;
+            for pi in 0..self.cv_wiring[slot].len() {
+                let carried = {
+                    let plan = &self.cv_wiring[slot][pi];
+                    let Some(fsrc) = self.nodes[plan.src_slot].adopt_src else { continue };
+                    let (src_port, dst_port) = (plan.src_port, plan.dst_port);
+                    from.cv_wiring[fdst].iter().find_map(|o| {
+                        (o.src_slot == fsrc as usize
+                            && o.src_port == src_port
+                            && o.dst_port == dst_port)
+                            .then_some((o.prev2, o.prev))
+                    })
+                };
+                if let Some((prev2, prev)) = carried {
+                    self.cv_wiring[slot][pi].prev2 = prev2;
+                    self.cv_wiring[slot][pi].prev = prev;
+                }
+            }
+        }
+
+        // -- modulation scalars: the latched cv word of each control wire, so a re-stage does
+        //    not glitch one block of unmodulated sound into a patch that was modulating.
+        for mi in 0..self.param_mods.len() {
+            let scalar = {
+                let m = &self.param_mods[mi];
+                if self.nodes[m.dst_slot].adopt_src.is_none() {
+                    continue;
+                }
+                let (Some(dk), Some(sk)) = (self.slot_key(m.dst_slot), self.slot_key(m.src_slot))
+                else {
+                    continue;
+                };
+                let (param, src_port) = (m.param, m.src_port);
+                from.param_mods.iter().find_map(|f| {
+                    (f.param == param
+                        && f.src_port == src_port
+                        && from.slot_key(f.dst_slot) == Some(dk)
+                        && from.slot_key(f.src_slot) == Some(sk))
+                    .then_some(f.scalar)
+                })
+            };
+            if let Some(scalar) = scalar {
+                self.param_mods[mi].scalar = scalar;
+            }
+        }
+
+        self.adopted = true;
+    }
+
+    /// The adoption key of a built node: its canvas identity and its version hash. `None`
+    /// when the build carries no key for that node — an unstamped executor adopts nothing.
+    fn adopt_key(&self, slot: usize) -> Option<(u64, u64)> {
+        Some((self.slot_key(slot)?, self.nodes[slot].mver))
+    }
+
+    /// The canvas key of the node at `slot`, if one was stamped for its kernel id.
+    fn slot_key(&self, slot: usize) -> Option<u64> {
+        self.canvas_keys.get(self.order[slot].0 as usize).copied()
     }
 
     /// Replace a node's parameter snapshot at the block boundary (the command ring's door).
@@ -2138,10 +2450,12 @@ impl Executor {
     /// boundary swap): the sample clock is the TRANSPORT's, not the patch's — a graph change
     /// must not reset it, or every mutation would stutter the timeline.
     ///
-    /// Module STATE is deliberately not adopted: a swapped-in module starts from its `prepare`
-    /// /`activate` state, because carrying state across a patch change is the state protocol's
-    /// job (schema'd, journaled — WO-011), not the swap's. Declared, not hidden: a mutation is
-    /// an audible event at exactly one block boundary, and nothing else about the timeline moves.
+    /// Module STATE is deliberately not adopted BY THIS METHOD: a swapped-in module starts from
+    /// its `prepare`/`activate` state, because carrying state across a patch change is either
+    /// the state protocol's job (schema'd, journaled — WO-011) or — on the live-session path,
+    /// since the operator's round-4 D1 ruling — [`Executor::adopt_runtime`]'s, which the
+    /// boundary hook runs BEFORE this. Declared, not hidden: a mutation is an audible event at
+    /// exactly one block boundary, and nothing else about the timeline moves.
     pub fn inherit_runtime(&mut self, from: &Executor) {
         self.ctx = from.ctx;
         self.blocks_rendered = from.blocks_rendered;
@@ -2193,6 +2507,64 @@ impl Executor {
 }
 
 // --------------------------------------------------------------------------- pure helpers
+
+/// The cable node's arithmetic (operator round 4, D15): the trimmed word of a wire carrying
+/// `v` is `v × scale + offset` — and the IDENTITY IS A BRANCH, so an untrimmed wire returns
+/// the untouched sample and renders bit-exactly the rev-3 passes the goldens pin. One copy:
+/// the cv wire pass, the control-wire formula and the gates all read this function.
+#[inline]
+fn cv_trim(v: f32, scale: f32, offset: f32) -> f32 {
+    if scale == 1.0 && offset == 0.0 {
+        v
+    } else {
+        v * scale + offset
+    }
+}
+
+/// A build's version hash (operator round 4, D1): the module's identity and DECLARED shape —
+/// id, manifest version, and every port's and param's vocabulary — folded into one FNV-1a
+/// word. Half of the adoption gate: a live instance crosses into a fresh build only when the
+/// canvas key AND this hash match, so a module upgrade or a manifest edit starts fresh
+/// instead of adopting state against a changed contract. It hashes the manifest, never the
+/// wiring — resolved channel shapes are gated separately in `adopt_runtime`, because an
+/// instance's `prepare`d resources must stay true. Build-time, control thread.
+#[must_use]
+pub fn version_hash(m: &ValidatedManifest) -> u64 {
+    use std::fmt::Write as _;
+    let mut s = format!("{}\u{0}{:?}\u{0}", m.id(), m.manifest().identity.version);
+    // The whole resolved port vocabulary and the whole declared param vocabulary, field by
+    // field, so ANY manifest change starts fresh rather than adopting against a changed
+    // contract. Written out explicitly (not `{:?}` of the struct) because a hash that decides
+    // whether live audio state crosses a build must not move when a Debug impl gains a field.
+    for p in m.ports() {
+        let _ = write!(
+            s,
+            "p\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}\
+             {:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}",
+            p.id,
+            p.direction,
+            p.port_type,
+            p.required,
+            p.channel_set,
+            p.channel_set_variable,
+            p.cv_rate,
+            p.cv_range,
+            p.cv_reduce,
+            p.cv_interp,
+            p.event_kinds,
+            p.multiplicity,
+            p.latency_contribution
+        );
+    }
+    for p in &m.manifest().params {
+        let _ = write!(
+            s,
+            "a\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}{:?}\u{0}",
+            p.id, p.name, p.kind, p.unit, p.min, p.max, p.default
+        );
+    }
+    crate::hash::fnv1a64(s.as_bytes())
+}
 
 /// A channel set's concrete count; `None` for variable/unset (resolved by the build).
 fn concrete(set: Option<ChannelSet>) -> Option<usize> {

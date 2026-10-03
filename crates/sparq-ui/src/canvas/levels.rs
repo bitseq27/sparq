@@ -46,6 +46,12 @@ pub struct StereoMeter {
     pub hold_l: f32,
     /// Peak-hold position, right.
     pub hold_r: f32,
+    /// The CLIP latch, left (operator round 4, D2): set the block a peak reaches 1.0 and
+    /// HELD until the session ends — the peak-hold's own state machinery hosts it, so it
+    /// decays never and forgets never; a fresh session starts unlatched by construction.
+    pub clip_l: bool,
+    /// The clip latch, right (D2).
+    pub clip_r: bool,
     /// The block the peaks were taken at — the hold decays on AUDIO time (block distance),
     /// never on a wall clock the display path could lie about.
     pub block: u64,
@@ -143,6 +149,90 @@ fn sanitised(level: f32) -> f32 {
         0.0
     }
 }
+
+/// How many frames of level history the rolling graph carries (operator round 4, D13):
+/// ≈4 s at the 60 fps nominal cadence. A FRAME count, not a time constant — the display
+/// samples once per frame, and the window it shows is declared in the same unit.
+pub const LEVEL_HISTORY_FRAMES: usize = 240;
+
+/// One node's rolling level history (operator round 4, D13): the `Well::Graph` trace's model,
+/// pushed once per live frame by the shell from the drained level publication. DISPLAY-SIDE
+/// ONLY — it never enters the engine, the journal or a save (a restart starts empty, which is
+/// the declared rule, not a gap); bounded, so a long session cannot grow it; sanitised at the
+/// door like every level (`sanitised`), so a NaN frame cannot poison the polyline.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LevelHistory {
+    samples: std::collections::VecDeque<f32>,
+}
+
+impl LevelHistory {
+    /// An empty history — the at-rest and the restart shape.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Push one frame's level word. Bounded at [`LEVEL_HISTORY_FRAMES`]: the oldest sample
+    /// leaves as the new one enters (the window ROLLS, it does not grow).
+    pub fn push(&mut self, level: f32) {
+        if self.samples.len() >= LEVEL_HISTORY_FRAMES {
+            self.samples.pop_front();
+        }
+        self.samples.push_back(sanitised(level));
+    }
+
+    /// The samples, oldest first.
+    pub fn samples(&self) -> impl Iterator<Item = f32> + '_ {
+        self.samples.iter().copied()
+    }
+
+    /// How many frames the window currently holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    /// Whether the window is empty (the painter draws the rest well, never a faked trace).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
+    /// Drop the window (a restart, a session start — "restart starts empty", declared).
+    pub fn clear(&mut self) {
+        self.samples.clear();
+    }
+
+    /// The trace polyline inside `r` (y-up: level 1 at the top). The x-mapping is the rolling
+    /// window's own: one slot per frame of the FULL window — a young history GROWS from the
+    /// left edge toward the right, and a full one SCROLLS (the oldest sample leaves the left
+    /// edge as the newest enters at the right). Fewer than two samples: no line (a single
+    /// reading is a bar, not a trace).
+    #[must_use]
+    pub fn polyline(&self, r: crate::geom::Rect) -> Vec<crate::geom::Vec2> {
+        use crate::geom::Vec2;
+        let n = self.samples.len();
+        if n < 2 {
+            return Vec::new();
+        }
+        let slots = (LEVEL_HISTORY_FRAMES - 1).max(1) as f32;
+        self.samples
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| {
+                Vec2::new(
+                    r.min.x + r.width() * i as f32 / slots,
+                    r.max.y - r.height() * v.clamp(0.0, 1.0),
+                )
+            })
+            .collect()
+    }
+}
+
+/// The per-node rolling histories the shell owns and the painter reads (the `ScopeTraces`
+/// discipline: at rest the shell hands over an empty map and the wells stay empty). `BTreeMap`
+/// for deterministic iteration.
+pub type LevelHistories = std::collections::BTreeMap<crate::canvas::model::NodeId, LevelHistory>;
 
 /// The level a wire carries: its SOURCE PORT's own level when one is published (a cv wire lights
 /// from the value its source publishes on that port), else its SOURCE NODE's folded level (the
@@ -326,5 +416,84 @@ mod tests {
         nodes_only.set(9, 0.2);
         assert_eq!(nodes_only.port_len(), 0);
         assert!(!nodes_only.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod r4_tests {
+    #![allow(clippy::unwrap_used, clippy::panic)]
+    use super::*;
+    use crate::geom::{Rect, Vec2};
+
+    #[test]
+    fn the_clip_latch_defaults_false_and_the_hold_fields_stay_their_own_words() {
+        let m = StereoMeter::default();
+        assert!(!m.clip_l && !m.clip_r, "a fresh meter is unlatched");
+        // The latch is data the SESSION owns (live.rs sets it, the painter reads it); the
+        // model's job is the honest default and the field's place in the vocabulary.
+        let hot = StereoMeter { l: 1.0, r: 0.5, clip_l: true, ..StereoMeter::default() };
+        assert!(hot.clip_l && !hot.clip_r, "per-channel, never folded");
+    }
+
+    #[test]
+    fn the_history_rolls_at_its_declared_window() {
+        let mut h = LevelHistory::new();
+        assert!(h.is_empty());
+        for i in 0..(LEVEL_HISTORY_FRAMES + 50) {
+            h.push((i % 100) as f32 / 100.0);
+        }
+        assert_eq!(h.len(), LEVEL_HISTORY_FRAMES, "bounded: the window rolls, it does not grow");
+        // The oldest samples left first: the window holds the LAST cap pushes.
+        let first = h.samples().next().unwrap();
+        let want_first = ((LEVEL_HISTORY_FRAMES + 50 - LEVEL_HISTORY_FRAMES) % 100) as f32 / 100.0;
+        assert!((first - want_first).abs() < 1e-6, "{first} vs {want_first}");
+        h.clear();
+        assert!(h.is_empty(), "a restart starts empty");
+        assert_eq!(h.samples().count(), 0, "…and the window hands back nothing");
+    }
+
+    #[test]
+    fn the_history_sanitises_at_the_door() {
+        let mut h = LevelHistory::new();
+        h.push(f32::NAN);
+        h.push(3.5);
+        h.push(-2.0);
+        let v: Vec<f32> = h.samples().collect();
+        assert_eq!(v, vec![0.0, 1.0, 0.0], "NaN reads rest; the window clamps to 0..1");
+    }
+
+    #[test]
+    fn the_polyline_grows_from_the_left_then_scrolls_and_stays_in_the_rect() {
+        let r = Rect::new(Vec2::new(10.0, 20.0), Vec2::new(110.0, 70.0)); // 100 × 50
+        let mut h = LevelHistory::new();
+        assert!(h.polyline(r).is_empty(), "no samples, no line");
+        h.push(0.5);
+        assert!(h.polyline(r).is_empty(), "one reading is a bar, not a trace");
+        // A young window: the newest sample sits at its SLOT (len-1 of the full window), so
+        // the trace grows from the left instead of stretching across the band.
+        for i in 0..10 {
+            h.push(i as f32 / 10.0);
+        }
+        let pts = h.polyline(r);
+        assert_eq!(pts.len(), 11);
+        let want_x_last = r.min.x + r.width() * 10.0 / (LEVEL_HISTORY_FRAMES - 1) as f32;
+        assert!((pts.last().unwrap().x - want_x_last).abs() < 1e-2, "slot-mapped, not stretched");
+        assert!(
+            (pts.first().unwrap().x - r.min.x).abs() < 1e-3,
+            "the oldest sample is at the left"
+        );
+        // A FULL window: the newest sits at the right edge, the oldest at the left — scrolling.
+        let mut full = LevelHistory::new();
+        for i in 0..LEVEL_HISTORY_FRAMES {
+            full.push(if i % 2 == 0 { 0.25 } else { 0.75 });
+        }
+        let fpts = full.polyline(r);
+        assert!((fpts.first().unwrap().x - r.min.x).abs() < 1e-3);
+        assert!((fpts.last().unwrap().x - r.max.x).abs() < 1e-2, "the newest rides the right edge");
+        // y is the level, y-up: 0.25 → three quarters down, 0.75 → a quarter down.
+        let y_of = |v: f32| r.max.y - r.height() * v;
+        assert!((fpts[0].y - y_of(0.25)).abs() < 1e-3);
+        assert!((fpts[1].y - y_of(0.75)).abs() < 1e-3);
+        assert!(fpts.iter().all(|p| p.x >= r.min.x - 1e-3 && p.x <= r.max.x + 1e-3));
     }
 }

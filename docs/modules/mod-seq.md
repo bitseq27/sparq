@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Host API | 1…1 |
 | Category | modulation/trigger-sequencer |
 | Kind / tier / stability | processor · t1 · stable |
@@ -21,6 +21,7 @@
 |---|---|---|---|---|---|---|---|
 | `clk` | Clock In | in | event | — | no | — | 0 |
 | `trig` | Trig Out | out | event | — | — | — | 0 |
+| `step` | Step | out | cv | rate: block, range: unipolar | — | — | 0 |
 
 ## Parameters
 

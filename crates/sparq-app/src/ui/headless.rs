@@ -275,6 +275,12 @@ pub fn run_audit(_opts: &UiOptions) -> i32 {
     );
     run_response_smokes(&mut failures);
 
+    // ------------------------------------------------------------ round-4 smokes
+    println!(
+        "round-4 smoke (operator round 4: the clip latch, the clock's phase pipeline, the event-solid encoding):"
+    );
+    run_r4_smokes(&mut failures);
+
     println!(
         "ui audit: {} ({} failure(s))",
         if failures.is_empty() { "PASS" } else { "FAIL" },
@@ -2846,6 +2852,287 @@ fn run_chrome_smokes(failures: &mut Vec<String>) {
     check(
         "the rail's ADD opens the browser at the canvas centre; an outside tap cancels with nothing spawned",
         opened && shell.canvas.browser().is_none() && shell.graph.node_count() == before,
+        failures,
+    );
+}
+
+/// Operator round 4 (2026-10-02) smokes: the clip latch's mechanical claim (a clipped render
+/// latches, a clean one does not, the latch holds and STOP clears it), the clock wheel's DATA
+/// pipeline end-to-end (the module's phase publication reaches the canvas level set the
+/// painter reads, and the rms's rolling history fills while the session runs), and the D9
+/// encoding pin (event cables wear the solid token; the five-class table stands).
+fn run_r4_smokes(failures: &mut Vec<String>) {
+    use crate::ui::live::LiveOptions;
+    use sparq_kernel::hal::BackendKind;
+    use sparq_module_api::port::Phase;
+    use sparq_ui::canvas::connect::ConnectContext;
+    use sparq_ui::canvas::model::{NodeSpec, Op, PortRef};
+
+    let ctx = egui::Context::default();
+    adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
+    let (w, h) = (1920.0_f32, 1080.0_f32);
+    let find_id = |shell: &ShellUi, m: &str| -> Option<u32> {
+        shell.graph.nodes().iter().find(|n| n.spec.module_id == m).map(|n| n.id)
+    };
+
+    // 51. The clip latch (D2): a HOT render (peak ≥ 1.0) latches CLIP on the Main Out meter —
+    //     the session's own meter state carries it, the info band wears the word, the bars wear
+    //     the red cap — and the latch HOLDS across frames and clears at STOP. A CLEAN render
+    //     never latches: the word belongs to the rail, not to the meter's neighbourhood.
+    let mut shell = ShellUi::new();
+    let mut t = 0.0_f64;
+    let now = 0_u64;
+    t += 1.0 / 60.0;
+    step(&mut shell, &ctx, w, h, t, now, &[]);
+    t += 1.0 / 60.0;
+    step(&mut shell, &ctx, w, h, t, now, &[]);
+    let (sine, gain, out_main) = (
+        find_id(&shell, "sparq/syn/sine"),
+        find_id(&shell, "sparq/util/gain"),
+        find_id(&shell, "sparq/out/main"),
+    );
+    let cctx = ConnectContext::no_adapters(Phase::Zero);
+    // sine amp 0.6 × gain 2.0 → peak 1.2: through the rail, on purpose, in words later.
+    if let (Some(s), Some(g), Some(o)) = (sine, gain, out_main) {
+        shell.canvas.param_edit(&mut shell.graph, s, 1, 0.6);
+        shell.canvas.param_edit(&mut shell.graph, g, 0, 2.0);
+        let _ = shell.canvas.connect_ports(
+            &mut shell.graph,
+            PortRef::new(g, 1),
+            PortRef::new(o, 0),
+            &cctx,
+        );
+    }
+    shell.start_live_with(LiveOptions {
+        backend: Some(BackendKind::Null),
+        paced: false,
+        capture_frames: 0,
+    });
+    if let Some(s) = shell.live.as_mut() {
+        let _ = s.pump_manual(8);
+    }
+    t += 1.0 / 60.0;
+    let (hot_texts, _, hot_fills) = frame_collect(&mut shell, &ctx, w, h, t, now);
+    let latched = out_main
+        .and_then(|o| shell.live.as_ref().and_then(|s| s.meters().get(&(o, 1)).copied()))
+        .is_some_and(|m| m.clip_l && m.clip_r);
+    let body_of =
+        |id: u32| shell.canvas_layout().nodes.iter().find(|n| n.id == id).map(|n| n.screen);
+    let pal = adapter::Palette::for_theme(ThemeChoice::PhosphorDark);
+    let caps = body_of(out_main.unwrap_or(u32::MAX)).map_or(0, |b| {
+        hot_fills
+            .iter()
+            .filter(|(r, c)| {
+                *c == pal.error && r.min.x >= b.min.x - 1.0 && r.max.x <= b.max.x + 1.0
+            })
+            .count()
+    });
+    let word = hot_texts.iter().any(|s| s == "CLIP");
+    // The latch HOLDS: more frames with the input already past its transient change nothing.
+    t += 1.0 / 60.0;
+    step(&mut shell, &ctx, w, h, t, now, &[]);
+    let still = out_main
+        .and_then(|o| shell.live.as_ref().and_then(|s| s.meters().get(&(o, 1)).copied()))
+        .is_some_and(|m| m.clip_l && m.clip_r);
+    // STOP clears it: the latch lives in the session's meter state, and the session ends.
+    if let Some(dead) = shell.live.take() {
+        dead.stop("STOP", &mut Vec::new());
+    }
+    t += 1.0 / 60.0;
+    let (rest_texts, _, _) = frame_collect(&mut shell, &ctx, w, h, t, now);
+    let cleared = !rest_texts.iter().any(|s| s == "CLIP");
+    // The CLEAN world: the same patch at its defaults (0.5 × 0.5 = 0.25 peak) never latches.
+    let mut shell2 = ShellUi::new();
+    t += 1.0 / 60.0;
+    step(&mut shell2, &ctx, w, h, t, now, &[]);
+    t += 1.0 / 60.0;
+    step(&mut shell2, &ctx, w, h, t, now, &[]);
+    let (g2, o2) = (find_id(&shell2, "sparq/util/gain"), find_id(&shell2, "sparq/out/main"));
+    if let (Some(g), Some(o)) = (g2, o2) {
+        let _ = shell2.canvas.connect_ports(
+            &mut shell2.graph,
+            PortRef::new(g, 1),
+            PortRef::new(o, 0),
+            &cctx,
+        );
+    }
+    shell2.start_live_with(LiveOptions {
+        backend: Some(BackendKind::Null),
+        paced: false,
+        capture_frames: 0,
+    });
+    if let Some(s) = shell2.live.as_mut() {
+        let _ = s.pump_manual(8);
+    }
+    t += 1.0 / 60.0;
+    let (clean_texts, _, _) = frame_collect(&mut shell2, &ctx, w, h, t, now);
+    let clean_meter =
+        o2.and_then(|o| shell2.live.as_ref().and_then(|s| s.meters().get(&(o, 1)).copied()));
+    let clean_ok = clean_meter.is_some_and(|m| m.l > 0.1 && !m.clip_l && !m.clip_r)
+        && !clean_texts.iter().any(|s| s == "CLIP");
+    check(
+        "a clipped render latches CLIP (word + red caps, held across frames, cleared by STOP) and a clean one never does",
+        latched && word && caps >= 2 && still && cleared && clean_ok,
+        failures,
+    );
+
+    // 52. The clock wheel's DATA pipeline (D4/D13): a spawned clk publishes its phase into the
+    //     canvas level set the painter reads (manifest port 4 — the append the wheel keys on),
+    //     the phase advances with the pumped blocks inside [0,1), and the rms's rolling graph
+    //     history fills while the session runs (and only while — display-side, declared).
+    let mut shell3 = ShellUi::new();
+    t += 1.0 / 60.0;
+    step(&mut shell3, &ctx, w, h, t, now, &[]);
+    t += 1.0 / 60.0;
+    step(&mut shell3, &ctx, w, h, t, now, &[]);
+    let clk_id = shell3
+        .modules
+        .get("sparq/mod/clk")
+        .map(|r| NodeSpec::from_manifest(r.manifest()))
+        .and_then(|spec| {
+            match shell3.graph.op_add_node(spec, sparq_ui::geom::Vec2::new(0.0, 400.0)) {
+                Op::AddNode(n) => Some(n.id),
+                _ => None,
+            }
+        });
+    let rms3 = find_id(&shell3, "sparq/ana/rms");
+    shell3.start_live_with(LiveOptions {
+        backend: Some(BackendKind::Null),
+        paced: false,
+        capture_frames: 0,
+    });
+    if let Some(s) = shell3.live.as_mut() {
+        let _ = s.pump_manual(4);
+    }
+    t += 1.0 / 60.0;
+    step(&mut shell3, &ctx, w, h, t, now, &[]);
+    let phase1 = clk_id.and_then(|c| shell3.canvas.levels.port(c, 4));
+    // Pump in small batches, draining a frame between them: the analysis ring is BOUNDED (a
+    // consumer that falls behind is refused and counted — the display's honest bargain), so
+    // the smoke reads the level set the way the shell actually keeps it: fresh.
+    for _ in 0..75 {
+        if let Some(s) = shell3.live.as_mut() {
+            let _ = s.pump_manual(4);
+        }
+        t += 1.0 / 60.0;
+        step(&mut shell3, &ctx, w, h, t, now, &[]);
+    }
+    let phase2 = clk_id.and_then(|c| shell3.canvas.levels.port(c, 4));
+    // 304 blocks × 64 = 19 456 samples of a 24 000-sample quarter: the wheel is most of the
+    // way round its first beat — the exact wrapped word the module's own gate pins.
+    let wheel_ok = matches!((phase1, phase2), (Some(a), Some(b))
+        if (0.0..1.0).contains(&a) && (0.0..1.0).contains(&b) && b > a
+        && (b - 19_456.0 / 24_000.0).abs() < 1e-4);
+    let hists_fill = rms3.is_some_and(|r| {
+        shell3.level_hists.get(&r).is_some_and(|hh| {
+            !hh.is_empty() && hh.len() <= sparq_ui::canvas::levels::LEVEL_HISTORY_FRAMES
+        })
+    });
+    check(
+        "the clock's phase publication reaches the painter's level set (wrapped, advancing) and the rms graph history fills while live",
+        wheel_ok && hists_fill,
+        failures,
+    );
+
+    // 54. The cable node's mechanical claim (D15/S8): the tap-insert through the REAL
+    //     gesture door leaves the render BIT-IDENTICAL (identity is a handle you see, not a
+    //     sound you hear — the bridge synthesises nothing for it), giving it an amplitude
+    //     CHANGES the render hash (gesture → model → bridge → kernel, end to end), and
+    //     removing the node restores the original bits (the undo shape). Hermetic: offline
+    //     renders through the bridge, no device, no session.
+    let mut shell4 = ShellUi::new();
+    t += 1.0 / 60.0;
+    step(&mut shell4, &ctx, w, h, t, now, &[]);
+    t += 1.0 / 60.0;
+    step(&mut shell4, &ctx, w, h, t, now, &[]);
+    use sparq_audio::hash::{fnv1a64_f32, hex64};
+    use sparq_ui::canvas::model::WireTrim;
+    use sparq_ui::gesture::GestureIntent;
+    let master4 = shell4.canvas.resolve_master(&shell4.graph);
+    let hash_of = |g: &sparq_ui::canvas::model::Graph, master: u32| -> Option<String> {
+        let (mut ex, km) = crate::bridge::build(g, master, &shell4.modules).ok()?;
+        let rc = crate::bridge::render_config();
+        let mut out = vec![0.0f32; rc.block_frames * rc.device_channels];
+        let mut samples: Vec<f32> = Vec::new();
+        for _ in 0..120 {
+            ex.render_block(km, &mut out).ok()?;
+            samples.extend_from_slice(&out);
+        }
+        Some(hex64(fnv1a64_f32(&samples)))
+    };
+    let mut cable_ok = false;
+    if let Some(m4) = master4 {
+        let base_hash = hash_of(&shell4.graph, m4);
+        // The demo's sine → gain wire, and the ghost dot's place on it (last frame's layout,
+        // cloned so the shell is free for the intent).
+        let wid = shell4
+            .graph
+            .wires()
+            .iter()
+            .find(|w| {
+                w.param.is_none()
+                    && shell4
+                        .graph
+                        .node(w.from.node)
+                        .is_some_and(|n| n.spec.module_id == "sparq/syn/sine")
+            })
+            .map(|w| w.id);
+        let layout4 = shell4.canvas_layout().clone();
+        let view4 = shell4.last_layout.as_ref().map(|l| l.canvas);
+        if let (Some(wid), Some(view4)) = (wid, view4) {
+            let tp = layout4.wires.iter().find(|w| w.id == wid).map(|w| w.trim_point);
+            if let Some(tp) = tp {
+                // The tap-insert through the gesture door (the hover ghost's own capture).
+                shell4.canvas.on_intent(
+                    &mut shell4.graph,
+                    GestureIntent::Activate { pos: tp },
+                    &layout4,
+                    view4,
+                    &cctx,
+                );
+                let inserted =
+                    shell4.graph.wire(wid).is_some_and(|w| w.trim == Some(WireTrim::identity()));
+                let identity_hash = hash_of(&shell4.graph, m4);
+                // Give it an amplitude through the model's door (the drag's end value — the
+                // gesture path itself is sparq-ui's own gate), then take the node back off.
+                // A refused/no-change op simply fails the hash comparisons below.
+                let _ = shell4.graph.op_set_trim(wid, Some(WireTrim { amp: 0.5, offset: 0.0 }));
+                let trimmed_hash = hash_of(&shell4.graph, m4);
+                let _ = shell4.graph.op_set_trim(wid, None);
+                let removed_hash = hash_of(&shell4.graph, m4);
+                cable_ok = inserted
+                    && base_hash.is_some()
+                    && identity_hash == base_hash
+                    && trimmed_hash.is_some()
+                    && trimmed_hash != base_hash
+                    && removed_hash == base_hash;
+            }
+        }
+    }
+    check(
+        "the cable node is transparent at rest and audible on drag: the gesture-door insert renders bit-identical, an amp changes the hash, removal restores it",
+        cable_ok,
+        failures,
+    );
+
+    // 53. The event-solid encoding (D9): the token IS the painter's instruction (it parses the
+    //     encoding string — no dash numbers survive for event), the five-class table stands,
+    //     and the CONTROL wire's dash — a different encoding, hardcoded by ruling — keeps its
+    //     token pair (the §4c regression the round-4 handoff named).
+    use sparq_ui::tokens::{
+        COLOR_SIGNAL_AUDIO_ENCODING, COLOR_SIGNAL_CV_ENCODING, COLOR_SIGNAL_DATA_ENCODING,
+        COLOR_SIGNAL_EVENT_ENCODING, COLOR_SIGNAL_SPATIAL_ENCODING, LAYOUT_SPACE_1, LAYOUT_SPACE_2,
+    };
+    check(
+        "event cables wear the solid-stroke encoding (D9) while the class table and the control dash's tokens stand",
+        COLOR_SIGNAL_EVENT_ENCODING == "solid-stroke"
+            && COLOR_SIGNAL_AUDIO_ENCODING == "solid-stroke"
+            && COLOR_SIGNAL_CV_ENCODING == "solid-thin"
+            && COLOR_SIGNAL_DATA_ENCODING == "dotted-2-4"
+            && COLOR_SIGNAL_SPATIAL_ENCODING == "double-stroke"
+            && !COLOR_SIGNAL_EVENT_ENCODING.chars().any(|c| c.is_ascii_digit())
+            && LAYOUT_SPACE_2 == 8
+            && LAYOUT_SPACE_1 == 4,
         failures,
     );
 }

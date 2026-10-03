@@ -4,11 +4,11 @@
 > regenerate with `python3 tools/module_docs.py`; CI fails on a stale doc (`--check`).
 
 
-*Free-running tempo clock: trigger outs at 4ths, 8ths, 16ths and 32nds*
+*Free-running tempo clock: trigger outs at 4ths, 8ths, 16ths and 32nds, plus quarter phase*
 
 | | |
 |---|---|
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Host API | 1…1 |
 | Category | modulation/clock |
 | Kind / tier / stability | source · t1 · stable |
@@ -23,6 +23,7 @@
 | `8th` | Eighth | out | event | — | — | — | 0 |
 | `16th` | Sixteenth | out | event | — | — | — | 0 |
 | `32nd` | Thirty-second | out | event | — | — | — | 0 |
+| `phase` | Phase | out | cv | rate: block, range: unipolar | — | — | 0 |
 
 ## Parameters
 

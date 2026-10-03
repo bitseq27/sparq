@@ -67,6 +67,10 @@ const HEALTH_POLL: Duration = Duration::from_millis(50);
 /// `motion.toml`'s phosphor half-life, in seconds — the peak-hold blocks decay on AUDIO time
 /// (blocks at the negotiated rate), never on a wall clock the display path could lie about.
 const HOLD_HALF_LIFE_S: f64 = 0.3;
+/// The clip threshold (operator round 4, D2): a per-channel block peak that REACHES full scale
+/// has clipped, and the latch the meter wears says so until the session ends. `>=`, not `>` —
+/// a sample sitting exactly at 1.0 is at the rail, and the rail is the claim.
+const CLIP_THRESHOLD: f32 = 1.0;
 
 /// What the session was asked to open with. The shell's PLAY uses [`LiveOptions::default`];
 /// the audit and tests pin the null backend in manual mode so nothing depends on a device or
@@ -500,7 +504,11 @@ impl LiveSession {
 
         // ---- phase 2: build HERE (pure Rust), open+start on the worker ------------------------
         let exec_cfg = ExecConfig::new(cfg.sample_rate, cfg.block_frames, cfg.outputs);
-        let (executor, k_master, map) =
+        // The trim-gain map comes out of the door for the live path; the SHIPPED behaviour is
+        // the structural re-stage (silent since D1: the gain instance adopts on its synthetic
+        // wire key and its glide rides the drag), so the session drops the map today — the
+        // declared LATER set_params fast path lifts it from the same door.
+        let (executor, k_master, map, _trim_gains) =
             crate::bridge::build_with_map_at(graph, master, modules, exec_cfg)?;
         let inv = map.iter().map(|(c, k)| (k.0, *c)).collect();
         let (control, audio_engine) = SharedEngine::new(executor, k_master);
@@ -730,7 +738,10 @@ impl LiveSession {
         log: &mut Vec<String>,
     ) {
         match crate::bridge::build_with_map_at(graph, master, modules, self.exec_cfg) {
-            Ok((executor, k_master, map)) => {
+            // The trim-gain map: dropped here like at session start — the re-stage IS the
+            // shipped trim path (adoption + glide keep it silent); the map is the declared
+            // LATER fast path's door.
+            Ok((executor, k_master, map, _trim_gains)) => {
                 let superseded = self.control.stage(executor, k_master);
                 self.map = map;
                 self.inv = self.map.iter().map(|(c, k)| (k.0, *c)).collect();
@@ -871,6 +882,12 @@ impl LiveSession {
                         r: u.peak_r,
                         hold_l: (prev.hold_l * decay).max(u.peak_l),
                         hold_r: (prev.hold_r * decay).max(u.peak_r),
+                        // The clip latch (operator round 4, D2): once per channel, held until
+                        // the session ends — the peak-hold's own state machinery hosts it, so
+                        // a transient that clipped 40 seconds ago still says so, and a fresh
+                        // session starts unlatched by construction (a STOP clears the word).
+                        clip_l: prev.clip_l || u.peak_l >= CLIP_THRESHOLD,
+                        clip_r: prev.clip_r || u.peak_r >= CLIP_THRESHOLD,
                         block: u.block,
                     },
                 );

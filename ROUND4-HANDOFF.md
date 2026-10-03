@@ -1,6 +1,326 @@
 # ROUND4-HANDOFF.md — operator round 4, mid-round session handoff (2026-10-02)
 
 **Purpose:** the first file the NEXT session reads (besides CHECKLIST.md's new head paragraph).
+
+---
+
+## 0. CONTINUATION-SESSION UPDATE (2026-10-02, later the same day) — read this first
+
+**The git route came back, but it carries NO round-4 code.** `github.com/bitseq27/sparq` is
+public/clonable again; its head commit (871d725, 14:45) added ONLY this file and
+RDP-PREP-RUN-SHEET.md — the round-4 CODE (S1–S5 + the S6 model layer) never reached git (the
+checkpoint zip was the only delivery path, and no zip was present in the fresh sandbox:
+`/home/user/.tc`, `/home/user/sparq-recovery` and `sparq-round4-checkpoint-1.zip` all gone).
+A fresh clone is therefore the **rev-3 codebase + the round-4 docs** (CHECKLIST head still the
+rev-3 paragraph; `UI-ROUND4-PLAN.md` absent; sync stamp `sync-ui-round-2026-10-01`; 21 modules;
+BUILTINS 21; port offset 4; vca bipolar; event encoding still `dashed-6-3`).
+
+**Operator ruling this session (question tool):** *rebuild the S6 prerequisite on the rev-3
+tree, then do S6* — S1–S5 stay OWED until a zip surfaces or they are rebuilt (S7's painter and
+S8's bridge need them; S6 does not — sparq-ui is self-contained).
+
+**S6 IS NOW DONE ON THIS TREE** — the model layer rebuilt from §2's D15 row and the whole §3
+interaction batch written from this file's spec (mod.rs → inset.rs → layout.rs → interact.rs →
+tests), plus the one compiler-named fix outside sparq-ui: canvas_ui.rs's `Well` match grew an
+honest stub arm for the four new wells (S7 paints them; until then the reserved bands are
+empty space, nothing faked). Measured, all on this box:
+
+* **sparq-ui: 199/199** (rev-3's 182 + 17 new gates: 3 model-trim + 3 inset round-4 +
+  5 layout round-4 + 6 interact round-4).
+* **`cargo test --workspace`: 849 passed / 0 failed / 1 ignored** (832 + 17; the ignored one is
+  `alloc.rs`'s doc test, standing).
+* `cargo fmt --all --check` CLEAN · `cargo clippy --workspace --all-targets -D warnings` CLEAN ·
+  `-p sparq-app --features bootstrap-audio` CLEAN (needed `apt-get install pkg-config
+  libasound2-dev` — apt does not persist) · `-p sparq-app --features ui --all-targets` CLEAN.
+* Python gates ALL PASS: token_gen --check (0 to write), token_audit, unsafe_audit,
+  module_docs --check **21/21** (the rev-3 module set; 24/24 waits on the S1–S5 rebuild).
+* **`sparq ui --audit`: PASS, 0 failures** — the S6 geometry moves (mult strip, wells on
+  clk/rms/quant/rand, key cells, trim points) break NO existing smoke.
+* `sync_check`: **FAIL BY DESIGN** — 6 stamp-covered files moved (model.rs, layout.rs,
+  interact.rs, inset.rs, canvas/mod.rs in sparq-ui; canvas_ui.rs in sparq-app). Re-stamp is
+  S9. The Cargo.lock `warn SIZE` line is PRE-EXISTING (stamp vs the re-initialised repo's
+  committed lock), not this session's.
+* Toolchain recovered per §7: rustup/rustc/cargo **1.99.0** into `/home/user/.tc`, gcc 12.2 via
+  apt (slow mirror — parallel .deb download + `apt-get -f install` was the working route).
+
+**Defect #95 (new, recorded; PRE-EXISTING, not round-4):** the ui-gated live test
+`a_param_edit_crosses_the_command_ring_without_a_restage_and_the_level_follows`
+(crates/sparq-app/src/ui/live.rs:1081) fails DETERMINISTICALLY on the PRISTINE rev-3 tree —
+proven by `git stash`: same bytes with and without this session's edits
+(`0.49982867 → 0.4400266`; the sine amp's glide lags the test's 4-block window — trap #6's
+class). It is not part of the canonical `cargo test --workspace` gate (ui-gated), so rev-3
+sealed with it latent. Operator triage owed: fix the test's window or the level's ramp; do not
+paper over it inside S6.
+
+**Judgement calls this session (the spec's silences, filled conservatively):**
+1. `Interaction::Trim` accumulates RAW deltas (no fine-scale `scale` factor) — §3's literal
+   `acc_screen += delta`.
+2. "audio" for the pinned-0 offset is `class == SignalClass::Audio` literally — a SPATIAL wire
+   currently gets a live offset; S8's bridge ruling should revisit (spatial IS an audio path).
+3. `make_wires_straight` recomputes `trim_point` — not in §3's letter, required by the
+   function's own contract ("the hit-test and the painter keep agreeing").
+4. Tap-insert followed IMMEDIATELY by a node drag MERGES into the insert's history entry (the
+   literal `apply_param` coalescing rule: top is `SetTrim` for the same wire → replace). One
+   undo then removes insert+drag together. The pinned coalescing gate therefore starts from a
+   pre-set trim (setup, no history), per §3's "keeping the original from".
+5. The item-11 DROPDOWN (inspector list-picker) is NOT built: its 15 scale names/order live in
+   the lost S1–S5 `modules.rs` (`QUANT_SCALES`) and will not be guessed. Rebuild it with S1–S5
+   or from the operator's list.
+
+**What remains of round 4:** ~~the S1–S5 rebuild~~ (DONE — see §0b below), S7 (painter — §4's spec
+stands; its wells' stub arm is in place), S8 (bridge — §5), S9 (seal — §6, now also: defect #95's
+row, the §0/§0b numbers, and this file's §3 marked done).
+
+---
+
+## 0b. S1–S5 REBUILT (2026-10-02, same continuation session) — measured, all green
+
+The operator ruled (this session): rebuild the foundation from §2's spec on this tree. DONE —
+every §2 row rebuilt: executor D1 adoption + D15 cv-trim, the engine boundary hook
+(`adopt_runtime` then `inherit_runtime`; the single-owner `Engine::stage` deliberately does NOT
+adopt), hotswap's `boundary` is now `FnOnce(&mut T, &mut T)`, the module batch (clk `phase`,
+seq `step`, rms stateful + `slew`, delay `sync` tail-dump, `Fold`+`fold_tri`,
+`Quant`+`QUANT_SCALES`+`snap_to_scale`, `RandStep`+`step_hash`, BUILTINS 24), the bridge's
+canvas-key stamping + identity `(1.0, 0.0)` param-mod trim args (S8 replaces them from
+`wire.trim`), the five manifest bumps + three new manifests, tokens D9/D10 regenerated,
+gestures.md rows moved, docs 24/24 regenerated. Measured, all on this box:
+
+* **`cargo test --workspace`: 886 / 0 / 1 ignored** — 832 rev-3 + 17 S6 + **37 new**:
+  11 `r4_modules` + 12 `r4_new_modules` + 8 adoption + 3 executor trim + 2 mixer cv-trim +
+  1 r3 control-trim. (§1's split was 33; this rebuild's is 37 — same behaviours, one extra
+  allocation gate and two extra trim gates, honest count.)
+* **The pinned release renders are EXACT**: `selftest --golden` PASS 9/9 with the wo005 golden
+  `ba577186c988db21`; exec renders `mod-demo` 1 s `1621e1f65b1b64e1`, `drum-demo` 2 s
+  `f2303f13aa0cf299`, `demo` 2.8 s `53de3b1f3f40e3c9`. The identity branches hold.
+* `sparq ui --audit` (release): PASS, 0 failures. `sparq modules --strict`: 24/24.
+  fmt CLEAN; clippy workspace + bootstrap-audio + ui cells CLEAN; the four python gates PASS
+  (module_docs 24/24, token_gen 0-to-write).
+* **mutation_stress: `8143e1ddfd8fb261` — HELD across the rebuild** (bit-identical to the
+  PRISTINE base on this box, proven by stash; 10 001 blocks · 7208 swaps · 2792 refused, the
+  same evidence line). PROVENANCE NOTE for S9: §1's recorded `7bb06379bd6845e5` does NOT
+  reproduce on the pristine clone here (rustc 1.99 vs the stamp's 1.98 era, or the
+  rebuilt-history repo's base differing from the checkpoint's) — yet the wo005 golden hash
+  DOES reproduce exactly, so the difference is stress-harness-specific, recorded not hidden.
+* The `step_hash` the pinned seed-42 ring forced: **lowbias32 finalizer** (the splitmix32
+  family) over `seed ^ (i × 0x9E37_79B9)`, top 24 bits — the ring reproduces EXACTLY
+  (`r4_new_modules` pins it; `step_hash`/`step_value`/`fold_tri`/`snap_to_scale`/`QUANT_SCALES`
+  are `pub` in modules.rs for S7's mirror gates).
+* Port indices match §4's painter spec: clk `phase` = 4, seq `step` = 2, quant `pitch-out` = 2
+  (ports: pitch-in 0, trig-in 1), rand `value` = 1 / `pos` = 3 (trig-in 0, trig-out 2).
+* Adoption's declared edges: instances cross with their INTERNAL state (including a module's
+  own param-glide memory — the sine's amp glide continues, measured in the shape gate);
+  PARAMS never cross (the named gate); executor-owned state (delay hists, comp lines, cv
+  knots, mod scalars) crosses by wire identity; `adopt_runtime` is ALLOCATION-FREE (the
+  pairing scratch lives in pre-built `ExecNode` fields — the cross_thread allocation gate
+  caught the first Vec-collecting design, exactly the house way).
+* `sync_check`: FAIL BY DESIGN, 17 stamp-covered files moved (11 code + 5 manifests + the FP
+  line). Re-stamp at S9. Defect #95 stands untouched (the ui cell is 21/1, the 1 pre-existing).
+
+**Owed after this:** ~~S7~~ (DONE — see §0c below), S8 (bridge: gain synthesis for audio trims,
+`set_cv_trim` calls, `wire.trim` → `add_param_mod`, the lfo→vca verdict gate, the
+identity-bit-exact gate), S9 (seal: the numbers below, the re-stamp, the zip), the item-11
+dropdown picker (`QUANT_SCALES` is the name table it waits for; NOT on §4's S7 list — deferred
+by ruling, not by oversight).
+
+---
+
+## 0c. S7 PAINTER BATCH DONE (2026-10-02, same continuation session) — measured, all green
+
+§4's ten items, built in `canvas_ui.rs` + the state feeds it reads (compute-then-draw
+throughout: every animation reads a publication or mirrors a declared rule; nothing invented):
+
+1. **Clip (D2)** — `StereoMeter` grows `clip_l`/`clip_r`: latched in the session's own meter
+   update (`peak ≥ CLIP_THRESHOLD = 1.0`, held because the latch lives in the session state —
+   STOP ends the session, a fresh one starts unlatched, by construction). Painter: red cap
+   segment AT FULL SCALE on the bar + the word `CLIP` right-aligned on the info band (the
+   driver lines reserve its width). Smoke 51 pins: hot latches (caps + word), holds across
+   frames, STOP clears, clean never does.
+2. **Clock wheel (D4)** — `draw_clock_wheel`: four rings on `clock_ring_rects`, cardinal
+   ticks, numerals 4/8/16/32 centre-out on the top-left diagonal (Full only — Simplified is
+   no-text), phase dots `ring_point(c, rₖ, frac(phase × divₖ))`, `div = [1,2,4,8]`, event
+   accent. Phase = the clk's 0th cv-out through `nth_cv_out` (no port literal in the
+   painter); at rest the level set is empty → phase 0, static (declared rule). Smoke 52 pins
+   the pipeline END-TO-END: 304 pumped blocks → the painter's level word == 19 456/24 000,
+   wrapped, advancing — module → ring → drain → levels → painter, measured.
+3. **Seq lights (D5)** — the step-button painter lights cell `floor(step_pub × steps)` with
+   an EVENT-accent ring OVER the pattern fill (the bits stay the authority); the cursor reads
+   the module's own `step` publication, never a display-side counter; no light at rest.
+4. **RMS graph (D13)** — `LevelHistory`/`LevelHistories` model in sparq-ui (240-frame window
+   ≈ 4 s at the nominal cadence, sanitised at the door, grow-then-scroll polyline, 4 gates);
+   the shell pushes one word per LIVE frame and CLEARS at session start (restart starts
+   empty, declared; a pause holds — no pushes while the level set is empty). Painter:
+   hairline cv-accent trace + the live word's floor bar in CV colour — NOT the data fill:
+   the meter bars are out/main's alone, and smoke 38 caught the first draft that painted it
+   data-coloured. The 2026-09-30 ruling enforces itself.
+5. **Quantizer keyboard (D11)** — 12 equal cells (the hit-test's own geometry — every drawn
+   key lives inside the cell that routes its tap), 7 naturals full-height, 5 accidentals the
+   shorter/darker overlay. FILLED = membership in the ACTIVE scale: Custom reads the node's
+   `custom-mask`; a preset reads the module's own `QUANT_SCALES` (one source — the display
+   can never revoice a scale). The passing pitch lights its key from the quantized-pitch
+   publication through `inset::keyboard_key` — the lit key and the snapped note are the same
+   arithmetic.
+6. **Rand steps (D12)** — bars mirror `inset::rand_step_value` (the display-side copy of the
+   module's pinned hash — sparq-ui is zero-dependency, so the mirror lives there and is
+   pinned from BOTH sides: the seed-42 ring in each crate's own gate PLUS the cross-crate
+   sweep in `bridge.rs`'s tests, 6 seeds × 64 steps + the span constants equal). Cursor bar
+   from the `pos` publication in the class glow; zero values keep a visible floor tick.
+7. **Trim nodes (D15)** — filled handle at `trim_point`: capture × 0.25 at rest, × 0.5 under
+   the pointer or mid-drag (the shrink the operator named), amp as the inner level disc
+   (identity = half-full, the 2.0 rail = full). A CLEAN wire shows the hover GHOST at the
+   same point and the same capture radius the tap-insert door uses — the drawing and the
+   gesture read one geometry. Pointer feed: the shell's new `hover` field (last contact
+   position; mouse hover counts — pointer.rs's rule). Dot-LOD gated like the hit-test.
+8. **Mult (D6)** — title, category word and port names/letters suppressed: the dots wear
+   their role, the WORDS are gone (the centred column came with S6's layout).
+9. **SVF animation (D3)** — `rebuild_curves` computes EFFECTIVE params: every control wire
+   landed on a float param applies the executor's own `clamp(knob + cv × half-range)` with
+   the wire's published source level (`wire_level`); the cache key carries the effective
+   params, so a modulated curve recomputes per frame and a still one doesn't. At rest (empty
+   level set) the params are the knob snapshot — today's static curve; every pre-existing
+   response gate stands.
+10. **Event solid (D9)** — the painter parses the regenerated token (free); smoke 53 pins:
+    the event encoding is `solid-stroke` with no dash numbers, the five-class table stands,
+    and the control-wire dash's token pair stands — the hardcoded §4c control path untouched.
+
+**Measured (all on this box):** `cargo test --workspace` **893 / 0 / 1 ignored** (886 + 6
+sparq-ui model gates + 1 bridge mirror pin); sparq-ui 205/205; the ui-feature cell 22+1 / 1
+(the 1 = defect #95, pre-existing, unchanged); `sparq ui --audit` **PASS 0 failures, 58 smoke
+lines** (55 + the 3 round-4 smokes); release `selftest --golden` PASS 9/9 `ba577186c988db21`;
+exec renders EXACT (`1621e1f65b1b64e1` / `f2303f13aa0cf299` / `53de3b1f3f40e3c9`);
+`modules --strict` 24/24; fmt CLEAN; clippy workspace + bootstrap-audio + ui cells 0
+diagnostics; the four python gates PASS. `sync_check`: FAIL BY DESIGN, 21 files (S9 re-stamps).
+
+**Remaining:** ~~S8~~ (DONE — see §0d below), S9 (seal), the dropdown picker, defect #95's
+triage.
+
+---
+
+## 0d. S8 BRIDGE BATCH DONE (2026-10-02, same continuation session) — measured, all green
+
+§5 built in `bridge.rs` (+ its own test mod — sparq-app has NO lib target, so bridge gates
+live in-src, the house precedent):
+
+* **Audio trims** synthesise an invisible `util/gain` BEFORE `Executor::build`: registry
+  module + manifest unmodified (the hand-patch IS the synthesis — the ≡ gate measures the
+  sentence), `t.amp` as its param, `src → gain.in`, `gain.out → dst` replacing the direct
+  edge. The offset is NEVER READ for audio — the DC rule is structural, not a promise.
+* **Synthetic canvas keys** `0x8000_0000_0000_0000 | wire_id` in the keys vec, stable across
+  rebuilds: a re-staged amp drag ADOPTS the running gain (its glide cell mid-chase), so live
+  drags are zipper-free by construction — defect #85's glide doing exactly the job it was
+  fixed for. Canvas ids are u32, so the high bit is a collision-free namespace.
+* **`TrimGainMap`** (wire id → kernel gain) returned from both map doors (`build_with_map`,
+  `build_with_map_at` now 4-tuples); both live-session call sites DROP it with the declared
+  sentence: the shipped behaviour is the structural re-stage (silent since D1), the
+  command-ring fast path is LATER's and the map is the door it walks through.
+* **CV trims** record `(dst_kid, port, amp, offset)` and ride `set_cv_trim` after the build
+  (the wire must exist before a trim can ride it). **Control trims** hand `(t.amp, t.offset)`
+  to `add_param_mod`; absent/identity → `(1.0, 0.0)`, bit-exact through the executor's branch.
+* **Mult collapse** (the declared interaction): feed and copy trims COMPOSE affinely onto the
+  one direct edge — `(v·a₁+o₁)·a₂+o₂ = v·(a₁a₂)+(o₁a₂+o₂)` (`compose_trims`); audio copies
+  synthesise per copy-edge, cv copies ride `set_cv_trim`, control copies ride their own
+  wire's param-mod (never a kernel edge).
+* **Refusals in words**: event/data cable nodes ("no amplitude to trim — a trigger's word is
+  its sample"), spatial ("no per-set gain module yet — the spatial phase ships one"),
+  neutral/gpu/atom ("report this"). Mono-sink channel arithmetic is DECLARED in-code: the
+  insertion is the hand-patch equivalent down to the matrix's documented conversions (every
+  first-party audio sink is stereo-or-variable, so today's leg is transparent).
+
+**The six gates** (bridge.rs tests): audio ≡ hand-patched gain HASH-FOR-HASH (+ audible vs
+untrimmed); identity synthesises NOTHING (the map is the mechanical claim) and renders
+bit-identical; cv trim ≡ the manual `set_cv_trim` door (right node/port/values, + audible);
+control trim ≡ the executor-level `add_param_mod` replication HASH-IDENTICAL; **the vca takes
+the lfo wire** (D7: verdict Compatible — the matrix unmoved — and the rendered patch peaks in
+(0.85, 1.0], the window not the instant, trap #6 honoured); trimmed mult copy ≡ the composed
+direct wire (+ non-vacuous). TWO gates first measured nothing — the svf's `mod` depth default
+0 silences its cv input — caught by the non-vacuous asserts and fixed at depth 1.0: the
+house pattern earning its keep inside one session.
+
+**Measured:** `cargo test --workspace` **899 / 0 / 1 ignored** (893 + 6); sparq-app bin 19/19;
+the ui-feature cell 28 + 1 (the 1 = defect #95, pre-existing, unchanged); fmt CLEAN; clippy
+workspace + ui + bootstrap-audio cells 0 diagnostics; python gates 4 PASS; release
+`selftest --golden` 9/9 `ba577186c988db21`, exec renders `1621e1f65b1b64e1` /
+`f2303f13aa0cf299` / `53de3b1f3f40e3c9` EXACT; `sparq ui --audit` PASS 0 failures (58 smoke
+lines); `modules --strict` 24/24; `sync_check` FAIL BY DESIGN (21 files — S9 re-stamps).
+
+**Remaining:** S9 (seal — §6: the trim-insert audit smoke is now possible and owed, the
+gestures.md §4d cable-node vocabulary, UI-CHANGES-PLAN round-4 table, CHECKLIST/SYNC/README
+paragraphs, test006 device steps, the full chain on this box, the re-stamp, the full-tree zip,
+the mockup-review finding), the dropdown picker, defect #95's triage, the mutation-hash
+provenance note (0b).
+
+## 0e. S9 SEAL DONE — ROUND 4 IS SEALED (2026-10-02, same continuation session) — measured, all green
+
+§6's checklist completed in order:
+
+1. **Audit smoke 54** — the trim-insert mechanical claim through the REAL gesture door: hover →
+   tap-insert at identity → amp drag → render hash MOVES (and identity-insert renders
+   bit-identical), tap-remove restores, one coalesced undo. Unwrap-free, clippy-clean. Audit
+   total: **PASS, 0 failures, 59 [PASS] lines** (51–53 from S7: clip latch, the phase pipeline
+   `19456/24000`, the encoding pin).
+2. **Docs** — `docs/ui/gestures.md` §4f (the cable-node vocabulary: hover dot, tap insert, drag
+   axes with the audio-offset inert rule, tap remove, undo shape; §4d in the checklist's plan,
+   §4f where the section actually landed) + §6's event row + §7's round-4 paragraph;
+   `UI-CHANGES-PLAN.md`'s round-4 sheet; `mockup-review.md` findings 25–26 (event solid
+   supersedes the mockups, 6 px ports); CHECKLIST round-4 paragraph + Last-updated; SYNC.md
+   rev-4 head + namelist + THE ASK (rev-3 demoted to Previous bundle); README status line
+   (24 modules); `RDP-PREP-RUN-SHEET.md` §7b table; `scripts/test006.bat` steps **L–U** (10
+   prompts, ASCII-clean per `check_text_io`, digest expectations 899 / 59 / 24).
+3. **The full gate chain ON THIS BOX:** fmt CLEAN · clippy workspace + `ui` + `bootstrap-audio`
+   cells 0 diagnostics · `cargo test --workspace` **899 / 0 / 1 ignored** (sparq-ui 205,
+   sparq-app bin 19, the ui-feature cell 28 + 1 = defect #95 pre-existing) · release
+   `selftest --golden` **9/9 `ba577186c988db21`** · the three pinned exec renders EXACT
+   (`1621e1f65b1b64e1` / `f2303f13aa0cf299` / `53de3b1f3f40e3c9`) · `ui --audit` PASS ·
+   `modules --strict` **24/24** · the four python gates PASS · mutation-stress
+   **`8143e1ddfd8fb261`** re-verified on the final sealed tree (the 0b provenance note stands:
+   the handoff's `7bb06379bd6845e5` does not reproduce on this box).
+4. **Re-stamp:** `sparq-round4-2026-10-02`, **162 files, `src 96f/2694477B`**, `sync_check` OK.
+   `READ-ME-FIRST.txt` overwritten with the rev-4 pack instructions (apply steps, the gate
+   numbers, THE ASK, the provenance notes).
+
+**Defect #96 (new, REMEDIED — the #93 trap's third strike, at the S9 wrap-up boundary):** the
+between-turn reset dropped `modules/out/` from the SEALED tree (plus `.git`, `target/` and the
+apt packages, all documented). `sync_check` named exactly ONE file of 162 MISSING — every other
+stamped file came back byte-identical, which is the seal's own proof that nothing else moved.
+No byte-exact copy survived anywhere: repo 404 (private — raw AND api), the three checkpoint
+zips are changed-file overlays that never carried the file, and the sandbox's undo snapshot
+applies the same `out/` exclusion (checked). Remedied per #94: REBUILT from
+`docs/modules/out-main.md` + the `OutMain` implementation, its header declares the
+reconstruction, and PROVEN semantically identical at both layers — `module_docs.py`
+regeneration byte-matches the checked-in doc (24/24) and the real Rust `decode::decode` (the
+call `Registry::register` and `modules --strict` ride, run from a throwaway crate OUTSIDE the
+tree with a path-dep on `sparq-module-api`) validates **24/24**, out/main's parsed vocabulary
+eyeballed field-for-field against the doc. Re-stamped: the row moved (`3b0a619f…`/2 544 B →
+`86608e10…`/4 087 B — comments are the only difference); the fp did NOT (`src 96f/2694477B`
+walks `.rs` files only — the reason every doc quoting the fp stays true). #93's durable-copy
+remedy RE-ESTABLISHED: `/home/user/sparq-recovery/modules-out-main-sparqmod.toml` (outside the
+repo, sha256 `86608e10…` = the stamp row). Docs updated with the row: CHECKLIST (the #96 row +
+the round-4 paragraph's "NOT APPLICABLE to this tree" sentence corrected — it was falsified by
+this very turn), SYNC.md, READ-ME-FIRST (three provenance notes), this §0e. Environment
+footnote, recorded: this sandbox's cargo ENOENTs on absolute `/home/user/...` path-deps that
+bash demonstrably sees — relative paths resolve; the throwaway verifier used them.
+
+**The zip:** `sparq-update-2026-10-02.zip` sealed AFTER this section (the pack carries this
+file, so a byte-size quoted inside itself cannot converge — the build's asserts are the
+record): full tree at repo-root-relative paths; excluded `.git`, `target/`, `logs/`,
+`__pycache__`, `Cargo.lock`, `SYNC-STAMP.txt` (the stamp never rides — the device re-stamps,
+rev-3 pattern), `*.wav`, `*.pyc`; asserted present: `modules/out/main/sparqmod.toml` (the #93
+trap's own assert), `READ-ME-FIRST.txt`, `crates/sparq-app/src/bridge.rs`, the three new
+manifests (`fx/fold`, `util/quant`, `mod/rand`), both r4 test files; asserted absent: the stamp,
+the lock, any wav.
+
+**Rollback points kept:** `/home/user/sync.zip` (S8-era overlay), `sync-s6-checkpoint.zip`,
+`sync-s7-checkpoint.zip` — all predate the seal; the update zip supersedes them.
+
+**Owed after round 4 (unchanged):** the dropdown picker (item 11's list-picker — `QUANT_SCALES`
+exists, the widget awaits an operator go); defect #95's operator triage (move the window or
+snap the glide — a silent fix either way would be a lie); D15's command-ring fast path stays
+declared LATER behind the bridge's `TrimGainMap` door; device rounds: test006 **A–U** +
+test004 attempt 4 on SATURN, evidence = `test006-digest.log` + `logs\ui-digest.log`.
+
+**ROUND 4 IS SEALED.** The full gate chain is green on the final tree, the stamp is written, the
+pack is built, and every refusal and provenance note is in words where the receiver will read it.
+
+---
 Operator round 4 is HALF BUILT: slices S1–S5 plus the S6 model layer are done and green;
 S6's interaction batch, S7 (painter), S8 (bridge) and S9 (seal) remain, fully specified below
 so nothing has to be re-discovered. The plan of record is **`UI-ROUND4-PLAN.md`** (decisions
@@ -70,6 +390,10 @@ operator's D9 ruling supersedes the mockup vocabulary — declare it as a mockup
 in S9 (findings 9–14 precedent).
 
 ## 3. S6 REMAINDER — the interaction batch, ready to write
+
+**DONE 2026-10-02 (continuation session): this whole section was built from this spec on the
+rev-3 tree and is green — see §0 for the measured numbers and the judgement calls. The text
+below is kept verbatim as the build record.**
 
 All anchors verified this session. Work order: mod.rs → inset.rs → layout.rs → interact.rs →
 tests. sparq-ui is zero-dependency: compile+test is seconds.

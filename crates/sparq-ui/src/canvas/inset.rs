@@ -35,8 +35,6 @@ use sparq_module_api::port::{Direction, PortType};
 pub const ENV_AD_ID: &str = "sparq/env/ad";
 /// The stable id of the LFO (its well is the one-period Sparkline outline).
 pub const LFO_ID: &str = "sparq/mod/lfo";
-/// The stable id of the RMS/peak follower (its well is a single cv bar from `level`).
-pub const RMS_ID: &str = "sparq/ana/rms";
 /// The stable id of the signal tap (its well is a single cv bar from `peak`).
 pub const TAP_ID: &str = "sparq/ana/tap";
 /// The stable id of the state-variable filter (its well is the response-curve thumbnail, and
@@ -60,6 +58,23 @@ pub enum Well {
     Curve,
     /// One LFO period, outlined ([`lfo_period_polyline`]).
     Sparkline,
+    /// The clock wheel (`mod/clk`, operator round 4 D4): four concentric divisor rings —
+    /// 4/8/16/32 centre-out ([`clock_ring_rects`]) — each wearing a phase dot turned by the
+    /// module's published `phase` cv-out ([`ring_point`]). At rest: static, phase 0 (the
+    /// declared at-rest rule — the wheel turns only while the clock runs).
+    ClockWheel,
+    /// The rolling level graph (`ana/rms`, round 4 D13): a display-side history of the
+    /// level-port readings behind the existing single bar. The history never enters the
+    /// engine or the journal, and a restart starts it empty (declared).
+    Graph,
+    /// The note quantizer's keyboard (`util/quant`, round 4 D11): twelve keys across the
+    /// well band; the passing pitch lights its key ([`keyboard_key`]), and in Custom mode
+    /// the keys show mask membership — a tap flips it through `layout::Hit::Key`.
+    Keyboard,
+    /// The random-step bars (`mod/rand`, round 4 D12): the module's step values as a bar
+    /// row, MIRRORED from the pinned seed hash (the display never re-rolls), with the
+    /// cursor bar lit from the published position.
+    Steps,
 }
 
 /// The well registry: which module wears which well, by stable id. THE single place this is
@@ -73,6 +88,14 @@ pub fn inset_well(module_id: &str) -> Option<Well> {
         ENV_AD_ID => Some(Well::Envelope),
         LFO_ID => Some(Well::Sparkline),
         SVF_ID => Some(Well::Curve),
+        // The round-4 wells (operator rulings 2026-10-02): the clock wheel turns on D4's
+        // phase publication, rms wears its display-side graph (D13 — a graph, NOT a meter
+        // bar: the 2026-09-30 ruling that bars are out/main's alone stands), the quantizer
+        // its keyboard (D11) and the random step source its bars (D12).
+        crate::canvas::CLK_ID => Some(Well::ClockWheel),
+        crate::canvas::RMS_ID => Some(Well::Graph),
+        crate::canvas::QUANT_ID => Some(Well::Keyboard),
+        crate::canvas::RAND_ID => Some(Well::Steps),
         _ => None,
     }
 }
@@ -102,6 +125,21 @@ pub fn first_audio_out(spec: &NodeSpec) -> Option<usize> {
         .iter()
         .enumerate()
         .find(|(_, p)| p.direction == Direction::Out && p.port_type == PortType::Audio)
+        .map(|(i, _)| i)
+}
+
+/// The manifest index of a spec's Nth cv OUTPUT port — the wells' reading path into the live
+/// level set (operator round 4): the clock's `phase` is its 0th, the quantizer's quantized
+/// `pitch` its 0th, the random step's `value` its 0th and its cursor `pos` its 1st. Port-index
+/// vocabulary instead of module literals (the registry decides WHO wears a well; this decides
+/// WHERE the word lives), and the manifest's append discipline keeps the indices stable.
+#[must_use]
+pub fn nth_cv_out(spec: &NodeSpec, n: usize) -> Option<usize> {
+    spec.ports
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.direction == Direction::Out && p.port_type == PortType::Cv)
+        .nth(n)
         .map(|(i, _)| i)
 }
 
@@ -239,6 +277,82 @@ fn sanitise(v: f32, lo: f32, hi: f32, default: f32) -> f32 {
     }
 }
 
+// ------------------------------------------- round-4 wells: the pure geometry the painter reads
+//
+// The wells themselves draw in sparq-app's painter (S7); these are the shared pure mappings
+// that keep the drawing a READING of published values instead of an invention — the envelope
+// and LFO precedent, extended to the clock wheel (D4) and the quantizer keyboard (D11).
+
+/// How many rings the clock wheel wears (D4): the 4/8/16/32 divisors, centre-out.
+pub const CLOCK_RINGS: usize = 4;
+
+/// How many keys the quantizer keyboard wears (D11): the twelve pitch classes.
+pub const KEYBOARD_KEYS: usize = 12;
+
+/// Semitones in the quantizer's published pitch span (D11): `pitch` runs 0..1 across ten
+/// octaves, so the pitch class is `round(p × 120) mod 12`. Mirrored from the module's
+/// publication here (the module is the source; a sparq-app test pins the order when the
+/// round-4 module batch lands — the scope.rs discipline).
+pub const QUANT_PITCH_SEMITONES: f64 = 120.0;
+
+/// The clock wheel's ring rects (D4): concentric CENTRED SQUARES inside the well band at
+/// ¼·½·¾·1 of the band's half-extent — index 0 is the innermost ring (the 4 divisor), index
+/// [`CLOCK_RINGS`]−1 the outermost (the 32). The half-extent is the SHORTER side's, so the
+/// wheel always inscribes in the band, however wide the card.
+#[must_use]
+pub fn clock_ring_rects(r: Rect) -> [Rect; CLOCK_RINGS] {
+    let c = r.center();
+    let half = r.width().min(r.height()) * 0.5;
+    let mut out = [r; CLOCK_RINGS];
+    for (k, slot) in out.iter_mut().enumerate() {
+        let rad = half * (k + 1) as f32 / CLOCK_RINGS as f32;
+        *slot = Rect::new(Vec2::new(c.x - rad, c.y - rad), Vec2::new(c.x + rad, c.y + rad));
+    }
+    out
+}
+
+/// A point on a ring (D4): `phase` 0..1 starts at the TOP and runs CLOCKWISE (screen y-down),
+/// so the wheel turns like a clock, not like a unit circle — `a = phase·τ − π/2`. Phase wraps
+/// through the trig (3.25 reads 0.25; no pre-normalisation to forget), and a non-finite
+/// phase or radius reads the honest degenerate: phase 0, centre point.
+#[must_use]
+pub fn ring_point(center: Vec2, radius: f32, phase: f32) -> Vec2 {
+    let phase = if phase.is_finite() { f64::from(phase) } else { 0.0 };
+    let radius = if radius.is_finite() { f64::from(radius) } else { 0.0 };
+    let a = phase * std::f64::consts::TAU - std::f64::consts::FRAC_PI_2;
+    Vec2::new(center.x + (radius * a.cos()) as f32, center.y + (radius * a.sin()) as f32)
+}
+
+/// The keyboard key a passing pitch lights (D11): `round(pitch01 × 120) mod 12` — the
+/// quantizer publishes pitch as 0..1 over its [`QUANT_PITCH_SEMITONES`] span, so the pitch
+/// class falls out of the same arithmetic the module itself snaps with. `keyboard_key(0.5)`
+/// is 0 (middle C's class), `keyboard_key(11/120)` is 11. The modulo is EUCLIDEAN, so an
+/// out-of-span (negative) pitch still lands on its class, never on a negative index, and a
+/// non-finite pitch reads key 0 (never a NaN index).
+#[must_use]
+pub fn keyboard_key(pitch01: f32) -> usize {
+    let p = if pitch01.is_finite() { f64::from(pitch01) } else { 0.0 };
+    let semitone = (p * QUANT_PITCH_SEMITONES).round() as i64;
+    semitone.rem_euclid(KEYBOARD_KEYS as i64) as usize
+}
+
+/// The random-step ring MIRRORED for the display (operator round 4, D12): the SAME pure
+/// integer hash the `mod/rand` module walks — the lowbias32 finalizer (the splitmix32 family)
+/// over `seed ^ (i × 0x9E37_79B9)`, top 24 bits over 2²⁴. `sparq-ui` is zero-dependency, so
+/// the mirror lives here and is pinned from BOTH sides: the seed-42 ring in this crate's own
+/// gate, and a cross-crate equality pin in `sparq-app` (the module is the source; the bars
+/// show the ring the patch will actually walk, never a re-roll).
+#[must_use]
+pub fn rand_step_value(seed: u32, i: u32) -> f32 {
+    let mut z = seed ^ i.wrapping_mul(0x9e37_79b9);
+    z ^= z >> 16;
+    z = z.wrapping_mul(0x7feb_352d);
+    z ^= z >> 15;
+    z = z.wrapping_mul(0x846c_a68b);
+    z ^= z >> 16;
+    (z >> 8) as f32 / 16_777_216.0
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)]
@@ -285,19 +399,28 @@ mod tests {
         assert_eq!(inset_well(crate::canvas::OUT_MAIN_ID), Some(Well::Meters));
         assert_eq!(inset_well(ENV_AD_ID), Some(Well::Envelope));
         assert_eq!(inset_well(LFO_ID), Some(Well::Sparkline));
-        // The analysers' cv bars are gone with the operator's 2026-09-30 ruling: meter bars
-        // are out/main's alone, so rms/tap register nothing.
-        assert_eq!(inset_well(RMS_ID), None);
-        assert_eq!(inset_well(TAP_ID), None);
         assert_eq!(inset_well(SVF_ID), Some(Well::Curve));
+        // The round-4 registry rows (operator rulings 2026-10-02): the clock wheel turns on
+        // the D4 phase publication, rms wears a display again — a GRAPH (D13), NOT a meter
+        // bar, so the 2026-09-30 ruling (bars are out/main's alone) stands — and the
+        // quantizer and the random-step source wear the keyboard and the bars.
+        assert_eq!(inset_well(crate::canvas::CLK_ID), Some(Well::ClockWheel));
+        assert_eq!(inset_well(crate::canvas::RMS_ID), Some(Well::Graph));
+        assert_eq!(inset_well(crate::canvas::QUANT_ID), Some(Well::Keyboard));
+        assert_eq!(inset_well(crate::canvas::RAND_ID), Some(Well::Steps));
+        // The tap analyser stays unregistered: its cv bar is gone with the 2026-09-30 ruling.
+        assert_eq!(inset_well(TAP_ID), None);
         assert_eq!(inset_well("sparq/syn/sine"), None, "unregistered: no well by id");
         assert_eq!(inset_well(""), None);
         // The id constants are the manifest's ids, pinned (a drift here moves wells silently).
         assert_eq!(ENV_AD_ID, "sparq/env/ad");
         assert_eq!(LFO_ID, "sparq/mod/lfo");
-        assert_eq!(RMS_ID, "sparq/ana/rms");
         assert_eq!(TAP_ID, "sparq/ana/tap");
         assert_eq!(SVF_ID, "sparq/flt/svf");
+        assert_eq!(crate::canvas::CLK_ID, "sparq/mod/clk");
+        assert_eq!(crate::canvas::RMS_ID, "sparq/ana/rms");
+        assert_eq!(crate::canvas::QUANT_ID, "sparq/util/quant");
+        assert_eq!(crate::canvas::RAND_ID, "sparq/mod/rand");
     }
 
     #[test]
@@ -314,8 +437,15 @@ mod tests {
         let gain =
             spec("sparq/util/gain", vec![audio("in", Direction::In), audio("out", Direction::Out)]);
         assert_eq!(well_for(&gain), None, "a processor wears no bars");
-        let rms = spec(RMS_ID, vec![audio("in", Direction::In), cv("level", Direction::Out)]);
-        assert_eq!(well_for(&rms), None, "the analyser's cv bar is gone with the ruling");
+        let rms = spec(
+            crate::canvas::RMS_ID,
+            vec![audio("in", Direction::In), cv("level", Direction::Out)],
+        );
+        assert_eq!(
+            well_for(&rms),
+            Some(Well::Graph),
+            "D13 gives rms a display again — a rolling GRAPH, still not a meter bar"
+        );
         // The registry's other wells stand: svf wears its curve (audio out notwithstanding).
         let svf = spec(
             SVF_ID,
@@ -450,5 +580,145 @@ mod tests {
         let collapsed = Rect::new(V::new(5.0, 5.0), V::new(5.0, 5.0));
         assert!(envelope_polyline(2.0, 200.0, false, collapsed).iter().all(|p| p.x.is_finite()));
         assert!(lfo_period_polyline(1.0, 1.0, collapsed).iter().all(|p| p.y.is_finite()));
+        // The round-4 helpers: a collapsed band gives every ring the one point, all finite.
+        let rings = clock_ring_rects(collapsed);
+        assert!(rings.iter().all(|r| r.min.x.is_finite() && r.max.y.is_finite()));
+        assert!(rings.iter().all(|r| r.width() == 0.0), "no extent, no ring");
+        assert!(ring_point(collapsed.center(), 0.0, 0.37).x.is_finite());
+    }
+
+    // ------------------------------------------------- round 4: the clock wheel + the keyboard
+
+    #[test]
+    fn the_clock_rings_are_concentric_squares_centre_out() {
+        let r = rect(); // 100 × 50 — the shorter side rules the half-extent
+        let rings = clock_ring_rects(r);
+        assert_eq!(rings.len(), CLOCK_RINGS);
+        let c = r.center();
+        let half = r.height() * 0.5;
+        for (k, ring) in rings.iter().enumerate() {
+            let rad = half * (k + 1) as f32 / CLOCK_RINGS as f32;
+            assert!(ring.center().distance(c) < 1e-3, "ring {k} shares the band's centre");
+            assert!(
+                (ring.width() - 2.0 * rad).abs() < 1e-3,
+                "ring {k} radius is {}/{} of the half-extent",
+                k + 1,
+                CLOCK_RINGS
+            );
+            assert!((ring.height() - ring.width()).abs() < 1e-3, "ring {k} is a centred square");
+        }
+        // Centre out: strictly growing, the outermost inscribed in the band (touching the
+        // shorter side's edges — the wheel never overflows the well).
+        for w in rings.windows(2) {
+            assert!(w[0].width() < w[1].width(), "centre-out ordering");
+        }
+        assert!((rings[CLOCK_RINGS - 1].min.y - r.min.y).abs() < 1e-3);
+        assert!((rings[CLOCK_RINGS - 1].max.y - r.max.y).abs() < 1e-3);
+    }
+
+    #[test]
+    fn ring_point_starts_at_the_top_and_runs_clockwise() {
+        let c = V::new(100.0, 50.0);
+        let rad = 20.0;
+        // Phase 0 is the TOP (screen y-down), ¼ is the RIGHT: the wheel turns like a clock.
+        let top = ring_point(c, rad, 0.0);
+        assert!((top.x - c.x).abs() < 1e-3 && (top.y - (c.y - rad)).abs() < 1e-3, "{top:?}");
+        let right = ring_point(c, rad, 0.25);
+        assert!((right.x - (c.x + rad)).abs() < 1e-3 && (right.y - c.y).abs() < 1e-3, "{right:?}");
+        let bottom = ring_point(c, rad, 0.5);
+        assert!((bottom.y - (c.y + rad)).abs() < 1e-3, "½ is the bottom: {bottom:?}");
+        let left = ring_point(c, rad, 0.75);
+        assert!((left.x - (c.x - rad)).abs() < 1e-3, "¾ is the left: {left:?}");
+        // Every phase lands ON the ring, and the wrap rides the trig — no normalisation to
+        // forget (the clock's phase publication wraps at the source, but the geometry must
+        // not depend on it).
+        for i in 0..32 {
+            let p = ring_point(c, rad, i as f32 / 32.0);
+            assert!((p.distance(c) - rad).abs() < 1e-2, "phase {i}/32 is on the circle");
+        }
+        assert!(ring_point(c, rad, 1.25).distance(right) < 1e-3, "1.25 reads 0.25");
+        // Non-finite reads the honest degenerate: the centre point, the top.
+        assert_eq!(ring_point(c, f32::NAN, 0.3), c, "a NaN radius is the centre");
+        assert!(ring_point(c, rad, f32::NAN).distance(top) < 1e-3, "a NaN phase is the top");
+    }
+
+    #[test]
+    fn keyboard_key_maps_pitch_onto_the_twelve_classes() {
+        // The two pinned examples from the D11 ruling.
+        assert_eq!(keyboard_key(0.5), 0, "the span's middle is class 0");
+        assert_eq!(
+            keyboard_key(11.0 / 120.0),
+            11,
+            "one semitone under the top of the first octave"
+        );
+        // The whole chromatic run, in order, across an octave boundary.
+        for k in 0..KEYBOARD_KEYS {
+            let pitch = (60.0 + k as f32) / 120.0;
+            assert_eq!(keyboard_key(pitch), k % 12, "semitone {k} of the span");
+        }
+        // The span wraps: 1.0 is ten octaves up — class 0 again.
+        assert_eq!(keyboard_key(1.0), 0);
+        // A pitch below the span lands on its CLASS (Euclidean), never a negative index.
+        assert_eq!(keyboard_key(-1.0 / 120.0), 11);
+        // Non-finite reads key 0 — never a NaN index into the cells.
+        assert_eq!(keyboard_key(f32::NAN), 0);
+        assert_eq!(keyboard_key(f32::INFINITY), 0);
+    }
+
+    #[test]
+    fn nth_cv_out_reads_the_publication_port_by_class_not_by_literal() {
+        // The clock's shape: four event outs, then the appended phase cv — the manifest index
+        // is 4, but its PER-CLASS index is 0, and the level set is keyed by manifest index.
+        let clk = spec(
+            crate::canvas::CLK_ID,
+            vec![
+                port("4th", Direction::Out, PortType::Event),
+                port("8th", Direction::Out, PortType::Event),
+                port("16th", Direction::Out, PortType::Event),
+                port("32nd", Direction::Out, PortType::Event),
+                cv("phase", Direction::Out),
+            ],
+        );
+        assert_eq!(nth_cv_out(&clk, 0), Some(4), "the D4 publication is manifest port 4");
+        assert_eq!(nth_cv_out(&clk, 1), None, "…and it is the clock's only cv word");
+        // The rand shape: value is its 0th cv out (manifest 1), pos its 1st (manifest 3).
+        let rand = spec(
+            crate::canvas::RAND_ID,
+            vec![
+                port("trig-in", Direction::In, PortType::Event),
+                cv("value", Direction::Out),
+                port("trig-out", Direction::Out, PortType::Event),
+                cv("pos", Direction::Out),
+            ],
+        );
+        assert_eq!(nth_cv_out(&rand, 0), Some(1), "value");
+        assert_eq!(nth_cv_out(&rand, 1), Some(3), "pos");
+        // A module with no cv output reads None — the well stays empty, never guesses.
+        let sine = spec("sparq/syn/sine", vec![audio("out", Direction::Out)]);
+        assert_eq!(nth_cv_out(&sine, 0), None);
+    }
+
+    #[test]
+    fn the_rand_mirror_is_pinned_to_the_modules_seed_42_ring() {
+        // The display side of the D12 pin: the SAME checked-in ring the module's own gate
+        // holds (tests/r4_new_modules.rs), so a drift on either side fails a test — and the
+        // sparq-app cross-crate pin proves the two files agree everywhere, not just here.
+        const SEED42_RING: [u32; 8] =
+            [1517363, 10542902, 13721998, 8088911, 6531285, 16292829, 12864735, 5502068];
+        for (i, want) in SEED42_RING.iter().enumerate() {
+            assert_eq!(
+                rand_step_value(42, i as u32),
+                *want as f32 / 16_777_216.0,
+                "mirror step {i}"
+            );
+        }
+        // The mirror is a pure function into 0..1.
+        for seed in [0u32, 1, 42, 65_535] {
+            for i in 0..16u32 {
+                let v = rand_step_value(seed, i);
+                assert!((0.0..1.0).contains(&v), "seed {seed} step {i}: {v}");
+                assert_eq!(v, rand_step_value(seed, i), "pure");
+            }
+        }
     }
 }

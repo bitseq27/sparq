@@ -1,14 +1,22 @@
-# sparq module manifest — ana/rms (WO-014 increment 1).
+# sparq module manifest — ana/rms (WO-014 increment 1; slew in operator round 4).
 # Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
 # This file is THE manifest: discovered from disk by `sparq modules`, compiled into the binary
 # by `sparq-audio::modules` (include_str!) — one copy, two consumers, no drift.
+#
+# SLEW (0.2.0, operator round 4 2026-10-02, D13): a `slew` float APPENDED after `floor` (its
+# index 0 unmoved — the append discipline the goldens pin), and with it the module becomes
+# STATEFUL: it carries the follower's last published level so the one-pole has a memory to
+# smooth from. `slew` is the smoothing amount, 0..1, and DEFAULT 0 IS THE RAW BLOCK VALUE
+# BIT-EXACTLY — the one-pole is bypassed, not approximated, so an untouched rms (and every
+# golden that pins it) renders the identical samples it always did. Higher slew lags the level
+# toward it, which is what the rolling graph draws honestly instead of a jittering trace.
 
 [identity]
 id = "sparq/ana/rms"
-version = "0.1.0"
+version = "0.2.0"
 host_api = { min = 1, max = 1 }
 display_name = "RMS"
-summary = "RMS and peak follower as a cv source"
+summary = "RMS and peak follower as a cv source, with an optional slew one-pole"
 authors = ["sparq"]
 license = "MIT"
 
@@ -37,6 +45,17 @@ range = "unipolar"
 [[params]]
 id = "floor"
 name = "Floor"
+type = "float"
+unit = "ratio"
+min = 0.0
+max = 1.0
+default = 0.0
+
+# 0.2.0 (round 4, D13) — APPENDED. 0 = the raw block rms bit-exactly (the one-pole bypassed);
+# toward 1 the published level lags, which is what the rolling graph draws.
+[[params]]
+id = "slew"
+name = "Slew"
 type = "float"
 unit = "ratio"
 min = 0.0

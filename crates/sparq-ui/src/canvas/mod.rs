@@ -69,6 +69,26 @@ pub const SEQ_ID: &str = "sparq/mod/seq";
 /// `OUT_MAIN_ID` discipline.
 pub const MULT_ID: &str = "sparq/util/mult";
 
+/// The stable id of the clock (operator round 4 2026-10-02, D4): its published `phase`
+/// cv-out turns the clock-wheel well the registry reserves and the painter draws — one
+/// named constant, so the id and its consumers cannot drift apart (the `OUT_MAIN_ID`
+/// discipline).
+pub const CLK_ID: &str = "sparq/mod/clk";
+
+/// The stable id of the RMS/peak follower (operator round 4, D13): the rolling level-graph
+/// well keys on it — a GRAPH, not a meter bar, so the 2026-09-30 ruling (bars are
+/// `out/main`'s alone) stands. The `OUT_MAIN_ID` discipline.
+pub const RMS_ID: &str = "sparq/ana/rms";
+
+/// The stable id of the note quantizer (operator round 4, D11): its twelve-key keyboard
+/// well, the key taps and the Custom-scale gate all key on it — the `OUT_MAIN_ID`
+/// discipline.
+pub const QUANT_ID: &str = "sparq/util/quant";
+
+/// The stable id of the random-step source (operator round 4, D12): its step-bar well keys
+/// on it, and its pinned seed hash is what the bars mirror — the `OUT_MAIN_ID` discipline.
+pub const RAND_ID: &str = "sparq/mod/rand";
+
 pub use browser::{fuzzy_score, rank, BrowserHit, BrowserItem, BrowserState};
 pub use camera::{Camera, Lod};
 pub use connect::{ConnectContext, ConnectOutcome, Rejection};
@@ -78,5 +98,7 @@ pub use inspector::{InspectorLayout, ParamRow};
 pub use interact::{CanvasEvent, CanvasState, Interaction, MenuRow, MenuTarget};
 pub use layout::{CanvasLayout, Hit, NodeLayout, PortLayout, WireEndSide, WireLayout};
 pub use levels::{wire_level, NodeLevels};
-pub use model::{Graph, Node, NodeFlags, NodeId, NodeSpec, Op, PortRef, UndoStack, Wire, WireId};
+pub use model::{
+    Graph, Node, NodeFlags, NodeId, NodeSpec, Op, PortRef, UndoStack, Wire, WireId, WireTrim,
+};
 pub use response::{Axes as ResponseAxes, Curves as ResponseCurves, ResponseFrame};
