@@ -1,0 +1,96 @@
+package sparq:instrument@1.1.0;
+
+// sparq instrument contract — per-block audio/param/event/data marshalling (WO-017 freeze set)
+//
+// Status: v0.2 SKELETON — aligned 2026-10-04 with the native `AudioCtx` face of
+// `sparq-module-api` (`module::{CvIn, CvOut}`, `event::Event`, `params::ParamSet`).
+// The canonical ABI decision recorded in ../README.md §3 (decision A) stands: v1 crosses the
+// boundary BY VALUE (lift/lower copies). At 64-frame blocks the copies are hundreds of bytes
+// inside the fuel budget; WO-018 measures the real cost on the stage device, and a zero-copy
+// path (host writing into exported guest memory) is a later MINOR — additive, because these
+// record shapes don't change.
+
+interface audio {
+  use types.{block-status, data-record, event, param-set};
+
+  /// One audio port's block buffer: interleaved frames, `channels × block-input.frames` long.
+  /// On the INPUT side `connected = false` means optional-and-absent or flagged-and-silenced:
+  /// the buffer carries exact zeros (the shell's FLAGS/NO-IN behaviour silences rather than
+  /// refuses — the guest sees silence plus the fact, never an error). On the OUTPUT side the
+  /// guest must fill every frame of every declared channel; `connected` is ignored there.
+  record audio-buf {
+    channels: u32,
+    connected: bool,
+    interleaved: list<f32>,
+  }
+
+  /// One cv INPUT port's block data. ALIGNED with `module::CvIn` — three states, including the
+  /// one my v0.1 draft missed: `unconnected` is an explicit signal, never 0.0-by-accident
+  /// (native's own words). The host has ALREADY performed the manifest-declared rate change
+  /// (`cv_interp` expanding block→audio, `cv_reduce` collapsing audio→block — module-api §16.3:
+  /// the receiving side owns the policy, and the host performs it for the guest so the guest
+  /// cannot diverge from the journal). `per-frame` lists are exactly `frames` long.
+  variant cv-in-buf {
+    /// the port is optional and nothing is connected
+    unconnected,
+    /// audio-rate cv port: one value per frame
+    per-frame(list<f32>),
+    /// block-rate cv port: one value for the block
+    per-block(f32),
+  }
+
+  /// One cv OUTPUT port's block data. ALIGNED with `module::CvOut`: a block-rate port writes one
+  /// value; an audio-rate port writes exactly `frames` values. A constant fill for an audio-rate
+  /// port is `per-frame` with every element equal — the SDK offers the native `write_one`
+  /// convenience over it.
+  variant cv-out-buf {
+    per-block(f32),
+    per-frame(list<f32>),
+  }
+
+  /// Everything `process` receives for one block. List-valued fields are indexed in MANIFEST
+  /// DECLARATION ORDER of the corresponding ports (each list walks only its own port type), and
+  /// are bounded by the native caps: at most 8 ports per type per direction
+  /// (`MAX_PORTS_PER_CLASS`). The order is contract, not convenience: it is what makes the
+  /// snapshot fixed-shape for the life of a `prepare` epoch.
+  record block-input {
+    /// which block this is since the stream started (`BlockContext.block`)
+    block-id: u64,
+    frames: u32,
+    /// block start on the audio clock (`t_sample`, ADR-006's master). Inside `process`, this is
+    /// the ONLY lawful clock reading — the guest never calls `host.now()` for output-affecting
+    /// values (determinism, ADR-007).
+    t-sample: u64,
+    /// musical position at the first frame, in ticks (`BlockContext.tick`, 960 PPQN default) —
+    /// clock-driven instruments schedule against THIS, never against host.now()
+    tick: u64,
+    /// ticks per quarter note (`BlockContext.ppqn`)
+    ppqn: u32,
+    /// this block's param snapshot: version + normalised f32 values, manifest order (types.wit)
+    params: param-set,
+    audio-in: list<audio-buf>,
+    cv-in: list<cv-in-buf>,
+    /// per event input port, PRE-SORTED by `sample` (module-api §9 — the host's job, native rule)
+    events-in: list<list<event>>,
+    /// per data input port, ordered by host stamp, staleness/hold/decay policy already applied
+    /// (§7.2): a stale stream arrives as its policy says, never as garbage
+    data-in: list<list<data-record>>,
+  }
+
+  /// Everything `process` returns. Output lists must match the negotiated shapes exactly —
+  /// one entry per output port of each kind, channel counts from `resources.audio-out-channels`,
+  /// `per-frame` lists exactly `frames` long. A mismatch is treated as `failed` with a
+  /// diagnostic, not as partial output.
+  record block-output {
+    status: block-status,
+    audio-out: list<audio-buf>,
+    cv-out: list<cv-out-buf>,
+    /// per event output port; the guest may emit unsorted — the host re-sorts, validates offsets
+    /// (`0 ≤ sample < frames`), and counts drops on overflow exactly like the native `EventBuf`
+    /// (`dropped` per block, `dropped_total` for the run — the run's evidence, journalled)
+    events-out: list<list<event>>,
+    /// host RE-STAMPS every outgoing record's `t_wall` at the block boundary — guest timestamps
+    /// would be wall-clock reads, and wall-clock reads would break bit-exact replay (ADR-007)
+    data-out: list<list<data-record>>,
+  }
+}

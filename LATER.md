@@ -62,6 +62,15 @@ Everything here is a **no** for now. The rule: if an idea isn't in a work order,
 - [ ] Open-sourcing the engine + module API (D-8)
 - [ ] Module author SDK with templates, docs site and example packs
 
+## Instrument layer / third-party (parked from the ADR-010 amendment, 2026-10-04)
+- [ ] **Badged pixel-surface escape hatch** for third-party instruments (guest-drawn offscreen surface, look-board reviewed, disabled in Perform mode). Rejected for contract v1.1 because pixels drawn by the guest do not follow token changes — the one property the hand-off system exists to guarantee. Re-propose only with a commissioned instrument that the display-list/scene vocabularies genuinely cannot express *(ADR-010 review trigger)*
+- [ ] Signed "trusted native" instrument tier — a badged, review-gated exception for instruments the sandbox cannot carry. Needs evidence from real handed-in packages first, not speculation
+- [ ] Instrument registry/marketplace plumbing beyond `sparq mod validate` + the nightly conformance matrix: namespaces, attestations, download counts, `sparq mod add` for instruments *(Phase 5 registry work, plan §13.4)*
+- [ ] Display vocabulary v1.2+: GPU instancing, volumetrics, text in 3D scenes, guest-declared post-processing. Additive-minor when a reference instrument or hand-off falsifies v1 — not before
+- [ ] Runtime-queryable token bundle (guest asks for token ids dynamically instead of consuming the fixed v1 struct) — only if authors hit the fixed bundle's limits
+- [ ] Multi-instrument packs (`.sparqpack` of instruments + shared asset bundles) under one licence/provenance header
+- [ ] Cross-language SDK recipes beyond Rust (C, Zig, AssemblyScript via wit-bindgen; Python via componentize-py) — after the first external hand-off shows where the Rust-centric guide is thin
+
 ## Explicitly rejected (do not re-propose without new information)
 - Timeline/clip arrangement view as a primary surface *(contradicts pillar: the patch is the score)*
 - Full web app version of sparq *(D-10: thin client only)*

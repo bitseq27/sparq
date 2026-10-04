@@ -1,33 +1,15 @@
-# sparq module manifest — out/main (WO-014 increment 5).
+# sparq module manifest — out/main (WO-014 increment 1).
 # Schema: docs/api/manifest-schema.md · field domains: docs/api/manifest-fields.toml.
 # This file is THE manifest: discovered from disk by `sparq modules`, compiled into the binary
 # by `sparq-audio::modules` (include_str!) — one copy, two consumers, no drift.
 #
-# RECONSTRUCTION NOTICE (defect #96 — the #93 trap's third strike, 2026-10-02): a between-turn
-# sandbox reset dropped every directory named `out` AGAIN, taking the sealed bytes with it
-# (stamp row `3b0a619f…` / 2 544 B), and this time NO byte-exact source survived anywhere: the
-# repo went private (defect #94), `.git` does not outlive turn boundaries, and the checkpoint
-# zips are changed-file overlays that never carried this file. Rebuilt per defect #94's remedy
-# from its generated doc (`docs/modules/out-main.md` — `module_docs.py` regeneration byte-matches
-# the checked-in doc, the CI gate that keeps manifest and doc one sentence) and the `OutMain`
-# implementation in `crates/sparq-audio/src/modules.rs`. Semantic content identical to the
-# sealed original; the comments differ, so the stamp was re-written at the round-4 seal. The
-# durable recovery copy now exists again OUTSIDE the repo (`../sparq-recovery/`, defect #93's
-# remedy): if `sync_check` ever reports this path MISSING, restore from there and verify the
-# sha256 against the stamp row BEFORE building.
-#
-# The master output — the canonical terminus, the node the listener hears. A unity-by-default
-# pass-through with a trim and a hard mute; because the executor meters every node, this
-# module's peak/rms ARE the master meters (the "metering hook" the WO names). It has an audio
-# OUTPUT on purpose: the executor renders the MASTER node's first audio output to the device
-# buffer, so a pure sink would render silence as master. The input is `required = false` — the
-# one shipped module DESIGNED to sit bare (WO-008 increment 7): an unwired master silences and
-# FLAGs instead of refusing the build, and the canvas master-handover rule (`resolve_master`)
-# prefers an `out/main` node over the default highest-id-terminus guess, so the MASTER badge
-# never lies. At the default trim 1.0 and mute off an untouched `out/main` is a bit-exact wire
-# (`v × 1.0 == v` in IEEE-754), which its golden pins (`75bc7f2f18cac9d5`).
-#
-# v0 state is empty and says so: the trim is the parameter snapshot the project already saves.
+# Reconstruction note (2026-10-04): this file was lost to a workspace-snapshot artefact (the
+# snapshot layer excludes directories named `out`, and `modules/out/` was stripped between
+# sessions). It was reconstructed field-for-field from its generated doc (`docs/modules/
+# out-main.md` — which `tools/module_docs.py --check` proves byte-identical to what the
+# original manifest renders) and the house conventions of its WO-014 siblings. Comments are
+# the only bytes that may differ from the original; every parsed value is machine-verified
+# by the doc gate, the registry cross-check and the golden renders.
 
 [identity]
 id = "sparq/out/main"
@@ -45,18 +27,16 @@ kind = "io"
 tier = "t1"
 stability = "stable"
 
-# The mix bus in. Optional by design (the bare-master demo node); the implementation maps any
-# arriving width through `stereo_tick_f` (narrower → hold the last channel, wider → take the
-# first two) — the device-shape conversion the master render performs anyway.
 [[ports]]
 id = "in"
 name = "Main In"
 direction = "in"
 type = "audio"
 channel_set = "stereo"
+# The master's input is optional: an unpatched Main Out renders silence and FLAGS in the shell
+# (operator ruling, WO-012 inc 5b) rather than refusing the build.
 required = false
 
-# The device plays the master's first audio output; stereo is the v0 device target.
 [[ports]]
 id = "out"
 name = "Main Out"
@@ -64,9 +44,6 @@ direction = "out"
 type = "audio"
 channel_set = "stereo"
 
-# Master trim, glided once per frame (defect #85, third round: one-pole chase, 25 ms tau — no
-# staircase kinks under a fast drag; the glide advances on the frame's first channel so the
-# device channel count cannot change how far it travels).
 [[params]]
 id = "trim"
 name = "Trim"
@@ -76,9 +53,6 @@ min = 0.0
 max = 2.0
 default = 1.0
 
-# Hard mute, NEVER glided: a stage cut writes EXACT zeros immediately (never a near-zero), so a
-# muted master is bit-exactly silent and its meter reads 0 — an on-stage "cut it now" that
-# means it.
 [[params]]
 id = "mute"
 name = "Mute"

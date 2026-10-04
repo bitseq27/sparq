@@ -10,7 +10,9 @@ members = [
 ]
 
 # Standalone measurement harness (ADR-009 executor decision 7). Own `[workspace]`, excluded here too.
-exclude = ["tools/dispatch-bench"]
+# tools/sparq-module-guest: the instrument guest SDK (ADR-010 / WO-017) — published separately,
+# the core workspace does not depend on it; own `[workspace]` on the same precedent.
+exclude = ["tools/dispatch-bench", "tools/sparq-module-guest"]
 
 # Empty crates are debt (ADR-000): a crate is added to this list only when it has contents.
 # Planned, not yet created: sparq-stream, sparq-sample, sparq-assets, sparq-visual,

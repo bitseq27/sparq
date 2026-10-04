@@ -6,7 +6,35 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-10-02, END of twelfth session round 4 (Linux sandbox box) — operator UI
+**Last updated:** 2026-10-04, END of thirteenth session (Linux sandbox box) — the
+**INSTRUMENT-LAYER PLANNING ROUND** (no engine code): the operator ruling of 2026-10-03 makes
+the library two layers — backbone modules (first-party, T1) and **instruments** (the
+performance/control tier: complex, visually rich, third-party, **T2 WASM sandbox pulled forward
+from Phase 5**, host-rendered displays styled by token ids so design changes re-theme
+instruments with zero intervention, ≤5-file `.sparqmod` packages dropped in `instruments/`).
+Recorded as **ADR-010 / D-14**; written: ADR-010 + ADR-002 amendment, SPARQ-PLAN (§6.9 + six
+more sections), root `MODULE-BUILD-GUIDE.md` v1, WO-017…019 pre-ticketed (§3b — Phase 0's exit
+gate untouched), manifest-schema `classification.layer` + six error codes,
+`docs/api/instrument-wit/` (**`sparq:instrument@1.1.0` skeleton v0.2**, aligned field-for-field
+against `sparq-module-api`, parse-clean via wit-parser), `tools/sparq-module-guest/` (**SDK v0.1
+skeleton** + noop-instrument example — builds to wasm; jco componentize + JS smoke **11/11
+PASS**), `reference/instrument-template/`. **The parallel-build ruling: YES behind the WO-017
+freeze set** (ADR-010 decision 7). Gates re-measured on the sandbox box: fmt/clippy CLEAN,
+`cargo test --workspace` **899/0/1-ignored** (digest unchanged), five python gates clean,
+`module_docs --check` **24/24**; `ui --audit` NOT re-run in-sandbox (ui-window stack absent;
+zero UI code touched — device re-runs it in `gates.bat`). **TWO INCIDENTS, read
+`ROUND5-HANDOFF.md` §3 before anything else:** (1) the sandbox lost its `.git` objects AND
+origin went private — local history rebuilt as snapshot commit `9809593`; delivery is the
+full-tree overlay **`sparq-update-2026-10-04.zip`** (+ a review bundle), device stays canonical;
+(2) defect #94's class struck again — `modules/out/` stripped by the snapshot layer,
+`out/main/sparqmod.toml` **reconstructed** from its generated doc (machine-verified 24/24;
+comments differ). `sync_check` **FAILS BY DESIGN** on this tree (Cargo.toml's exclude line +
+the reconstruction; Cargo.lock excluded from the pack on purpose — zero new root deps): the
+device re-stamps after applying. Round-4 obligations stand untouched: test006 A–U, test004
+attempt 4, defect #95, the dropdown picker. **Freeze checklist open items: WIT README §5 /
+handoff §6.**
+
+**Previous update:** 2026-10-02, END of twelfth session round 4 (Linux sandbox box) — operator UI
 round 4 (the 15-item list: cable nodes, the round-4 wells, three new modules, the executor's
 adoption) is **BUILT, GREEN and SEALED** as `sparq-update-2026-10-02.zip` rev 4 — a FULL-TREE
 overlay this time (defect #94's remedy: the pack no longer depends on a base the receiver might

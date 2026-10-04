@@ -20,6 +20,9 @@ sparq-demo.wav
 # the standalone harness builds into its own target dir, inside the repo tree
 /tools/dispatch-bench/target
 
+# the guest SDK is its own workspace too (ADR-010 / WO-017) — same rule, same reason
+/tools/sparq-module-guest/target
+
 # canvas/executor render outputs (written by the shell and `sparq exec`)
 canvas-render.wav
 exec.wav

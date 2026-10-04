@@ -8,7 +8,7 @@ An ADR is written *when the decision is made*, not afterwards. If you find yours
 |---|---|---|---|
 | [000](000-conventions.md) | Engineering conventions | accepted | 2026-09-20 |
 | [001](001-language-rust.md) | Implementation language: Rust | accepted (D-3) | 2026-09-20 |
-| [002](002-module-tiers.md) | Module execution tiers | accepted (D-2) | 2026-09-20 |
+| [002](002-module-tiers.md) | Module execution tiers | accepted (D-2) — amended by 010 | 2026-09-20 |
 | [003](003-ui-renderer-path.md) | UI renderer path: egui scaffold → custom WebGPU shell | accepted (D-1) | 2026-09-20 |
 | [004](004-platform-windows-primary.md) | Primary platform: Windows | accepted (D-4) | 2026-09-20 |
 | [005](005-port-type-system.md) | Closed port type system | accepted | 2026-09-20 |
@@ -16,6 +16,7 @@ An ADR is written *when the decision is made*, not afterwards. If you find yours
 | [007](007-determinism-journal.md) | Determinism, seed tree and journaling | accepted | 2026-09-20 |
 | [008](008-bootstrap-device.md) | Disposable bootstrap audio path | accepted | 2026-09-20 |
 | [009](009-executor-and-hal.md) | Graph executor and audio HAL shape | draft — ratify in WO-006/WO-008 | 2026-09-20 |
+| [010](010-instrument-layer.md) | The instrument layer and the third-party hand-off system | accepted (D-14) — amends 002 | 2026-10-04 |
 
 ## Decisions still open
 

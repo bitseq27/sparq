@@ -28,6 +28,7 @@ One tool, `xtask tokens`, consumes the TOML and emits:
 | `design/tokens/tokens.json` | thin client, docs site, external tooling |
 | `design/tokens/tokens.css` + `tokens.svg` defs | **static mockups** (WO-004) and documentation |
 | `design/tokens/preview.html` | the token preview page: every colour, every type size, every stroke, every colour map, at 1×/1.5×/2×, in both themes |
+| **token bundle v1** (serialised runtime form, WO-017) | **instrument guests (T2)**: handed to a sandboxed module at `prepare` so its declared UI and emitted display lists/scene descriptors resolve against the *current* tokens — the mechanism by which a token change re-themes every handed-in instrument with zero intervention (ADR-010). Semver'd with the tokens; golden snapshot test in CI |
 
 Generation is one-directional (TOML → everything). Generated files are checked in and CI fails if they are stale, so a mockup can never drift from the values the app uses.
 

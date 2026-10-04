@@ -29,6 +29,7 @@ Rules: every field below is either required or has a documented default. Unknown
 | `top` | enum | yes | `syn smp flt fx dyn ana spa seq gen harm dat io dsp util ml out` |
 | `kind` | enum | yes | `source processor utility analysis spatial display data generative io` |
 | `tier` | enum | yes | `t1 t2 t3` |
+| `layer` | enum | no (default `backbone`) | `backbone instrument` — the two-layer library (ADR-010): backbone = first-party T1 utilities/control/basic sources; instrument = the performance-and-control layer, T2 wasm, host-rendered displays, five-file package in `instruments/`. Orthogonal to `top`/`category`. Cross-field rules: `layer = instrument` requires `tier = t2` (or a recorded T1 promotion); `layer = backbone` with `tier = t2/t3` is legal but unusual. Added 2026-10-04, contract v1.1 (WO-017) |
 | `stability` | enum | yes | `experimental stable deprecated` |
 
 ## 3. `ports[]`
@@ -98,9 +99,13 @@ Standard schemas are provided by the host (`sparq/imu9@1`, `sparq/optical-flow@1
 
 ## 9. `ui`
 
-`panel{ layout[], widgets[] }` where a widget is `{kind, param|port|display, x, y, w, h, touch_class (S|M|L|XL), visible_if}`; `display_slots[]{source_port, display_module, colormap, mode}`; `custom_draw (t1 only, bool + entry symbol)`; `colour_class` (defaults from `classification.top`).
+`panel{ layout[], widgets[] }` where a widget is `{kind, param|port|display, x, y, w, h, touch_class (S|M|L|XL), visible_if}`; `display_slots[]{source_port, display_module, colormap, mode}`; `displays[]` **(v1.1, ADR-010)** `{id, kind (display_list|scene), sources[], colormap?, min_size, lod}` — graphical surfaces whose per-frame content is a **display list** (2D primitives) or **scene descriptor** (3D: camera/points/lines/mesh/heightfield) emitted by the module and **rendered by the host** against the runtime token bundle; `custom_draw (t1 first-party only, bool + entry symbol)`; `colour_class` (defaults from `classification.top`).
 
 Widget kinds (closed vocabulary): `slider knob xy_pad matrix enum_select toggle numeric_entry label meter_attach display_slot button waveview grid_pad`.
+
+Display-list and scene primitives are a closed vocabulary too (module-api §10, frozen in WO-017), and styling inside them is **token-semantic only** — a literal colour, size or duration anywhere in declared UI or emitted lists is `E-LITERAL-APPEARANCE`. This is the mechanism by which an app design change re-themes every handed-in instrument with zero intervention (ADR-010 decision 4).
+
+**Package note (v1.1):** an instrument package is **≤ 5 files** — `sparqmod.toml`, `<name>.wasm`, `example.sparqpatch`, `preview.svg` (validator-generated), `README.md` — dropped in `instruments/` (ADR-010 decision 5). Bulk assets are referenced by hash (`state.assets[]`), never as extra files; `E-PACKAGE-FILECOUNT` rejects the sixth.
 
 ## 10. `lifecycle`
 
@@ -127,6 +132,10 @@ Widget kinds (closed vocabulary): `slider knob xy_pad matrix enum_select toggle 
 **Derived codes (added 2026-09-22, WO-007 task 1).** The 19 above were accumulated case-by-case as the design was written, which left two holes — and both are WO-007 acceptance-criteria blockers. Nothing rejected a **missing required field**: 20 rows are marked `Req: yes`, the only two `*-MISSING` codes are field-specific, and `E-UNKNOWN-KEY` catches extras but not omissions, so the criterion "rejects missing required ports with an actionable message" was unmeetable. And nothing rejected an **invalid value** for the ~20 closed vocabularies that have no specific code — `tier = "t9"` had no error to produce. Rather than keep adding codes by hand, they are **derived from the schema**, so a new field brings its own:
 
 `E-KEY-MISSING:<path>` (required field absent) · `E-ENUM-UNKNOWN:<path>` (value outside a closed domain) · `E-CROSS-FIELD:<rule id>` · `E-VALUE-TOO-LONG:<path>` (e.g. `summary` over 120 chars) · `E-VALUE-MALFORMED:<path>` (bad semver, bad SPDX, bad url)
+
+**Added by contract v1.1 (2026-10-04, ADR-010 / WO-017), for the instrument layer:**
+
+`E-LAYER-MISMATCH` (layer/tier cross-field rule) · `E-PACKAGE-FILECOUNT` (more than five files in an instrument package) · `E-LITERAL-APPEARANCE` (a colour/size/duration literal where a token id is required) · `E-DISPLAY-PRIMITIVE-UNKNOWN` (outside the display-list/scene vocabularies) · `E-CAPABILITY-UNDECLARED` (a T2/T3 guest requesting an undeclared capability) · `E-TOKEN-BUNDLE-VERSION` (guest requires a bundle major the host does not speak)
 
 Cross-field rules needing ids, none of which had a code: `params[].per_voice` requires `voices.policy != none` · `ui.custom_draw` is T1-only · `capabilities.process_spawn` is T3-only · `stale_policy = decay` requires `decay_ms` · `params[].type = enum` requires `options[]`. The machine-readable form of every field, its domain and its codes is `docs/api/manifest-fields.toml` (82 rows, 22 required).
 

@@ -1,0 +1,200 @@
+package sparq:instrument@1.1.0;
+
+// sparq instrument contract — shared types (WO-017 freeze set, artefact 4)
+//
+// Status: v0.2 SKELETON — drafted 2026-10-04, then ALIGNED field-for-field against the native
+// contract in `crates/sparq-module-api/src/` the same day: `module::BlockStatus`, `module::Resources`,
+// `module::ModuleError`, `module::Oversampling`, `params::ParamSet`, `event::{EventKind, Event}`.
+// Types with no native arbiter yet (data records, transport state) are marked inline and stay open
+// on the ../README.md §5 checklist. Frozen at WO-017 close.
+//
+// Naming is kebab-case (WIT convention); the Rust SDK (`sparq-module-guest`) maps these onto the
+// native names — one contract, two bindings, no drift (the manifest's own rule).
+
+interface types {
+  /// Semantic version. Used for the host API pin (`identity.host_api`) and the token bundle.
+  record semver {
+    major: u32,
+    minor: u32,
+    patch: u32,
+  }
+
+  /// ALIGNED with `module::ModuleError` — same four cases, same meanings. The native error carries
+  /// `&'static str` so constructing one cannot allocate; a guest allocates its reason string, which
+  /// is legal because every `module-error` return path is a control-thread call. The SDK maps 1:1.
+  /// Honest refusal with words is always valid — silently ignoring a message you don't understand
+  /// is the bug, not the refusal.
+  variant module-error {
+    /// the module does not support what was asked of it
+    unsupported(string),
+    /// the state blob could not be applied (corrupt, wrong schema, no migration path)
+    state(string),
+    /// these `resources` are outside what the module can run with — say which, and what would fit
+    resources(string),
+    /// an `atom` message was not understood
+    message(string),
+  }
+
+  /// ALIGNED with `module::BlockStatus` — all four variants, native semantics verbatim.
+  /// Sandbox note: a guest that exhausts `resources.fuel-per-block` TRAPS; the host catches the
+  /// trap and records it as `overrun` — fuel is the wasm face of the block-time budget, so the
+  /// auto-bypass ladder (ADR-009 decision 6) works identically across the boundary.
+  enum block-status {
+    /// the block was produced as declared
+    ok,
+    /// the module produced silence deliberately (muted, internally bypassed, starved of a required
+    /// input). Distinct from `ok` so a silent output is a statement, not a surprise
+    silenced,
+    /// the module exceeded its declared block-time budget; N consecutive overruns make the
+    /// executor auto-bypass it, draw a red hairline and write a journal entry
+    overrun,
+    /// the module could not produce this block; the host substitutes silence and flags it —
+    /// the audio thread never unwinds
+    failed,
+  }
+
+  /// ALIGNED with `module::Oversampling` (the module declares the need; the host provides).
+  enum oversampling {
+    none,
+    x2,
+    x4,
+    x8,
+  }
+
+  /// ALIGNED with `module::Resources` field-for-field — including its shape decision: guests see
+  /// RESOLVED CHANNEL COUNTS per audio port (0 = unconnected), never `ChannelSet` variants; the
+  /// layout vocabulary (`mono stereo quad 5.1 7.1.4 ambisonics:N objects:K raw:M variable`) is
+  /// manifest-side and resolves host-side before `prepare`. Plus exactly two instrument-tier
+  /// additions (fuel ceiling, token-bundle version), which native `Resources` does not carry
+  /// because T1 has no fuel and consumes `tokens.rs` at compile time.
+  /// Caps (native constants): at most 8 ports per type per direction (`MAX_PORTS_PER_CLASS`),
+  /// at most 32 params (`MAX_PARAMS`). `prepare` is called again whenever ANY field here changes,
+  /// including cascading channel-set resolutions — write it idempotent, release what you took.
+  record resources {
+    /// device sample rate in Hz
+    sample-rate: u32,
+    /// frames per block — a runtime field, not a constant (module-api §16.2: finer time resolution
+    /// comes from a smaller HOST block, never from sub-block processing)
+    block-frames: u32,
+    /// resolved channels per audio INPUT port, manifest order; 0 = unconnected
+    audio-in-channels: list<u32>,
+    /// resolved channels per audio OUTPUT port, manifest order
+    audio-out-channels: list<u32>,
+    oversampling: oversampling,
+    /// voice count, for modules whose `voices.policy` is not `none`
+    voices: u32,
+    /// the arena budget this module may reserve in `prepare`
+    arena-bytes: u64,
+    /// v1.1 (instrument tier): per-block fuel ceiling; exhausting it traps and maps to `overrun`
+    fuel-per-block: u64,
+    /// v1.1 (instrument tier): version of the token bundle in force (the `tokens` import serves it)
+    token-bundle: semver,
+  }
+
+  /// ALIGNED with `params::ParamSet` — the snapshot is a VERSION plus a fixed-order array of
+  /// NORMALISED f32 VALUES, one per declared param, in manifest declaration order. There is no
+  /// per-value type tag: `bool` rides 0.0/1.0, `int` rides its value, `enum` rides its option
+  /// index — the manifest's declared domain gives each f32 its meaning, exactly as native.
+  /// `text`/`blob` params never ride the snapshot (they cannot, in a fixed f32 array — native
+  /// proves decision F); they arrive via `configure`/`message` when they change. Same version
+  /// ⇒ same values, so a guest may skip re-reading. Length ≤ 32 is manifest-validated
+  /// (`E-CROSS-FIELD:params-cap`), never truncated here.
+  record param-set {
+    version: u64,
+    values: list<f32>,
+  }
+
+  /// ALIGNED with `event::EventKind` — ADR-005's order, the manifest's spellings.
+  enum event-kind {
+    ump,
+    osc,
+    trigger,
+    gate,
+    note,
+    clock,
+  }
+
+  /// ALIGNED with `event::Event` — one flat fixed-size record (native: `Copy`, allocation-free by
+  /// construction; WIT: a fixed tuple for `words`, never a list). Field meanings by kind, the
+  /// contract's words verbatim from `event.rs`:
+  ///
+  /// | kind    | `value`                | `channel`      | `words`                                        |
+  /// |---------|------------------------|----------------|------------------------------------------------|
+  /// | trigger | intensity 0..=1        | stream id (0)  | unused (zero)                                  |
+  /// | gate    | level (0 = off)        | stream id      | unused                                         |
+  /// | note    | velocity 0..=1         | note channel   | `[key, pressure, 0, 0]`-style per-note controllers |
+  /// | ump     | unused (0.0)           | UMP group      | the up-to-four packet words                    |
+  /// | osc     | unused (0.0)           | stream id      | an encoding of the message (dialect-owned)     |
+  /// | clock   | unused (0.0)           | 0              | `[ticks_per_pulse, 0, 0, 0]` when transport-derived |
+  record event {
+    kind: event-kind,
+    /// sample offset inside the current block (`0..frames`); the host delivers pre-sorted
+    sample: u32,
+    channel: u16,
+    value: f32,
+    words: tuple<u32, u32, u32, u32>,
+  }
+
+  /// DOCUMENT-ARBITED (module-api v1 §4), not code-arbited: `data` ports are specified but not
+  /// yet implemented in `sparq-module-api`, so this vocabulary is frozen at WO-017 close and
+  /// re-checked when the native data-port work lands (Phase 5). §4's dtype set, 1:1 —
+  /// `f32 | f64 | i32 | i64 | bool | vecN | enum | str | blob`:
+  variant data-value {
+    /// dtype `f32`
+    single(f32),
+    /// dtype `f64`
+    double(f64),
+    /// dtype `i32`
+    int32(s32),
+    /// dtype `i64`
+    int64(s64),
+    /// dtype `bool`
+    boolean(bool),
+    /// dtype `vecN` — N fixed per channel by the schema; f64 carrier (the schema declares the
+    /// element semantics). Carrier width is the one judgement call here — ratify at freeze.
+    vec(list<f64>),
+    /// dtype `enum` — index into the schema's declared options
+    enumerated(u32),
+    /// dtype `str`
+    text(string),
+    /// dtype `blob`
+    blob(list<u8>),
+  }
+
+  /// §4's record flags. The field is spelled `record-flags` because `flags` is a WIT keyword.
+  enum data-flags {
+    ok,
+    stale,
+    discontinuity,
+    estimated,
+  }
+
+  /// One typed data record — §4's `{ values, t_wall, t_sample?, seq, flags }` plus schema
+  /// identity. STAMPING RULES (ADR-007, README decision C): on INPUT every field is
+  /// authoritative — the host stamped `t-wall-ns`, assigned `seq`, and applied the port's
+  /// read/stale policy. On OUTPUT the guest's stamps are ADVISORY: the host re-stamps
+  /// `t-wall-ns` and re-assigns `seq` at the block boundary, because a guest clock reading
+  /// that reached the journal would make replay diverge. Channel order follows the schema
+  /// (`schema-id`@`schema-version`): host-registered standards (`sparq/imu9@1`,
+  /// `sparq/optical-flow@1`, `sparq/loudness@1`, `sparq/pitch@1`, `sparq/onset@1`,
+  /// `sparq/timeseries@1`, `sparq/pose2d@1`, …) or a private schema declared in the manifest.
+  /// Unknown schemas are a load-time error, never a runtime surprise (§4's own words).
+  record data-record {
+    schema-id: string,
+    schema-version: u32,
+    channels: list<data-value>,
+    t-wall-ns: u64,
+    /// present when the schema's `clock_domain` is audio (§4's `t_sample?`)
+    t-sample: option<u64>,
+    seq: u64,
+    record-flags: data-flags,
+  }
+
+  enum log-level {
+    trace,
+    debug,
+    info,
+    warn,
+    error,
+  }
+}

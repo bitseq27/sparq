@@ -1,0 +1,274 @@
+package sparq:instrument@1.1.0;
+
+// sparq instrument contract — the display vocabularies (WO-017 freeze set)
+//
+// Status: v0 SKELETON. This is ADR-010 decision 3 made concrete: instruments emit STRUCTURE,
+// the host renders it. Two closed vocabularies — display list (2D) and scene descriptor (3D) —
+// plus the design-rule hard points, which are encoded in the types themselves:
+//
+//   * There is no colour field, no size field and no duration field anywhere below. Styling is
+//     a `token-id` (semantic, resolved by the host against the CURRENT token bundle at render
+//     time) or a closed enum (stroke width 1/2/3, corner 0/2/4, dash patterns). A literal
+//     appearance value is not merely forbidden — it is unrepresentable, which is what turns
+//     token-spec §3 rule 1 from an audit into a property (E-LITERAL-APPEARANCE then only has to
+//     police manifests, not frames).
+//   * Colormaps appear only where a `values` channel feeds them (data encoding, never style —
+//     token-spec §3 rule 11): points/heat cells/meshes/heightfields may carry `colormap` +
+//     `values`; strokes of chrome may not.
+//   * Every colour-bearing item has a non-colour encoding channel available (`dash`, glyph
+//     labels, shapes) per token-spec §3 rule 7.
+//
+// Budget: vertex/instance/cell ceilings come from the manifest's `gpu_class`; over budget the
+// host degrades LOD, and at `lod = minimal` a display that cannot degrade shows WORDS (the
+// shell's existing refuse-in-words behaviour), never garbage. `draw` is called at the host's
+// discretion (not necessarily every frame) on the UI thread — it must be bounded, allocation-
+// light, and must not assume a frame rate.
+
+interface display {
+  /// A semantic token id resolved by the host at render time: `color.signal.audio`,
+  /// `color.text.secondary`, `stroke.hairline`, `space.4`, `type.scale.m`, `colormap.spectrum.sonogram`.
+  /// Unknown ids: the primitive is skipped with a diagnostic at runtime (fail soft, the show
+  /// goes on) and is a hard validation failure at hand-in (fail loud, before it ships).
+  type token-id = string;
+
+  /// The only stroke widths that exist (token-spec §3 rule 2).
+  enum stroke-width {
+    w1,
+    w2,
+    w3,
+  }
+
+  /// The only corner radii that exist (token-spec §3 rule 3). Circles are for knobs and ports,
+  /// which the host draws — guests get rects.
+  enum corner {
+    c0,
+    c2,
+    c4,
+  }
+
+  /// Dash patterns: the non-colour encoding channel (token-spec §3 rule 7).
+  enum dash {
+    solid,
+    dashed,
+    dotted,
+    hidden,
+  }
+
+  /// Host LOD policy level, from the shell's zoom/breakpoint rules.
+  enum lod {
+    full,
+    reduced,
+    minimal,
+  }
+
+  record point {
+    x: f32,
+    y: f32,
+  }
+
+  /// Shared styling. `stroke`/`fill` are token ids; exactly one of them must be present on
+  /// filled-vs-stroked primitives (validation enforces the combination table in the look-board).
+  record style {
+    stroke: option<token-id>,
+    stroke-width: stroke-width,
+    fill: option<token-id>,
+    dash: dash,
+    corner: corner,
+  }
+
+  // ── display list v1 (2D) ─────────────────────────────────────────────────────────────────
+
+  variant path-segment {
+    move-to(point),
+    line-to(point),
+    quad-to(tuple<point, point>),
+    cubic-to(tuple<point, point, point>),
+  }
+
+  record polyline-item {
+    points: list<point>,
+    style: style,
+  }
+
+  record path-item {
+    segments: list<path-segment>,
+    closed: bool,
+    style: style,
+  }
+
+  record rect-item {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    style: style,
+  }
+
+  record arc-item {
+    cx: f32,
+    cy: f32,
+    r: f32,
+    a0-deg: f32,
+    a1-deg: f32,
+    style: style,
+  }
+
+  /// Text via the host type engine: the guest supplies the string (numbers pre-formatted WITH
+  /// their units — token-spec §3 rule 9 — and the host applies tabular numerals and the scale),
+  /// a semantic size token and a text-tier colour token. No fonts, no metrics, no literals.
+  record glyph-run-item {
+    text: string,
+    x: f32,
+    y: f32,
+    size: token-id,
+    colour: token-id,
+  }
+
+  /// Point cloud; per-point colouring rides `values` + `colormap` (data encoding), flat colour
+  /// rides `colour` (signal-class token). One of the two, validated.
+  record points-item {
+    positions: list<point>,
+    size: token-id,
+    colour: option<token-id>,
+    colormap: option<token-id>,
+    values: option<list<f32>>,
+  }
+
+  /// Gridded magnitude/signed data filled from a declared colormap token (the spectrogram/
+  /// sonogram/heat case). `values` is row-major, cols * rows long; NaN = no cell drawn.
+  record heat-cells-item {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    cols: u32,
+    rows: u32,
+    values: list<f32>,
+    colormap: token-id,
+  }
+
+  /// Rolling/phosphor trace (the scope case): values map across the item's box, decay and glow
+  /// are the host's motion tokens — the guest never draws persistence itself.
+  record trace-item {
+    values: list<f32>,
+    colour: token-id,
+    width: stroke-width,
+    phosphor: bool,
+  }
+
+  variant item {
+    polyline(polyline-item),
+    path(path-item),
+    rect(rect-item),
+    arc(arc-item),
+    glyph-run(glyph-run-item),
+    points(points-item),
+    heat-cells(heat-cells-item),
+    trace(trace-item),
+  }
+
+  // ── scene descriptor v1 (3D) ─────────────────────────────────────────────────────────────
+  // You describe a scene; the host renders it (camera included) with tokened materials and the
+  // project's colormap bindings. No shaders, no textures, no lights — lighting is a host policy
+  // so a hundred instruments share one rendering sun.
+
+  type vec3 = tuple<f32, f32, f32>;
+
+  /// One camera per scene; the host clamps projection to the display frame. `fov-deg = None`
+  /// selects orthographic.
+  record camera {
+    eye: vec3,
+    target: vec3,
+    up: vec3,
+    fov-deg: option<f32>,
+    near: f32,
+    far: f32,
+  }
+
+  enum shading {
+    /// single tokened colour
+    flat,
+    /// `values` channel through the material's colormap
+    data,
+  }
+
+  record material {
+    colour: option<token-id>,
+    colormap: option<token-id>,
+    width: stroke-width,
+    shading: shading,
+  }
+
+  record scene-points {
+    positions: list<vec3>,
+    values: option<list<f32>>,
+    size: token-id,
+    material: material,
+  }
+
+  record scene-lines {
+    /// line segments: vertices[2i]–vertices[2i+1]
+    vertices: list<vec3>,
+    values: option<list<f32>>,
+    material: material,
+  }
+
+  record scene-mesh {
+    vertices: list<vec3>,
+    indices: list<u32>,
+    values: option<list<f32>>,
+    material: material,
+  }
+
+  /// Regular grid + height channel: the terrain/wavetable/function case ("geometry is audible
+  /// and visible" — the same heights that make the sound may make the surface).
+  record scene-heightfield {
+    origin: vec3,
+    spacing: tuple<f32, f32>,
+    cols: u32,
+    rows: u32,
+    heights: list<f32>,
+    values: option<list<f32>>,
+    material: material,
+  }
+
+  variant scene-element {
+    points(scene-points),
+    lines(scene-lines),
+    mesh(scene-mesh),
+    heightfield(scene-heightfield),
+  }
+
+  record scene {
+    camera: camera,
+    /// ground token (`color.ground.inset`, …) — the near-black grounds are the only backgrounds
+    background: token-id,
+    elements: list<scene-element>,
+  }
+
+  // ── the draw call ────────────────────────────────────────────────────────────────────────
+
+  /// What one `draw` call returns: the display-list or the scene, matching the `kind` the
+  /// manifest declared for `display-id`. A mismatch is a validation failure at hand-in and a
+  /// skipped frame with a diagnostic at runtime.
+  variant surface {
+    items(list<item>),
+    scene(scene),
+  }
+
+  /// What one `draw` call receives. Bound stream data is fetched separately through the
+  /// `sources` host import, keyed by (`display-id`, source binding) from the manifest's
+  /// `ui.displays[].sources`.
+  record frame-context {
+    /// which declared `ui.displays[]` entry this call draws
+    display-id: string,
+    /// logical px at the current DPI — the guest lays out against these, never against pixels
+    width-px: f32,
+    height-px: f32,
+    lod: lod,
+    /// UI clock in seconds (ADR-006's third clock): animation phase ONLY. Reading it is legal
+    /// because draw output never reaches the audio path or the journal — displays are not
+    /// replayed, renders are.
+    time-sec: f64,
+  }
+}

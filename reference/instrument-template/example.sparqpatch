@@ -1,0 +1,46 @@
+# sparq example patch — template instrument (file 3 of the 5-file package)
+#
+# A .sparqpatch is a subgraph with a port surface: the instrument doing its job.
+# Text encoding follows the text-diffable graph part of docs/formats/project.md:
+# deterministic order, one node/edge per logical line, stable ids, no timestamps.
+# (The canonical container is finalised by WO-011; this stub uses the same fields.)
+#
+# This example: a clock triggering the template instrument, into the main out —
+# the smallest patch in which an instrument is audible and visible.
+
+[meta]
+format = "sparqpatch"
+version = 0
+title = "template — smallest audible patch"
+modules = ["you/syn/template@0.1.0", "sparq/mod/clk@0.1.0", "sparq/out/main@0.1.0"]
+
+[[nodes]]
+id = "clk"
+module = "sparq/mod/clk@0.1.0"
+position = [0, 0]                      # grid units
+
+[[nodes]]
+id = "voice"
+module = "you/syn/template@0.1.0"
+position = [4, 0]
+[nodes.params]
+freq = 220.0
+amp = 0.6
+
+[[nodes]]
+id = "out"
+module = "sparq/out/main@0.1.0"
+position = [8, 0]
+
+[[edges]]
+from = "clk.trig_16"
+to = "voice.gate"
+kind = "event"
+
+[[edges]]
+from = "voice.out"
+to = "out.in"
+kind = "audio"
+
+[outputs]
+main = "out"                           # master designation (the bridge renders it to WAV)

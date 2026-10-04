@@ -1,5 +1,7 @@
 # sparq module author guide — v0, updated for contract v1 (WO-008 increment 4, 2026-09-26)
 
+> **2026-10-04 (ADR-010):** this guide remains the DSP-contract text for **first-party backbone modules (T1)** — and it is normative for instruments by reference. If you are building an **instrument** (the performance layer: graphical displays, unique control UI, handed in as a five-file drop-in package), your entry point is [`MODULE-BUILD-GUIDE.md`](../MODULE-BUILD-GUIDE.md) at the repo root; read §3–§10 below first, then the build guide for the package, display and hand-in rules that sit on top of this contract.
+
 **Audience:** you, writing a module for sparq. **Status:** v0, matching `sparq-module-api` as built in
 WO-007. **The test this document has to pass** (module-api §15): a simple module is a **two-hour**
 task and a complex one is a two-day task. If any step below needs engine knowledge, the contract has

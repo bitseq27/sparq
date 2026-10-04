@@ -313,6 +313,8 @@ Design consequences:
 
 **[DECISION D-2]** Start with T1 + T3 (simplest, fastest to value), add T2 in Phase 5–6 once the manifest/port types have stabilised. Building the wasm ABI first is a classic way to burn six months before making a sound.
 
+**[D-2, amended 2026-10-04 → ADR-010 / D-14]** The third-party instrument requirement pulled T2 forward: **T2 is the instrument tier** — contract v1.1 freezes in Phase 1 (WO-017), the loader/validator ship in Phase 2 (WO-018), and the first handed-off instruments land in Phase 2 (WO-019). Backbone modules stay T1 under the unchanged admission rule; heavy non-real-time work stays T3. The original warning stands — the wasm ABI is frozen *after* the native contract has been proven on real modules, which by Phase 1 it has been.
+
 ### 6.2 Manifest (declarative, versioned, signed)
 
 Each module ships a manifest (`sparqmod.toml` / embedded in the wasm component) declaring:
@@ -372,7 +374,8 @@ Every parameter declares: `id, name, unit, type (float/int/bool/enum/text/blob),
 A module's front panel is described declaratively so the shell renders it consistently (this is what makes the UI *cohesive* rather than 200 different plugin skins):
 
 * widget list (slider/knob/xy-pad/matrix/enum/label/scope-attach), geometry on a 8 px grid, label, unit, param binding, visibility conditions, touch target class (`S/M/L/XL`), and *display slots* (which analysis outputs to render, with which display module and colour map).
-* Optional escape hatch: a module may supply a custom `gpu` draw routine (T1 only, or via wasm canvas) for genuinely novel surfaces — but it must consume the same design tokens so it still looks like sparq.
+* **Graphical displays are host-rendered scene data (ADR-010).** Beyond display slots, a module may declare *displays* that emit a **display list** (2D: paths, polylines, rects, arcs, glyph runs, point clouds, heat cells) or a **scene descriptor** (3D: camera, points, lines, triangle meshes, heightfields) per frame; the host renders them with its own pipeline against the current design tokens. Instruments never own pixels — that is what makes app design changes propagate into every third-party instrument with zero intervention. Literal colours/sizes in declared UI or emitted lists are a validation error.
+* Escape hatch: a custom `gpu` draw routine remains available to **first-party T1 modules only**, and must consume the same design tokens and pass the visual conformance checklist (`design/look-board.md`). A badged third-party pixel surface is parked in `LATER.md`, not in this contract.
 
 ### 6.7 Hot reload and non-breakage guarantees
 
@@ -392,6 +395,45 @@ Naming convention: `<category>/<name>` (see Appendix A). Phase-relevant counts:
 * Phase 3: ~40 modules (full audio toolkit)
 * Phase 6: ~90 modules (music + data + display)
 * v1.0: ~140 modules + templates + example patches
+
+The first-party set is the **backbone layer** (§6.9): utilities, control and basic sources on the critical DSP path. The count above grows by accretion of small modules; the performance layer grows by *instrument*, most of them not first-party.
+
+### 6.9 The two-layer library: backbone modules and instruments (ADR-010)
+
+**The library is two layers, and the difference is a role, not a size.**
+
+| | **Backbone modules** | **Instruments** |
+|---|---|---|
+| Role | the substrate: utilities, control, basic sources, analysis | the performance and control layer: what a set is played on |
+| Manifest | `classification.layer = "backbone"` (default) | `classification.layer = "instrument"` |
+| Tier | T1 — native, first-party, golden-tested (ADR-002 admission rule unchanged) | T2 — wasm sandbox; third parties never ship native code into the live process |
+| UI | auto-generated panel or declared widget layout | declared widget layout **+ graphical displays**: display lists (2D) and scene descriptors (3D), host-rendered with current tokens (§6.6) |
+| Author | first-party | first-party reference instruments + anyone, via the hand-off system below |
+| Complexity bar | small, single-purpose, composable | "simple or very complex" — a two-hour module to a two-day instrument (the guide's own test) |
+
+Instruments are built *from* backbone modules conceptually — but they run as single graph nodes; patching remains the composition mechanism. An instrument whose inner DSP is too hot for the sandbox factors the hot path into a backbone utility or petitions for T1 promotion, which is a packaging change, not a redesign (the manifest is tier-independent).
+
+**The hand-off / hand-in system.** Third parties build instruments against the frozen contract face and hand them in as a package of **no more than five files**:
+
+```
+instruments/                    ← dropped into the project root; discovered at launch (§11 order), no intervention
+└─ my-fm-terrain/
+   ├─ sparqmod.toml             ← manifest: identity, layer, ports, params, panel, displays, capabilities, asset hashes
+   ├─ fm-terrain.wasm           ← the component; small assets embed in its data section
+   ├─ example.sparqpatch        ← the instrument doing its job
+   ├─ preview.svg               ← library-card render, validator-generated, never hand-drawn
+   └─ README.md                 ← what it is, what it needs, licence
+```
+
+Large asset packs (samples, tables, models) do not break the cap: they are referenced by hash from the content-addressed library (§13.1) and fetched on first load. The author's *source* project is an ordinary cargo/wit project against the `sparq-module-guest` SDK; the five-file cap governs the distributed package.
+
+The properties that make this a system rather than a folder convention:
+
+* **Loads at launch, without intervention.** Discovery walks `instruments/` like every other source (§11): a bad manifest never loads, one broken package cannot hide the others, and every failure is surfaced verbatim in the module browser.
+* **Design updates propagate, without intervention.** The host owns the look: widgets and displays are declared as data (§6.6), colours/strokes/metrics resolve from the runtime token bundle at draw time (§14.1, `design/token-spec.md`). When the app's design changes, tokens change, and every instrument follows — there is no instrument-side copy of the aesthetic to go stale. Literal appearance values in a package are a validation error, machine-checked.
+* **Hand-in is a gate, not a review queue.** `sparq mod validate` runs schema → sandboxed smoke-instantiation → golden render → fuel/real-time budget → panel+display screenshots against the look-board audit → preview regeneration → file-count check, and emits the actionable report style the contract already uses. A package that passes validation *is* a package that loads. Signing/badging per §15: unsigned instruments load badged and are disabled by default in Perform mode.
+* **Authorship is parallelisable.** `sparq mod dev` runs the same chain headless — no core repo, no sound card — and a nightly CI matrix runs every handed-in package against latest core. Core and instruments are built simultaneously behind the frozen contract; integration is mechanical, never merge-based (ADR-010 decision 7).
+* **The author-facing document is [`MODULE-BUILD-GUIDE.md`](MODULE-BUILD-GUIDE.md)** at the repo root, with the skeleton package in `reference/instrument-template/`. The guide carries the contract's own rule: if any step needs engine knowledge, the contract has failed and the guide gets amended.
 
 ---
 
@@ -747,8 +789,9 @@ Every display module can be: full-bleed, scaled to a second output, recorded, or
 
 * Design tokens (§14.1) consumed by every panel.
 * Declarative panel descriptors (§6.6) rendered by one shell widget set.
+* **Instruments render through the host** (ADR-010): display lists and scene descriptors resolved against the runtime token bundle, so a third-party instrument cannot drift from the look even in principle — and a token change re-themes every instrument at once.
 * One type scale, one stroke language, one colour-class system, one motion curve set.
-* A **visual conformance checklist** in the module review process, and an automated screenshot-diff test for every module panel at three breakpoints.
+* A **visual conformance checklist** in the module review process, and an automated screenshot-diff test for every module panel at three breakpoints — for handed-in instruments, run mechanically by `sparq mod validate` against `design/look-board.md`.
 * A single "sparq look" reference board (a canonical screenshot set) that any new surface must be able to sit next to without obvious dissonance.
 
 ---
@@ -756,7 +799,7 @@ Every display module can be: full-bleed, scaled to a second output, recorded, or
 ## 15. Security, trust and safety
 
 * **Module signing**: manifests and binaries signed; the registry publishes attestations; local install of unsigned modules is allowed but *badged* in the UI and disabled by default in Perform mode (so an experiment can't break a set).
-* **Sandboxing**: T2 wasm modules get capability-scoped access (fs read of declared asset paths only, no net unless granted, fuel limits, memory limits, instruction budgets). T3 processes get an OS sandbox profile (seccomp/AppContainer/sandbox-exec) and a resource cap.
+* **Sandboxing**: T2 wasm modules — the instrument tier from Phase 1–2 (ADR-010), not Phase 5 — get capability-scoped access (fs read of declared asset paths only, no net unless granted, fuel limits, memory limits, instruction budgets). T3 processes get an OS sandbox profile (seccomp/AppContainer/sandbox-exec) and a resource cap.
 * **Resource isolation**: per-module CPU budget, per-module memory cap, per-module audio-time watchdog with auto-bypass.
 * **Data privacy**: sensor/camera/network streams are opt-in per source, with a persistent indicator when a camera or mic is live; stream recordings are encrypted at rest if the library is marked private; nothing leaves the machine without an explicit sync/publish action.
 * **Physical safety**: a master SPL ceiling with a hard limiter and an audible/visual warning; "venue mode" caps output level and disables feedback-path modules that can runaway (a real risk with FDN + wavefolders at 8 channels).
@@ -823,6 +866,7 @@ Do **not** wait for sparq to make music. From week 1:
 ### Phase 1 — Kernel & module contract (weeks 7–14)
 * Threading model, clock broker (3 clocks), transport v1, double-buffered param snapshots, arenas, watchdog, degradation ladder.
 * Module API v1 (manifest, ports, params, state, lifecycle) + module browser/discovery + hot reload for T1.
+* **Contract v1.1 — the instrument freeze set (WO-017, ADR-010):** the `layer` field, the display-list + scene-descriptor vocabularies, the runtime token-bundle hand-off, the WIT binding of the v1 module API, the five-file package spec, `MODULE-BUILD-GUIDE.md` v1 and the skeleton template. Frozen *before* any instrument authorship starts, so core and instruments can then be built in parallel.
 * Journal v1 + deterministic replay + project file format v1.
 * Offline renderer (bit-reproducible), WAV import/export.
 * 15 modules: `syn/sine`, `syn/noise`, `syn/polyblep`, `flt/svf`, `env/ad`, `mod/lfo`, `util/gain`, `util/mixer`, `util/delay`, `ana/rms`, `ana/tap`, `out/main`, plus the three WO-007 adapters (`util/range`, `util/offset`, `util/gate-to-cv`) that make the canvas's one-tap converter offer real rather than a button that does nothing.
@@ -834,6 +878,7 @@ Do **not** wait for sparq to make music. From week 1:
 * Sample engine v1 (import, analysis cache, slicing, stretch, multisample, loop recorder).
 * `syn/math` (function→wavetable, wavetermaining, CA wavetables, attractor trajectories).
 * Golden-reference test corpus established (this is your quality floor forever).
+* **The instrument host (WO-018/WO-019, ADR-010):** the `wasmtime` loader behind the `instrument-host` feature, drop-in discovery of `instruments/` at launch, `sparq mod validate` + `sparq mod dev`, and **two first-party reference instruments built through the public path** (proving display-list v1 and scene-descriptor v1) — then the hand-off opens to external authors, who build in parallel against the frozen contract with the nightly conformance matrix as the integration point.
 * **Exit criteria:** you can design a kick, a break-mangling chain and an inharmonic metallic texture entirely in sparq; blind ABX vs a reference plugin chain passes; CPU budget for a "typical dense patch" < 40 % on the dev machine at 96 k/64.
 * **Musical deliverable:** **EP #1 (3–4 tracks)** — breakcore/IDM, made and mixed in sparq.
 
@@ -855,7 +900,7 @@ Do **not** wait for sparq to make music. From week 1:
 * Stream bus hardening, adapters: OSC, MIDI 2.0 (+MPE, CI, Property Exchange), serial/HID/BLE, network/numeric, files/tables, video (frames + optical flow + brightness), internal telemetry.
 * Conditioning toolkit, map mode, mapping canvas, stream recording/replay, rehearsal mode.
 * **sparq Field Kit** hardware v1 + firmware + calibration + 3 example patches.
-* T2 wasm module tier (now that the manifest is proven) + T3 process bridge polish.
+* T3 process bridge polish (the T2 instrument tier moved forward to Phase 1–2 — ADR-010; what remains here is registry/marketplace plumbing for instruments, on the way to §13.4).
 * **Exit criteria:** a 20-minute set driven by wearables + camera + a network feed with zero dropouts; a disconnected sensor degrades gracefully and is visible in the UI; recorded streams replay identically.
 * **Musical deliverable:** a documented **data-driven performance** (video), and a track made from sonified data.
 
@@ -941,11 +986,12 @@ sparq/
 │  ├─ sparq-visual/        # display modules, GPU compute visuals, colour maps
 │  ├─ sparq-perform/       # modes, scenes, macros, capture, recovery
 │  ├─ sparq-io/            # midi2/ump, osc, serial, hid, ble, net, video, camera
-│  ├─ sparq-host-wasm/     # wasmtime runtime + component bindings (Phase 5)
+│  ├─ sparq-host-wasm/     # wasmtime runtime + component bindings (Phase 1–2 — the instrument tier, ADR-010)
 │  ├─ sparq-bridge/        # T3 process bridge, shm rings, IPC protocol
 │  └─ sparq-app/           # binary, config, CLI, kiosk/install mode
-├─ modules/                # first-party T1 modules (one crate or module per family)
+├─ modules/                # first-party T1 backbone modules (one crate or module per family)
 │  ├─ syn/ flt/ fx/ smp/ seq/ gen/ ana/ spa/ dat/ dsp/ util/
+├─ instruments/            # drop-in instrument packages (≤5 files each, ADR-010); discovered at launch
 ├─ adapters/               # source adapters (network, video, sensors, files)
 ├─ field-kit/              # firmware, enclosures, calibration docs
 ├─ reference/              # golden renders, test corpora, ABX material
@@ -991,6 +1037,12 @@ Fully specified as buildable tickets in **`PHASE0-WORKORDERS.md`** (WO-000 … W
 | **D-1** | UI rendering strategy | **egui scaffold (Phase 0–2) → custom retained-mode `wgpu` shell (Phase 6)** | §14.1, §17 Phase 6. All shell code sits behind a thin renderer/layout abstraction so the swap is contained; design tokens are authored independently of the toolkit from day 1 |
 | **D-4** | Primary platform | **Windows** (Linux + macOS first-class, in CI from Phase 1) | §5.2 Windows RT discipline; §5.5 WASAPI-exclusive/ASIO HAL + device aggregator; §16.1. Phase 0 targets Windows 11 on a real touch device |
 
+**Locked in v0.3 (2026-10-04):**
+
+| ID | Decision | **Chosen** | Consequences folded into the plan |
+|---|---|---|---|
+| **D-14** | Instrument layer & third-party hand-off (amends D-2) | **Two-layer library (`layer = backbone \| instrument`); instruments run in the T2 wasm sandbox pulled forward to Phase 1–2; displays are host-rendered scene data resolved against the runtime token bundle; five-file drop-in packages in `instruments/`; `sparq mod validate` as the hand-in gate** | ADR-010; §6.1 amendment, §6.6, §6.9, §14.5, §15, §17 Phases 1/2/5, §20 layout, Appendix A; `MODULE-BUILD-GUIDE.md`; WO-017…019 |
+
 **Still open (resolve during Phase 0–1):**
 
 | ID | Decision | Options | Recommendation |
@@ -1028,7 +1080,7 @@ Fully specified as buildable tickets in **`PHASE0-WORKORDERS.md`** (WO-000 … W
 | `.sparqmap` | Controller map (source → target bindings) |
 | `.sparqjournal` | Session journal (append-only, checksummed) |
 | `.sparqbounce` | Render metadata sidecar (multichannel layout, loudness targets, provenance) |
-| `.sparqmod` | Module package (manifest + binary/wasm + assets + docs + example patch) |
+| `.sparqmod` | Module package (manifest + binary/wasm + assets + docs + example patch). **Instrument packages are capped at five files** — manifest, wasm, example patch, validator-generated preview, README (ADR-010); bulk assets ride by hash in the library |
 
 All are containers with a version header, content-addressed internals where practical, and a documented text-diffable representation for the graph (so patches can be version-controlled and reviewed as text).
 

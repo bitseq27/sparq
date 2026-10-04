@@ -1,0 +1,40 @@
+package sparq:instrument@1.1.0;
+
+// sparq instrument contract — token bundle hand-off (WO-017 freeze set)
+//
+// Status: v0 SKELETON. ADR-010 decision 4: tokens cross the boundary at runtime. The bundle is
+// the serialised form of the same `design/tokens/*.toml` that generates tokens.rs / tokens.css /
+// tokens.json — one source of truth, third consumer (token-spec §2). The guest uses it for
+// LAYOUT MATHEMATICS (spacing scale, type-scale sizes, touch minimums, stroke classes); for
+// APPEARANCE it emits token IDS and the host resolves them at render time (display.wit). That
+// split is why a token change re-themes every instrument with zero intervention while guest
+// geometry stays stable inside a minor.
+//
+// Control-thread only: fetch once in `prepare` (the version is also reported in
+// `resources.token-bundle`), cache in guest state, never call per frame.
+
+interface tokens {
+  use types.{semver};
+
+  /// Payload encoding. JSON at v1 (the tokens.json artefact, verbatim) because every guest
+  /// language can read it without a second codegen step; a binary form may be ADDED as a case
+  /// later (minor) — never substituted (major).
+  enum bundle-encoding {
+    json,
+  }
+
+  record bundle {
+    version: semver,
+    encoding: bundle-encoding,
+    payload: list<u8>,
+  }
+
+  /// Version of the bundle in force — cheap check for `prepare` to decide whether to re-parse.
+  version: func() -> semver;
+
+  /// The full bundle. Semver'd with the tokens themselves (token-spec §4): additive tokens =
+  /// minor; value changes = minor + screenshot re-baseline; removals/renames = major with an
+  /// alias table, and a guest pinned below the host's major is refused at load with words
+  /// (E-TOKEN-BUNDLE-VERSION), never mis-themed silently.
+  get-bundle: func() -> bundle;
+}

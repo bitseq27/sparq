@@ -189,7 +189,8 @@ A module may declare a panel; otherwise the shell auto-generates one from the pa
 * **Layout:** positions on the 8 px grid, sizes in grid units, grouping into rows/sections, visibility conditions on parameters.
 * **Touch class:** every interactive widget declares `S | M | L | XL`; the shell refuses to render a widget below its declared minimum (the ≥44 px audit fails the build).
 * **Display slots:** which analysis outputs to render, with which display module (`dsp/*`) and which colour map token.
-* **Escape hatch:** a T1 module may supply a custom GPU draw routine, but it must consume design tokens and pass the visual conformance checklist (`design/look-board.md`).
+* **Graphical displays (v1.1, ADR-010 — frozen in WO-017):** a module may declare `ui.displays[]`, each drawn by a per-frame export that emits a **display list** (2D: `path polyline rect arc glyph_run points heat_cells trace`) or a **scene descriptor** (3D: `camera points lines mesh heightfield`) — closed vocabularies, styled exclusively by **semantic token ids** resolved against the runtime token bundle the host hands the guest at `prepare`. The host renders; the module never owns pixels. Literal appearance values are `E-LITERAL-APPEARANCE`. This is the contract by which third-party instruments (T2) are visually rich *and* re-theme automatically when the app's design changes.
+* **Escape hatch:** a **first-party T1** module may supply a custom GPU draw routine, but it must consume design tokens and pass the visual conformance checklist (`design/look-board.md`). It is not available to T2/T3 packages; a badged third-party pixel surface is parked in `LATER.md`.
 
 ---
 

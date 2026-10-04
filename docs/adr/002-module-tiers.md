@@ -1,6 +1,6 @@
 # ADR-002 — Module execution tiers (decision D-2)
 
-**Status:** accepted · **Date:** 2026-09-20 · **Related:** ADR-001, ADR-005, `docs/api/module-api-v1.md`
+**Status:** accepted — **amended by [ADR-010](010-instrument-layer.md) (2026-10-04): T2 pulled forward from Phase 5 as the instrument tier** · **Date:** 2026-09-20 · **Related:** ADR-001, ADR-005, `docs/api/module-api-v1.md`
 
 ## Context
 
@@ -41,3 +41,11 @@ Supporting rules:
 ## Review trigger
 
 At the start of Phase 5, or earlier if a collaborator needs to ship a module before then.
+
+## Amendment (2026-10-04)
+
+The review trigger fired: the operator ruling of 2026-10-04 makes third-party instruments a product requirement, not a Phase 5 possibility. **ADR-010** amends this decision as follows; everything else here stands.
+
+* **T2 is pulled forward** — contract v1.1 in Phase 1 (WO-017), loader + validator in Phase 2 (WO-018), first reference instruments and hand-off in Phase 2 (WO-019). Phase 5 keeps only the T3 polish and the registry/marketplace work.
+* **T2's role is named:** it is the **instrument tier** — the performance-and-control layer of the two-layer library (backbone modules stay T1 per the admission rule below, which is unchanged).
+* The interim rule *"no `gpu` module may be T2 or T3"* (module-api §16.5) is **resolved**: instruments render through host-side display-list and scene-descriptor vocabularies (ADR-010 decision 3); `gpu` ports remain host objects.

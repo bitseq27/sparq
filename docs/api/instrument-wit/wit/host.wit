@@ -1,0 +1,67 @@
+package sparq:instrument@1.1.0;
+
+// sparq instrument contract — host services: clocks, seed tree, diagnostics (WO-017 freeze set)
+//
+// Status: v0 SKELETON. Three rules shape this interface:
+//
+//  1. DETERMINISM (ADR-007): anything that reaches audio or the journal must be reproducible.
+//     Inside `process`, the only lawful clock is `block-input.t-sample`; `now()` exists for
+//     control-thread decisions and UI-thread draw phase, and its wall-clock member is stamped
+//     OUT of anything a guest emits (the host re-stamps data records — audio.wit).
+//  2. SEEDS (ADR-007 seed tree): randomness is a rooted derivation, never an ambient source.
+//     There is no `get-random` here on purpose — a guest asking for fresh entropy per block
+//     would be a replay bug by construction. You take a root at `prepare` and run your own
+//     deterministic PRNG (the SDK ships one), so a golden render reproduces bit-exactly.
+//  3. REAL TIME (module-api §9): `log` during `process`/`draw` is captured, rate-limited, and
+//     reported by the validator as an RT violation — it works, it just fails your hand-in.
+
+interface host {
+  use types.{log-level, semver};
+
+  /// The three clocks in one reading (ADR-006), ALIGNED with what WO-009 actually shipped:
+  /// `sparq-kernel::{BlockContext, Clock}` and `sparq-music::Transport`. The musical clock is a
+  /// TICK MAP (PPQN, tempo-ramped piecewise segments) — bar/beat are DERIVED integers
+  /// (`Clock::bar_beat_tick`: bar 1-based, beat 1-based, tick-in-beat 0-based), not floats, and
+  /// `tempo-bpm` is the EFFECTIVE mid-ramp value (`effective_bpm_at`), distinct from the target
+  /// (`Clock.bpm`). Transport v0 is playing/stopped (`Transport::is_playing` — a bool); a
+  /// `recording` field joins this record when it joins the native transport, never before (the
+  /// v0.1 draft's three-case `transport-state` enum was invention; removed).
+  record time-info {
+    /// audio clock: first sample of the current block (`BlockContext.sample_offset` = `t_sample`)
+    t-sample: u64,
+    /// wall clock, ns since UNIX epoch — data-plane stamps only; non-deterministic
+    t-wall-ns: u64,
+    /// `Transport::is_playing`
+    playing: bool,
+    /// musical position at the current block's first frame, in ticks — transport domain, folds
+    /// at the loop end (`BlockContext.tick`; the absolute domain stays host-side in v1.1)
+    tick: u64,
+    /// ticks per quarter note (`BlockContext.ppqn`, default 960)
+    ppqn: u32,
+    /// effective tempo at `t-sample` — mid-ramp, between the two targets (`Clock::effective_bpm_at`)
+    tempo-bpm: f64,
+    /// current TARGET tempo (`Clock.bpm`, the last segment's tps_to)
+    target-bpm: f64,
+    /// derived bar/beat view at `tick` under the current beats-per-bar (`Clock::bar_beat_tick`)
+    bar: u64,
+    beat: u64,
+    tick-in-beat: u64,
+  }
+
+  now: func() -> time-info;
+
+  /// Deterministic root seed for a named PRNG stream, derived from the session seed tree +
+  /// this instance's graph path (the native contract's per-module seed allocation, unchanged).
+  /// CONTROL-THREAD ONLY (prepare/configure). Distinct streams for distinct purposes
+  /// (`random-seed("gate")` ≠ `random-seed("timbre")`) so adding a stream never perturbs
+  /// another's values — the seed tree's whole promise.
+  random-seed: func(stream-name: string) -> u64;
+
+  /// Diagnostics. Control-thread by contract; calls from `process`/`draw` are violations the
+  /// validator names (see interface header, rule 3). Messages surface in the intent log and in
+  /// `sparq mod validate`'s report — write them for the operator, in words.
+  log: func(level: log-level, message: string);
+
+  /// The host API version in force (matches `identity.host_api.max` negotiation at load).
+  api-version: func() -> semver;
+}

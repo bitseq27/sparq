@@ -1,0 +1,31 @@
+package sparq:instrument@1.1.0;
+
+// sparq instrument contract — the world (WO-017 freeze set)
+//
+// Status: v0 SKELETON. What an instrument component is, in one declaration: it imports four
+// host services and exports one guest interface. Nothing else — no WASI imports, no ambient
+// authority, no wasi:io/wasi:clocks preopens. Capability-scoping (ADR-010 decision 2) is
+// expressed by the ABSENCE of imports as much as by the manifest's [capabilities] table:
+// what is not in this world does not exist for a guest.
+//
+// The world is named for the tier, not the company: a backbone module never becomes a wasm
+// component (T1 is native by the ADR-002 admission rule), so `instrument` is the only world
+// this package ships. If a future contract needs a second world (e.g. a display-only companion
+// component), it arrives as a new world in a MINOR — additive, like everything else.
+
+world instrument {
+  /// design tokens at runtime (control-thread; fetched at prepare)
+  import tokens;
+
+  /// clocks, seed tree, diagnostics, api version
+  import host;
+
+  /// capability-scoped asset reads (control-thread)
+  import assets;
+
+  /// bound stream snapshots for displays (UI-thread)
+  import sources;
+
+  /// lifecycle + process + draw
+  export guest;
+}

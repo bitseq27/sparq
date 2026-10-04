@@ -1,0 +1,39 @@
+package sparq:instrument@1.1.0;
+
+// sparq instrument contract — capability-scoped asset access (WO-017 freeze set)
+//
+// Status: v0 SKELETON. The data-format answer for instruments (ADR-010, build guide §6): the
+// guest parses WHATEVER it likes (MIDI files, Scala/KBM, JSON/CSV, sample data) from bytes it
+// is entitled to. Entitlement is the manifest's `state.assets[]` (referenced BY HASH) plus any
+// `[capabilities] fs-read` scope the operator granted. There is no ambient filesystem in the
+// sandbox — WASI preopens are not wired into this world, by design.
+//
+// CONTROL-THREAD ONLY: open and read during `prepare`/`configure`, cache what you need, never
+// touch assets from `process` or `draw` (the native rule — all I/O off the audio path — carries
+// over verbatim; the host refuses with `denied` and a diagnostic otherwise).
+
+interface assets {
+  /// An opened asset. Immutable and content-addressed, so reads are deterministic and
+  /// cache-friendly; the handle is scoped to this component instance and dies with it.
+  resource asset {
+    /// total size in bytes
+    size: func() -> u64;
+    /// read `len` bytes at `offset` (clamped to size; short reads past EOF return what exists)
+    read: func(offset: u64, len: u32) -> result<list<u8>, asset-error>;
+  }
+
+  /// Why an open/read failed — every case is also a validation-report line at hand-in.
+  variant asset-error {
+    /// the hash is not declared in the manifest's assets/fs-read scope
+    undeclared,
+    /// declared, but not present in the library cache yet (fetch pending or offline)
+    not-found,
+    /// capability not granted, or called from a non-control thread
+    denied,
+    /// underlying store failure; say what, in words
+    io(string),
+  }
+
+  /// Open a declared asset by its manifest hash (`blake3:<hex>` form, exactly as declared).
+  open: func(hash: string) -> result<asset, asset-error>;
+}

@@ -1,0 +1,13 @@
+[package]
+name = "sparq-module-guest"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "UNLICENSED"
+description = "Guest SDK for sparq instrument components (T2) — the WIT binding's friendly face"
+
+[workspace]
+members = ["examples/noop-instrument"]
+
+[dependencies]
+wit-bindgen = "0.62.0"

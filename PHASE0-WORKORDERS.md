@@ -43,6 +43,9 @@ Plus one non-negotiable cultural assumption: **A5 — you can make music with it
 | WO-014 | Module set v0 (17 modules incl. scope display) | 6 | 3 | WO-007, WO-008 |
 | WO-015 | The Phase 0 study (60 s of music + capture) | 6 | 2 | WO-013, WO-014 |
 | WO-016 | Phase gate: exit criteria, soak, devlog, Phase 1 scope | 6 | 1.5 | all |
+| WO-017 | Instrument contract v1.1: the freeze set *(Phase 1 — §3b, ADR-010)* | P1 | 3 | WO-007, WO-008 |
+| WO-018 | The instrument host: loader, drop-in discovery, validator *(Phase 2 — §3b)* | P2 | 4 | WO-017, WO-006, WO-012 |
+| WO-019 | Dev harness, reference instruments, first hand-off *(Phase 2 — §3b)* | P2 | 4 | WO-018, WO-014 |
 
 **Total: ~39 working days**, which is why Phase 0 is scheduled as **6 weeks** at ~25–30 h/week rather than the 4 weeks a naive estimate suggests. A realistic Phase 0 is worth more than a fast one — everything downstream inherits its foundations. If you need it shorter, use the cut list in §7: cut in that order, and never cut WO-001, WO-006, WO-007, WO-008, WO-012/013 or WO-015.
 
@@ -2501,6 +2504,69 @@ Sealed as **`sync wo008-inc6`**. Artefacts: `port.rs` (the curve, `clamp_f64`, t
 `tests/cv_spline.rs`, the api-snapshot pin moved with its reason, the matrix cell + its widened
 drift pin, §17 / the schema row / the author guide re-worded, `WO008-INC6-PLAN.md`.
 
+**2026-10-04 — plan amendment: the instrument layer (ADR-010 / D-14).** Operator ruling: the
+library becomes two layers — backbone modules (basic utilities/control, first-party T1) and
+**instruments** (the performance and control layer: complex, visually rich, host-rendered
+displays). Third-party instruments are handed off as ≤5-file packages dropped in `instruments/`
+at the project root, loaded at launch, running in the T2 wasm sandbox (pulled forward from
+Phase 5 — ADR-002's review trigger fired), with design rules propagating via the runtime token
+bundle so app design changes re-theme instruments with zero intervention. Written: ADR-010 +
+ADR-002 amendment + ADR README, `SPARQ-PLAN.md` (§6.1 D-2 amendment, §6.6, new §6.9, §14.5,
+§15, §17 Phases 1/2/5, §20 layout, Appendix A, §22 D-14), root `MODULE-BUILD-GUIDE.md` v1
+draft, WO-017…019 pre-ticketed in §3b (Phase 1–2 — the Phase 0 gate is untouched), schema/API
+touch-ups, `reference/instrument-template/` skeleton, LATER.md parking, README pointer.
+No code changed; the default build and all goldens are unaffected.
+
+**2026-10-04 — WO-017 prep: the WIT contract skeleton is drafted.** `docs/api/instrument-wit/`:
+the `sparq:instrument@1.1.0` package — 8 interfaces (`types audio display tokens host assets
+sources guest`) + the `instrument` world (4 imports, 1 export), with the README recording the
+eight skeleton decisions (by-value v1 marshalling, appearance-unrepresentable styling, host-
+stamped determinism, the two-instance threading model, capability-by-absence, scalar param
+snapshots, fail-soft/fail-loud, one world per tier), the WIT↔native↔manifest mapping table and
+the WO-017 freeze checklist. Parse-verified with the official wit-parser (jco 1.35 `types`,
+bindings generated for every interface); `MODULE-BUILD-GUIDE.md` §5 now points at it. No code
+changed; freeze happens at WO-017 close after the `sparq-module-api` alignment pass.
+
+**2026-10-04 — the alignment pass ran the same day (skeleton v0.2).** The freeze checklist's
+native-arbiter items are SETTLED against `sparq-module-api` as at `1f7d814`: `block-status`
+gained `silenced`/`overrun` (native has four states, not three; fuel traps map to `overrun`);
+`module-error` re-cut to native's `unsupported/state/resources/message`; `resources` mirrors
+`module::Resources` field-for-field (`sample-rate` is **u32**, per-port resolved channel
+**counts** — the v0.1 `channel-set` variant is removed, layout resolution stays host-side);
+`param-set` replaces the invented `param-value` variant (`ParamSet` is a versioned
+`[f32; MAX_PARAMS=32]` — decision F is now native-proved); events flatten to `event::Event`'s
+exact `{kind, sample, channel, value, words[4]}`; `cv-in-buf` gains the missing `unconnected`
+third state ("an explicit signal, never 0.0-by-accident") and `cv-out-buf` is added (v0.1 had
+no cv output path). Still open, honestly listed in README §5: `data-value` (no native arbiter
+until the data ports exist), `time-info` vs the WO-009 transport, and everything WO-018 owns
+(validator wiring, gpu_class ceilings, two-instance ordering, wasmtime pin, CI snapshot).
+Re-verified with wit-parser after the rewrite; template `instrument.rs` re-shaped to match.
+
+**2026-10-04 — WO-017 artefact: the `sparq-module-guest` SDK v0.1 skeleton + the round-trip
+smoke.** `tools/sparq-module-guest/` (own workspace, excluded from the root on the
+`dispatch-bench` precedent — the core workspace does NOT depend on it, per ADR-010):
+`wit_bindgen::generate!` embeds the contract **from `docs/api/instrument-wit/wit` itself** (one
+contract, no copy, cannot drift within a checkout); flat re-exports; the `InstrumentModule`
+trait (native `Module`'s discipline across the sandbox: required `id`/`prepare`/`process`,
+defaulted `activate`/`deactivate`/`configure`/`save_state`/`message`/`draw`); the
+`sparq_instrument!` macro (thread_local instance of the author's concrete type — no `dyn`, no
+registration, no init-order folklore); control-thread helpers (`param`, `seed`, `log`,
+`token_bundle`, stream snapshots); `#![forbid(unsafe_code)]`. The `noop-instrument` example is
+the compile-verified reference (silence in the exact negotiated shapes, at-rest display,
+refusals in words) and builds to wasm on both faces (`wasm32-unknown-unknown` 49 719 B,
+`wasm32-wasip1`). **Round-trip proved:** jco `componentize` + JS host + `harness/smoke.mjs` —
+**11/11 PASS** (full lifecycle incl. every error path's wording). This is the guest-side half
+of WO-017's round-trip test; the host-side half lands with WO-018's loader. Root `Cargo.toml`
+grew exactly one exclude line (stamp-covered → `sync_check` fails by design until the device
+re-stamps). Same session: **defect #94's class struck again** — the snapshot layer stripped
+`modules/out/`; `out/main/sparqmod.toml` was reconstructed from `docs/modules/out-main.md` and
+is machine-verified (`module_docs --check` 24/24; the manifest is `include_str!`-compiled, so
+`cargo test --workspace` — **899/0/1-ignored**, re-measured — cross-checks it). Session closed
+by the sandbox losing its `.git` objects with origin gone private: history rebuilt as snapshot
+commit `9809593`, delivery via the full-tree overlay `sparq-update-2026-10-04.zip` + bundle.
+The full record — incidents, verification matrix, freeze-checklist state, environment recipe,
+device apply steps — is `ROUND5-HANDOFF.md`.
+
 ---
 
 ## 3. Work orders
@@ -2878,6 +2944,78 @@ Each module ships: manifest, implementation, golden reference render, unit tests
 - [ ] Phase 1 backlog exists, estimated, and ordered; ADR-003 updated with the D-1 evidence.
 - [ ] `LATER.md` reviewed: everything parked is still parked, or explicitly promoted with a phase.
 **Artefacts.** `docs/phase0-report.md`, public devlog post, Phase 1 backlog.
+
+---
+
+## 3b. Instrument-track work orders (Phase 1–2, pre-ticketed 2026-10-04 — ADR-010 / D-14)
+
+> Added by the operator ruling of 2026-10-04: the two-layer library (backbone modules + instruments) and the third-party hand-off system. **These are Phase 1–2 tickets, not Phase 0 scope** — they are numbered continuously and pre-ticketed here because the work-order ledger lives in this file, and because the freeze set (WO-017) gates every parallel instrument effort and needs to be visible next to the contract WOs it extends. The Phase 0 exit gate (§4) is unchanged.
+
+---
+
+### WO-017 — Instrument contract v1.1: the freeze set
+**Objective.** Freeze everything an instrument author builds against, *before* any instrument authorship starts — the precondition for core and instruments being built in parallel (ADR-010 decision 7).
+**Depends on.** WO-007/WO-008 contract v1 (shipped), WO-002 tokens (shipped). Phase 1.
+**In scope.**
+* `classification.layer = backbone | instrument` (default `backbone`) across schema, validator, registry and browser grouping; the 24 first-party manifests re-validated unchanged (all default to backbone).
+* **Display list v1** (2D) and **scene descriptor v1** (3D) vocabularies as normative spec in module-api §10 + schema §9: primitives, token-semantic styling, colormap-by-data-kind rules, LOD/budget behaviour, the literal-appearance prohibition.
+* **Token bundle v1:** the runtime serialisation of `design/tokens/*.toml` handed to guests at `prepare` — one more generated artefact from `tools/token_gen.py`, semver'd with the tokens, with a golden snapshot test.
+* **WIT binding** of the v1 module API (the ADR-002 day-1 design constraint, now built): guest exports (`prepare`, `process`, `configure`, `message`, `draw`), host imports (token bundle, stream snapshots, frame buffer, seed tree, clock), and the `sparq-module-guest` Rust SDK crate (published separately; the core workspace does not depend on it).
+* **The five-file package spec** (ADR-010 decision 5) + `instruments/` discovery order slot in module-api §11 + the extended validation error catalogue (`E-LAYER-MISMATCH`, `E-PACKAGE-FILECOUNT`, `E-LITERAL-APPEARANCE`, `E-DISPLAY-PRIMITIVE-UNKNOWN`, `E-CAPABILITY-UNDECLARED`, …).
+* **`MODULE-BUILD-GUIDE.md` v1** (drafted 2026-10-04, frozen here) + the skeleton package in `reference/instrument-template/`.
+**Out of scope.** The loader, the validator implementation, the harness, any actual instrument (WO-018/019); the registry/marketplace (Phase 5); the pixel-surface escape hatch (parked, `LATER.md`).
+**Acceptance criteria.**
+- [ ] Contract v1.1 documents frozen and versioned; the machine-checked API-surface snapshot test (plan §6.7) covers the WIT binding too.
+- [ ] Token bundle generator emits from the existing TOML with `--check` in CI; a token value change propagates to bundle, `tokens.rs`, CSS and JSON in one commit or CI fails.
+- [ ] A paper instrument (the fm-terrain walkthrough in the guide) validates against the schema with zero engine knowledge required — the two-hour/two-day test, applied to the spec.
+- [ ] The skeleton template's manifest passes schema validation as-is.
+**Tests/evidence.** Schema conformance tests, token-bundle golden snapshot, WIT round-trip test (a no-op guest component instantiating against the binding).
+**Artefacts.** module-api §10 amendment, manifest-schema amendments, `docs/api/instrument-wit/`, `sparq-module-guest` crate v0.1, `MODULE-BUILD-GUIDE.md` v1, `reference/instrument-template/`.
+**Risks.** Freezing the display vocabularies before the Phase 6 shell exists. Mitigation: the vocabularies are renderer-independent data (the token system's own bet), and WO-019's reference instruments exist to falsify them while amendment is still cheap.
+
+---
+
+### WO-018 — The instrument host: loader, drop-in discovery, validator
+**Objective.** Make `instruments/` real: a five-file package dropped in the folder loads at launch, and `sparq mod validate` is the hand-in gate.
+**Depends on.** WO-017; WO-006 (watchdog/auto-bypass); WO-012 (badging chrome). Phase 2.
+**In scope.**
+* `crates/sparq-host-wasm`: `wasmtime` behind an **`instrument-host` feature** (default off — the zero-dependency core build, CI matrix and every golden are untouched), fuel/memory caps from `[capabilities]`, epoch-interruption wired to the existing block watchdog + auto-bypass, hot reload at block boundaries via the existing boundary-swap engine.
+* Launch discovery of `instruments/` (project root + per-user dir) in module-api §11 precedence; bad package never loads; failures surfaced verbatim in the module browser.
+* `sparq mod validate` implementing the full §7 gate chain of the build guide (schema → package → smoke → golden render → budgets → visual conformance → signature/badge), emitting the actionable report style.
+* Signing + badging per plan §15: unsigned instruments load badged, disabled by default in Perform mode.
+* Asset resolution by hash from the library stub (full store is Phase 3; here, a content-addressed cache directory is enough).
+**Out of scope.** `sparq mod dev` ergonomics beyond validate's headless mode (WO-019); the cloud registry; T3 helpers for instruments; any bundled instrument.
+**Acceptance criteria.**
+- [ ] A synthetic five-file package dropped into `instruments/` loads at next launch with zero config edits; a deliberately broken one (six files / bad manifest / lying id / literal colour in a display) never loads and reports verbatim.
+- [ ] Default `cargo test --workspace` passes with the feature off; the `instrument-host` cell is clippy-clean and adds no dependency to the default lockfile surface.
+- [ ] Fuel-exceeding guest is auto-bypassed mid-playback with the existing words-in-the-UI behaviour; the set continues.
+- [ ] Hot reload of a changed instrument package at a block boundary, state carried through `configure` per §6.7.
+- [ ] Validate gate runs end-to-end on the template skeleton in < 60 s on the dev machine.
+**Tests/evidence.** Throwaway-package test (the CI pattern from WO-007, extended: a package that appears nowhere else in the repo loads with zero engine edits), watchdog bypass test, feature-off/feature-on CI cells.
+**Artefacts.** `crates/sparq-host-wasm`, `sparq mod validate`, discovery wiring in `sparq-app`, `instruments/` in the repo layout.
+**Risks.** wasmtime version churn and binary size (mitigate: pin, feature-gate, one runtime crate); fuel-vs-determinism interactions (fuel is deterministic per code path — assert it in the golden test).
+
+---
+
+### WO-019 — Dev harness, reference instruments, first hand-off
+**Objective.** Prove the guide by shipping two instruments through the public path — then open the hand-off.
+**Depends on.** WO-018, WO-014 (backbone set to patch against). Phase 2, closing.
+**In scope.**
+* `sparq mod dev` + `sparq mod new`: the headless harness (null device + the `--svg-out` painter: golden render, panel/display screenshots at three breakpoints, fuel report) and scaffolding from `reference/instrument-template/`.
+* **Two first-party reference instruments, built as third parties build them** — wasm components through the public SDK, no T1 privileges, no engine edits. Candidates (final pick at kickoff): a **grid performance sequencer** (proves display-list v1: walking lights, per-step gates, matrix widget, event ports) and an **FM/terrain voice** (proves scene-descriptor v1: heightfield view driven by the same data that makes the sound — "geometry is audible and visible", as an instrument).
+* Nightly CI matrix: every package in `instruments/` + both references validated and golden-rendered against latest core.
+* The hand-off itself: guide v1.0 (amend whatever the reference instruments falsified — that is the guide's own rule), template published, one external author taken through the gate.
+**Out of scope.** A third instrument; registry/marketplace UX; pixel surfaces; T3 helper daemons.
+**Acceptance criteria.**
+- [ ] Both reference instruments pass `sparq mod validate` unmodified-by-hand: preview.svg generated, goldens bit-exact twice, look-board audit clean, zero literal appearances.
+- [ ] Both are playable in a patch with backbone modules only (seq → inst → out/main), in Perform mode, at 96 kHz / 64 samples within their declared fuel budgets.
+- [ ] A token value change (e.g. `color.signal.audio`) re-themes both instruments' displays with **no change to either package** — the no-intervention property, demonstrated, not asserted.
+- [ ] The Phase 6 renderer swap is *simulated*: both instruments render identically through the svg-out painter and the egui painter from the same display lists.
+- [ ] One external author ships a package through the gate using only the published guide + template + harness; every point of confusion becomes a guide amendment (logged).
+- [ ] Musical deliverable (pillar 7): a track or study using at least one reference instrument.
+**Tests/evidence.** Golden renders, the token-retheme demonstration, the external hand-off log, the nightly matrix's first green week.
+**Artefacts.** `sparq mod dev`/`new`, the two reference instrument packages, guide v1.0, hand-off log in `docs/studies/`.
+**Risks.** The reference instruments rabbit-holing into DSP polish — they are contract proofs, capped at the guide's two-day bar each; musical excellence is Phase 2's other modules' job. The external author not existing yet — fallback: a second internal author with no engine knowledge, same test.
 
 ---
 
