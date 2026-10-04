@@ -6,6 +6,7 @@ and emits every derived artefact:
 
     design/tokens/generated/tokens.rs      Rust constants for sparq-ui / sparq-visual
     design/tokens/generated/tokens.json    for the thin client, docs site, external tools
+    design/tokens/generated/token-bundle.json  the runtime hand-off to instrument guests (v1)
     design/tokens/generated/tokens.css     for static mockups and documentation
     design/tokens/generated/tokens.svg     <defs> swatches + ramp gradients for mockups
     design/tokens/generated/colormaps.json baked 256-entry LUTs (uploaded as 1D textures)
@@ -17,11 +18,21 @@ CI fails if a generated file is stale (`--check`).
 The Rust emitter exists so that the app consumes exactly the same values the mockups do;
 until the Rust workspace exists (WO-000) it is simply a checked-in artefact.
 
+The token bundle (contract v1.1, WO-017): the serialised runtime form handed to instrument
+guests at `prepare` (WIT `sparq:instrument/tokens`, tokens.wit). The envelope carries the
+tokens' own semver (from colors.toml `[meta]`), the encoding (`json` at v1 — the tokens.json
+artefact is the payload), a sha256 of the canonical payload bytes, and the payload itself.
+Invariant, machine-checked here AND by `crates/sparq-module-api/tests/token_bundle.rs`:
+re-serialising `payload` with this tool's canonical settings (indent=2, sort_keys) reproduces
+`tokens.json` BYTE-FOR-BYTE, and `payload_sha256` is the sha256 of those bytes. A token value
+change therefore propagates to bundle, tokens.rs, CSS and JSON in one commit, or `--check` fails.
+
 Usage:  python3 tools/token_gen.py [--check] [--quiet]
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import pathlib
@@ -685,6 +696,32 @@ def validate(data: dict, luts: dict, cmap_tables: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- main
+def emit_bundle(data: dict, tokens_json: str, payload_sha: str) -> str:
+    """The token bundle v1 (WO-017): the WIT `tokens.bundle` record, serialised for disk.
+
+    Envelope = {version, encoding, payload_sha256, payload}. `payload` is the tokens.json
+    object; the canonical re-serialisation invariant (indent=2, sort_keys, trailing newline)
+    is asserted in main()'s report, so the bundle can never claim bytes the sibling artefact
+    does not have. `version` is the tokens' own semver (colors.toml `[meta]`) — the semver
+    rules are token-spec §4's: additive tokens = minor, value changes = minor + screenshot
+    re-baseline, removals/renames = major with an alias table, and a guest pinned below the
+    host's major is refused at load IN WORDS (E-TOKEN-BUNDLE-VERSION), never mis-themed
+    silently. At runtime the host hands guests these exact bytes as `bundle.payload`
+    (encoding `json`, tokens.wit) — this file is that payload's checked-in golden.
+    """
+    version = data["colors"]["meta"]["version"]
+    parts = version.split(".")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        raise SystemExit(f"colors.toml [meta] version {version!r} is not a semver triple")
+    bundle = {
+        "version": {"major": int(parts[0]), "minor": int(parts[1]), "patch": int(parts[2])},
+        "encoding": "json",
+        "payload_sha256": payload_sha,
+        "payload": json.loads(tokens_json),
+    }
+    return json.dumps(bundle, indent=2, sort_keys=True) + "\n"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="fail if generated files are stale")
@@ -715,13 +752,26 @@ def main() -> int:
 
     report = validate(data, luts, cmap_tables)
 
+    # tokens.json is the canonical byte string: the bundle's payload re-serialises to EXACTLY
+    # this text (checked below), and the Rust golden test pins its sha256 from the bundle.
+    tokens_json = json.dumps(
+        {"version": data["colors"]["meta"]["version"], "tokens": flat,
+         "colormaps": {k: v for k, v in luts.items()}},
+        indent=2, sort_keys=True,
+    ) + "\n"
+
+    # The token-bundle invariant (docstring): canonical re-serialisation of the payload is
+    # byte-identical to tokens.json, and payload_sha256 is the sha256 of those exact bytes.
+    bundle_sha = hashlib.sha256(tokens_json.encode(ENCODING)).hexdigest()
+    report["token-bundle payload round-trip"] = {
+        "pass": json.dumps(json.loads(tokens_json), indent=2, sort_keys=True) + "\n" == tokens_json,
+        "detail": f"tokens.json is {len(tokens_json)} B, sha256 {bundle_sha[:16]}…; payload re-serialises byte-identical",
+    }
+
     outputs = {
         GEN / "tokens.rs": emit_rust(data, flat),
-        GEN / "tokens.json": json.dumps(
-            {"version": data["colors"]["meta"]["version"], "tokens": flat,
-             "colormaps": {k: v for k, v in luts.items()}},
-            indent=2, sort_keys=True,
-        ) + "\n",
+        GEN / "tokens.json": tokens_json,
+        GEN / "token-bundle.json": emit_bundle(data, tokens_json, bundle_sha),
         GEN / "tokens.css": emit_css(flat, luts),
         GEN / "tokens.svg": emit_svg_defs(data, luts),
         GEN / "colormaps.json": json.dumps({"size": LUT_SIZE, "maps": luts}, indent=1) + "\n",

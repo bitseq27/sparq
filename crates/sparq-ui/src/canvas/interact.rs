@@ -3222,6 +3222,7 @@ mod tests {
                 spec: sine_with_params(),
                 summary: "Exact-frequency sine oscillator".into(),
                 category: "synth/oscillator/sine".into(),
+                layer: sparq_module_api::manifest::Layer::Backbone,
             },
             BrowserItem::new(gain()),
             BrowserItem::new(rms_like()),

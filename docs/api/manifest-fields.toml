@@ -127,6 +127,16 @@ domain = ["t1","t2","t3"]
 on_violation = ["E-ENUM-UNKNOWN*", "E-KEY-MISSING*"]
 
 [[field]]
+path = "classification.layer"
+type = "enum"
+required = "no (default backbone)"
+domain = ["backbone","instrument"]
+on_violation = ["E-ENUM-UNKNOWN*", "E-LAYER-MISMATCH"]
+cross_field = "layer == instrument requires tier == t2 (E-LAYER-MISMATCH); layer == backbone with tier t2/t3 is legal but unusual. The schema's 'recorded T1 promotion' escape is a first-party registry record (WO-018), not a manifest spelling — until that record exists the rule is strict"
+added_by = "ADR-010 / contract v1.1, 2026-10-04; native validator at WO-017 close, 2026-10-05"
+why_in_the_manifest = "the layer says how big a role the module plays (backbone = the utilities/control substrate everything patches into; instrument = the performance-and-control tier, T2 sandbox, host-rendered displays, five-file drop-in package). It is DATA so the browser groups by it and the loader enforces the tier pairing; orthogonal to top/category"
+
+[[field]]
 path = "classification.stability"
 type = "enum"
 required = true
@@ -506,6 +516,17 @@ cross_check = "the >=44 px audit is sparq-ui's audit.rs, already implemented and
 path = "ui.display_slots[]"
 type = "{source_port, display_module, colormap, mode}"
 required = false
+[[field]]
+path = "ui.displays[]"
+type = "{id, kind, sources[]{id, port}, colormap?, min_size [w,h], lod}"
+required = false
+domain_kind = ["display_list","scene"]
+domain_lod = ["auto","full","reduced","minimal"]
+on_violation = ["E-KEY-MISSING*", "E-ENUM-UNKNOWN*", "E-ID-DUP*", "E-VALUE-MALFORMED*", "E-DISPLAY-PRIMITIVE-UNKNOWN (emitted lists; WO-018 validator)", "E-LITERAL-APPEARANCE (emitted lists; WO-018 validator)"]
+added_by = "ADR-010 / contract v1.1; frozen shape at WO-017 close, 2026-10-05"
+note = "host-rendered graphical display: per-frame content is a display list (2D primitives) or scene descriptor (3D) emitted by the module and resolved against the runtime token bundle; the module never owns pixels. colormap names a colormap token id (prefix-checked at discovery; the full domain is checked against the live bundle by sparq mod validate)"
+cross_check = "WIT face: docs/api/instrument-wit/wit/display.wit (frozen v1.1); native decoder: sparq-module-api decode.rs check_displays; vocabularies: module-api §10"
+
 [[field]]
 path = "ui.custom_draw"
 type = "bool + entry symbol"

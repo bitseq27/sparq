@@ -1,0 +1,65 @@
+package sparq:instrument@1.1.0;
+
+// sparq instrument contract — what the component EXPORTS (WO-017 freeze set)
+//
+// Status: v0 SKELETON. One-to-one with the native `Module` trait (docs/module-author-guide-v0.md
+// §3) plus the instrument-tier `draw`; the mapping table is ../README.md §4. The SDK
+// (`sparq-module-guest`) supplies defaults for `activate`/`deactivate` and honest refusals for
+// `configure`/`message`, exactly like the native trait's defaults — a WIT world cannot mark
+// exports optional, so "has a default" is an SDK property, not a contract hole.
+//
+// THREADING (freeze decision D, ../README.md §3): one component, TWO host-managed instances —
+// an audio instance (prepare/activate/process/deactivate/configure/message on the control and
+// audio threads, boundary-swap rules unchanged) and a display instance (prepare/configure/
+// save-state/draw on the UI thread). They share nothing mutable; the host keeps them coherent
+// by applying the same configure/state stream to both at block boundaries. A `draw` can
+// therefore never race a `process`, and a wedged display instance can never xrun the audio.
+
+interface guest {
+  use types.{module-error, resources};
+  use audio.{block-input, block-output};
+  use display.{frame-context, surface};
+
+  /// The module's id, which MUST equal `identity.id` in the manifest. The host calls this once
+  /// at registration and refuses on disagreement — the native registry's cross-check, carried
+  /// across the boundary: a module that lies about who it is breaks patch provenance silently.
+  id: func() -> string;
+
+  /// All allocation happens here (buffers, tables, arenas, voice pools, parsed assets). Called
+  /// again whenever any `resources` member changes, including channel-set resolutions, which
+  /// cascade — write it idempotent, release what you previously took. May call `host.random-seed`
+  /// and `assets.open`; may not be called from within `process`.
+  prepare: func(res: resources) -> result<_, module-error>;
+
+  activate: func() -> result<_, module-error>;
+
+  deactivate: func() -> result<_, module-error>;
+
+  /// Receive state: a project load, a scene recall, an undo, a display-instance sync. The blob
+  /// is the module's own `save-state` output at the declared schema version; the host runs the
+  /// manifest's migration chain BEFORE this call, so a guest only ever sees its current schema.
+  /// Refusing honestly (module-error.state, in words) is valid; ignoring silently is the bug.
+  configure: func(state: list<u8>) -> result<_, module-error>;
+
+  /// Emit state, current schema version, deterministic byte order (the journal and the project
+  /// file hash it — two calls with unchanged state must produce identical bytes). The host
+  /// calls it on save/autosave per the manifest's `state.size_class`, and at block boundaries
+  /// when it needs to sync the display instance.
+  save-state: func() -> list<u8>;
+
+  /// An `atom` delivery: config changes, blob-typed param updates, host queries, bridge
+  /// messages. Unknown message = refuse with words, never a silent no-op (the native rule).
+  message: func(payload: list<u8>) -> result<_, module-error>;
+
+  /// One block. No allocation growth, no I/O, no clock reads beyond `block-input.t-sample`, no
+  /// host calls (they are captured and reported as RT violations at hand-in). Fuel-metered:
+  /// blow `resources.fuel-per-block` and the host auto-bypasses with words in the UI — the set
+  /// continues without you. Output shapes must match the negotiated contract exactly
+  /// (audio.wit `block-output`).
+  process: func(input: block-input) -> block-output;
+
+  /// One frame of one declared display, UI thread, host's discretion on cadence. Emit structure
+  /// (display.wit), never appearance; fetch live data via the `sources` import; keep it bounded
+  /// — the frame budget is a token (motion.toml), and the host skips rather than tears.
+  draw: func(frame: frame-context) -> surface;
+}

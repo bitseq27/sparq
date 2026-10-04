@@ -6,7 +6,46 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-10-04, END of thirteenth session (Linux sandbox box) — the
+**Last updated:** 2026-10-05, END of fourteenth session (Linux sandbox box) — the **WO-017
+CLOSE round: contract v1.1 FROZEN**. Fresh clone of the round-5 tree from the re-publicised
+origin, environment rebuilt from nothing (ROUND5-HANDOFF §7), baseline measured green BEFORE any
+edit (899/0/1-ignored, python gates clean). **Four operator rulings** (question tool,
+2026-10-05): `data-value`/`data-record` **ratified as-is** (recheck trigger = the native
+data-port landing, Phase 5; until the host routes data, an instrument declaring a `data` port is
+refused at load in words) · **`t-wall-ns` REMOVED** from `host.time-info` (guests never read a
+wall clock — draw's animation clock is `frame-context.time-sec`, data records are host-stamped;
+`now()` is fully deterministic) · browser layer work **data-side only** this round (visual
+grouping + badging chrome = WO-018; the sandbox cannot run `ui --audit`) · **freeze stamped**.
+What landed: native `classification.layer` (typed `Layer`, default backbone — the 24 first-party
+manifests re-validate with ZERO edits; `layer = instrument` requires `tier = t2` as
+**`E-LAYER-MISMATCH`**; error catalogue 24→25) + `ui.displays[]` content-checked against the
+frozen §9 shape (kind/lod vocabularies, unique ids, `min_size`, colormap prefix,
+`sources[]{id, port}` — the binding shape was specified nowhere and is now frozen in
+manifest-schema §9 + the field table with a drift pin) + the **template acceptance criterion
+made mechanical** (`include_str!` of the checked-in skeleton manifest, decoded in a test) +
+`BrowserItem` carries `Layer` audit-neutrally (pinned by test) + **token bundle v1 generated**
+(`tools/token_gen.py` → `design/tokens/generated/token-bundle.json`; double-gated: `--check`'s
+round-trip invariant + `tests/token_bundle.rs`'s sha256/semver pins — one-commit propagation or
+CI fails) + **the WIT hash-pinned** (`tests/wit_snapshot.rs`: nine files + the directory set;
+every new gate proven failable by deliberate corruption) + **SDK at freeze** (vendored `wit/`
+snapshot + drift test; crate 0.1.0→**1.1.0**, carrying the contract version) + module-api §11's
+`instruments/` discovery slot + wasmtime pin recorded (**49.0.2**, Component Model + WASI 0.2) +
+the fm-terrain paper walkthrough (two guide amendments logged: data-port status, sources shape).
+**Round-trip re-proved against the EDITED contract**: both wasm faces rebuilt, `wasm-tools
+component new` (**recipe correction: `jco componentize` is JS-only — round 5's §7 note was
+wrong**), `jco transpile`, smoke **11/11**. Gates on this box: fmt/clippy CLEAN,
+`cargo test --workspace` **909/0/1-ignored** (+10 new tests — the digest expectation MOVES: src
+fp now **96f/2717264B**), five python gates clean, `module_docs` 24/24, WIT parse-clean
+(jco 1.35), SDK tests 3+1; `ui --audit` NOT re-run (no UI behaviour touched — the one
+UI-adjacent change is a data field; the device re-runs it in gates.bat). `sync_check` FAILS BY
+DESIGN (11 stamped files moved; the device re-stamps). WO-017 acceptance: **4/4 ticked** (§3b).
+Open BY DESIGN: the `gpu_class` ceiling table + two-instance `configure` ordering (WO-018 debts,
+ruled not contract gaps) and the five remaining validation codes' wiring (WO-018 validator).
+Round-4 device obligations stand untouched (test006 A–U, test004 attempt 4, defect #95, the
+dropdown picker). **Next: WO-018** — loader/validator design notes + the host-side half of the
+round-trip test. Full record: `ROUND6-HANDOFF.md`.
+
+**Previous update:** 2026-10-04, END of thirteenth session (Linux sandbox box) — the
 **INSTRUMENT-LAYER PLANNING ROUND** (no engine code): the operator ruling of 2026-10-03 makes
 the library two layers — backbone modules (first-party, T1) and **instruments** (the
 performance/control tier: complex, visually rich, third-party, **T2 WASM sandbox pulled forward
@@ -33,27 +72,6 @@ the reconstruction; Cargo.lock excluded from the pack on purpose — zero new ro
 device re-stamps after applying. Round-4 obligations stand untouched: test006 A–U, test004
 attempt 4, defect #95, the dropdown picker. **Freeze checklist open items: WIT README §5 /
 handoff §6.**
-
-**Previous update:** 2026-10-02, END of twelfth session round 4 (Linux sandbox box) — operator UI
-round 4 (the 15-item list: cable nodes, the round-4 wells, three new modules, the executor's
-adoption) is **BUILT, GREEN and SEALED** as `sparq-update-2026-10-02.zip` rev 4 — a FULL-TREE
-overlay this time (defect #94's remedy: the pack no longer depends on a base the receiver might
-not have). **Provenance, read this first:** the round-4 CODE was lost with the sandbox that wrote
-it (only `ROUND4-HANDOFF.md` reached git, head `871d725`); this session REBUILT all of it from the
-handoff on a clean clone and re-measured end to end — every number below is from this box (rustc
-1.99.0, single-job). **PLAY MAKES SOUND** (device-confirmed, eighth session, unchanged).
-**test006 on SATURN** still owes its device rounds: steps A–K from rev 3 plus the NEW round-4
-steps **L–U** (clip LED, clock wheel, walking lights, the quantizer keyboard, the cable node under
-a real finger, the mult strip, vca+lfo, fold, the rms graph + moving svf curve, the round-4
-chrome); the gates-digest expectation moves to **899 / 24 modules / audit PASS 59 lines /
-`src 96f/2694477B`** (stamp `sparq-round4-2026-10-02` — the device re-stamps after applying, the
-pack carries no stamp, rev-3 pattern). Still OPEN on the device: test004 attempt 4 (the 🔴
-exclusive acceptance — the ADR-008 exit gate). **One declared OWED build piece:** the dropdown
-picker (item 11's inspector list-picker over the 15 quant scale names — the table exists,
-`QUANT_SCALES`; the widget awaits an operator go). **One declared defect:** #95, PRE-EXISTING on
-the pristine clone (stash-proven, not a round-4 regression) — the `ui::live` glide-lag test; the
-ui-feature cell reads 28/1 until the operator triage lands. **No bundle is waiting**; the next
-seal comes with the next build.
 
 **Twelfth session, round 4 (2026-10-02, Linux sandbox) — operator UI round 4: the cable-node /
 living-wells round, REBUILT from `ROUND4-HANDOFF.md` after the loss (defect #94), GREEN and

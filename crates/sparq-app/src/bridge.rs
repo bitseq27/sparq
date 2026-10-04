@@ -141,6 +141,7 @@ pub fn browser_catalog(registry: &Registry) -> Vec<sparq_ui::canvas::browser::Br
                     spec: NodeSpec::from_manifest(reg.manifest()),
                     summary: m.identity.summary.clone().unwrap_or_default(),
                     category: m.classification.category.clone().unwrap_or_default(),
+                    layer: reg.manifest().layer(),
                 }
             })
         })
@@ -879,6 +880,13 @@ mod tests {
         assert_eq!(sine.spec.params.len(), 2, "freq + amp travel with the spec");
         assert_eq!(sine.spec.ports.len(), 1);
         assert!(!sine.summary.is_empty() && !sine.category.is_empty(), "row prose is populated");
+        // Contract v1.1 (ADR-010): every row carries its library layer as DATA — the visual
+        // grouping is WO-018's chrome. All 24 built-ins are backbone; the day an instrument
+        // registers, this assertion fails on purpose and gets amended to name it.
+        assert!(
+            cat.iter().all(|i| i.layer == sparq_module_api::manifest::Layer::Backbone),
+            "the built-in set is backbone-only until WO-018 registers instruments"
+        );
     }
 
     #[test]

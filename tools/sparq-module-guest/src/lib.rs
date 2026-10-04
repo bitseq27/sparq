@@ -1,17 +1,23 @@
 //! `sparq-module-guest` — the guest SDK for sparq **instrument** components (T2 tier).
 //!
-//! **Status: v0.1 SKELETON (WO-017 artefact, 2026-10-04).** This crate is the friendly face of
-//! the WIT contract in `docs/api/instrument-wit/`: it embeds the contract at compile time
-//! (`wit_bindgen::generate!`), re-exports every contract type under flat names, and provides
-//! the [`InstrumentModule`] trait + [`sparq_instrument!`] macro an author implements against.
+//! **Status: v1.1 — the contract is FROZEN (WO-017 close, 2026-10-05).** This crate is the
+//! friendly face of the WIT contract `sparq:instrument@1.1.0`: it embeds the frozen contract
+//! snapshot at compile time (`wit_bindgen::generate!` over the VENDORED `wit/` beside this
+//! crate), re-exports every contract type under flat names, and provides the
+//! [`InstrumentModule`] trait + [`sparq_instrument!`] macro an author implements against.
 //! It is published separately from sparq and the core workspace does not depend on it (ADR-010);
 //! it lives under `tools/` on the `dispatch-bench` precedent — its own workspace, excluded from
 //! the root.
 //!
-//! # What v0.1 is
+//! **The crate version CARRIES THE CONTRACT VERSION** (freeze packaging rule): `1.1.x` speaks
+//! `sparq:instrument@1.1.*`; SDK-only fixes move the patch, a contract minor moves the minor.
 //!
-//! * The WIT binding, embedded from the same files the host will load against — one contract,
-//!   no copy.
+//! # What v1.1 is
+//!
+//! * The WIT binding, embedded from the vendored snapshot (`./wit`) of the frozen contract —
+//!   self-contained for publishing, kept honest in a checkout by
+//!   `the_vendored_wit_is_the_repo_contract_byte_for_byte` (below), with the repo copy itself
+//!   hash-pinned by the root workspace (`crates/sparq-module-api/tests/wit_snapshot.rs`).
 //! * [`InstrumentModule`]: the trait, shaped like the native `Module` trait of
 //!   `docs/module-author-guide-v0.md` §3 (required: `id`/`prepare`/`process`; defaulted:
 //!   `activate`/`deactivate`/`configure`/`save_state`/`message`/`draw`), because the two-hour
@@ -21,12 +27,11 @@
 //!   registration, no wasm init-order folklore. A component instance is single-threaded, so
 //!   `thread_local` is the whole story.
 //!
-//! # What v0.1 is NOT (honest scope, pre-freeze)
+//! # What v1.1 is NOT (honest scope, post-freeze)
 //!
-//! * Not frozen: the contract is v0.2 skeleton (see the WIT README §5 checklist); the SDK
-//!   inherits every `TODO(freeze)` in it. Expect churn until WO-017 closes.
 //! * No display-list builder ergonomics beyond type aliases — those are designed AFTER the
-//!   vocabulary freezes, not before.
+//!   vocabulary froze, i.e. now-ish, shaped by WO-019's reference instruments; they will be
+//!   SDK additions (minor bumps), never contract changes.
 //! * No packaging tooling (`sparq mod package`/`validate`/`dev` are host-side, WO-018).
 //! * `unsafe`: forbidden in this crate. The generated bindings are safe Rust by construction;
 //!   if a future wit-bindgen emits `unsafe`, that gets a reviewed, scoped `allow` with a
@@ -52,16 +57,18 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-// The contract, embedded at compile time from the canonical WIT files. `path` points INTO the
-// repository's contract directory — the same bytes the host will be built against, so guest and
-// host cannot drift within a checkout. (A published SDK release will vendor a snapshot of the
-// frozen WIT + carry the contract version in its crate version; that packaging step is WO-017's
-// close, not this skeleton's job.)
+// The contract, embedded at compile time from the VENDORED snapshot (`./wit`) of the frozen
+// v1.1 files. Vendoring is the freeze's packaging step (WIT README §5): a published crate must
+// be self-contained. The copy stays honest by test — `the_vendored_wit_is_the_repo_contract_
+// byte_for_byte` below fails on any difference against `docs/api/instrument-wit/wit/`, and the
+// root workspace pins those bytes by hash (`crates/sparq-module-api/tests/wit_snapshot.rs`).
+// A deliberate contract amendment therefore moves the docs, the root pin AND this vendor in one
+// reviewable commit; an accidental edit fails one of the two gates.
 pub mod bindings {
     #![allow(missing_docs)] // generated code is documented by the WIT comments it was made from
     wit_bindgen::generate!({
         world: "instrument",
-        path: "../../docs/api/instrument-wit/wit",
+        path: "wit",
         // Cross-crate component export: the generated macro is `pub`, uniquely named (no
         // generic `export!` colliding in author crates), and hardwired to THIS crate's
         // bindings module so it resolves from any consumer (wit-bindgen's own options for
@@ -299,5 +306,46 @@ mod tests {
         // The refusal style the contract demands: every failure says what and why.
         let e = ModuleError::Unsupported("no such query".into());
         assert!(matches!(e, ModuleError::Unsupported(ref w) if w == "no such query"));
+    }
+
+    #[test]
+    fn the_vendored_wit_is_the_repo_contract_byte_for_byte() {
+        // The freeze's packaging step (WIT README §5): the published crate is self-contained,
+        // and this test is what keeps the vendored snapshot honest INSIDE a checkout. The repo
+        // copy is itself hash-pinned by the root workspace (wit_snapshot.rs), so a deliberate
+        // contract amendment moves the docs, the root pin and this vendor in one commit — and
+        // an accidental edit fails one of the two gates.
+        let vendored = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("wit");
+        let canonical =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/api/instrument-wit/wit");
+        if !canonical.is_dir() {
+            // Outside a sparq checkout (e.g. a published crate on its own): nothing to compare
+            // against, and that is exactly what vendoring is for. Say so, pass, move on.
+            println!("note: repo contract directory absent — vendored copy stands alone");
+            return;
+        }
+        let list = |dir: &std::path::Path| {
+            let mut v: Vec<String> = std::fs::read_dir(dir)
+                .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+                .map(|x| x.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            list(&vendored),
+            list(&canonical),
+            "the vendored file set moved apart from the contract — re-copy the whole directory"
+        );
+        for name in list(&canonical) {
+            let a = std::fs::read_to_string(vendored.join(&name)).unwrap();
+            let b = std::fs::read_to_string(canonical.join(&name)).unwrap();
+            assert_eq!(
+                a, b,
+                "{name}: the vendored snapshot drifted from docs/api/instrument-wit/wit/ — \
+                 re-copy it in the same commit as the contract amendment (and repin the root \
+                 workspace's wit_snapshot.rs in that same commit)"
+            );
+        }
     }
 }

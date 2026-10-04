@@ -500,6 +500,7 @@ fn impulse_build() -> NodeBuild {
             top: Some("util".into()),
             kind: Some("source".into()),
             tier: Some("t1".into()),
+            layer: None,
             stability: Some("stable".into()),
         },
         state: StateDecl {

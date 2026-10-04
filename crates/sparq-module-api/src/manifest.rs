@@ -51,6 +51,8 @@ pub const KINDS: [&str; 9] = [
 ];
 /// `classification.tier` (ADR-002).
 pub const TIERS: [&str; 3] = ["t1", "t2", "t3"];
+/// `classification.layer` — the two-layer library (ADR-010, contract v1.1).
+pub const LAYERS: [&str; 2] = ["backbone", "instrument"];
 /// `classification.stability`.
 pub const STABILITIES: [&str; 3] = ["experimental", "stable", "deprecated"];
 /// `params[].type`.
@@ -116,6 +118,43 @@ pub struct Identity {
     pub license: Option<String>,
 }
 
+/// `classification.layer` (ADR-010, contract v1.1) — which of the library's two layers a module
+/// plays in. Orthogonal to `top`/`category`: the layer says *how big a role* the module plays,
+/// the category says *what it is*. Absent means [`Layer::Backbone`] — the 24 first-party
+/// manifests predate the field and stay backbone without an edit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Layer {
+    /// The utilities/control layer: first-party, native, T1 (ADR-002's admission rule). The
+    /// substrate everything else patches into.
+    #[default]
+    Backbone,
+    /// The performance-and-control layer: complex, visually rich, third-party-authorable,
+    /// running in the T2 wasm sandbox with host-rendered displays, shipped as five-file
+    /// packages dropped in `instruments/`.
+    Instrument,
+}
+
+impl Layer {
+    /// Parses a manifest spelling.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "backbone" => Some(Self::Backbone),
+            "instrument" => Some(Self::Instrument),
+            _ => None,
+        }
+    }
+
+    /// The manifest spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Backbone => "backbone",
+            Self::Instrument => "instrument",
+        }
+    }
+}
+
 /// `classification` — where it sits and what it is.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Classification {
@@ -127,6 +166,9 @@ pub struct Classification {
     pub kind: Option<String>,
     /// One of [`TIERS`].
     pub tier: Option<String>,
+    /// One of [`LAYERS`] (ADR-010). Absent = `backbone`; read it through
+    /// [`ValidatedManifest::layer`], never through this field, when the default matters.
+    pub layer: Option<String>,
     /// One of [`STABILITIES`].
     pub stability: Option<String>,
 }
@@ -295,6 +337,14 @@ impl ValidatedManifest {
     #[must_use]
     pub fn id(&self) -> &str {
         self.manifest.identity.id.as_deref().unwrap_or("")
+    }
+
+    /// The library layer this module plays in (ADR-010): the manifest's `classification.layer`
+    /// with the contract's default applied — [`Layer::Backbone`] when absent. Validation has
+    /// already refused an unknown spelling, so the parse cannot miss here.
+    #[must_use]
+    pub fn layer(&self) -> Layer {
+        self.manifest.classification.layer.as_deref().and_then(Layer::parse).unwrap_or_default()
     }
 
     /// Declared latency in samples. Zero when latency is parametric, because the value is not
@@ -505,6 +555,9 @@ impl Manifest {
         if let Some(t) = tier {
             opt_enum(r, "classification.tier", Some(&t), &TIERS);
         }
+        // `layer` is OPTIONAL — absent means backbone (ADR-010's default), so only a present
+        // spelling can be wrong, which is exactly `opt_enum`'s contract.
+        opt_enum(r, "classification.layer", c.layer.as_deref(), &LAYERS);
         let stability = req_str(
             r,
             "classification.stability",
@@ -1005,6 +1058,30 @@ impl Manifest {
     }
 
     fn check_cross(&self, r: &mut ValidationReport) {
+        // `layer = instrument` requires `tier = t2` (ADR-010 decision 2; manifest-schema §2's
+        // cross-field rule, code E-LAYER-MISMATCH). Fires only when BOTH spellings are present —
+        // a missing/unknown tier already has its own error from `check_classification`, and one
+        // mistake should produce one actionable line, not two. `layer = backbone` with t2/t3 is
+        // legal but unusual (the schema's own words) and stays legal here. The schema's "recorded
+        // T1 promotion" escape is a first-party registry record (WO-018), not a manifest spelling:
+        // until that record mechanism exists, the rule is strict, and nothing in the tree needs
+        // the escape (WO-019's reference instruments go through the public T2 path).
+        if self.classification.layer.as_deref() == Some("instrument")
+            && matches!(self.classification.tier.as_deref(), Some(t) if t != "t2")
+        {
+            r.push(
+                ValidationError::new(
+                    CodeKind::LayerMismatch,
+                    "classification.layer",
+                    "instruments run in the T2 wasm sandbox (ADR-010): declare tier = \"t2\" — a first-party T1 promotion is a recorded packaging change, not a manifest edit",
+                )
+                .with_found(format!(
+                    "layer = \"instrument\", tier = {:?}",
+                    self.classification.tier.as_deref().unwrap_or("")
+                ))
+                .with_allowed("layer = \"instrument\" requires tier = \"t2\""),
+            );
+        }
         // `params[].per_voice` requires `voices.policy != none`.
         let polyphonic =
             matches!(self.voices_policy.as_deref(), Some(p) if p != "none" && !p.is_empty());
@@ -1116,6 +1193,7 @@ mod tests {
                 top: Some("util".into()),
                 kind: Some("processor".into()),
                 tier: Some("t1".into()),
+                layer: None,
                 stability: Some("stable".into()),
             },
             ports: vec![
@@ -1241,6 +1319,94 @@ mod tests {
         assert_eq!(e.code(), "E-ENUM-UNKNOWN:classification.tier");
         assert!(e.to_string().contains("found `t9`"), "{e}");
         assert!(e.to_string().contains("t1 t2 t3"), "{e}");
+    }
+
+    #[test]
+    fn an_absent_layer_means_backbone_and_a_present_one_must_be_vocabulary() {
+        // ADR-010's default: the 24 first-party manifests predate the field and stay backbone
+        // without an edit — the contract's backwards-compatibility rule, exercised.
+        let v = minimal().validate().unwrap();
+        assert_eq!(v.layer(), Layer::Backbone);
+
+        let mut m = minimal();
+        m.classification.layer = Some("instrument".into());
+        m.classification.tier = Some("t2".into());
+        let v = m.validate().unwrap();
+        assert_eq!(v.layer(), Layer::Instrument);
+
+        let mut m = minimal();
+        m.classification.layer = Some("strata".into());
+        let r = m.report();
+        let e = r.first_at("classification.layer").unwrap();
+        assert_eq!(e.code(), "E-ENUM-UNKNOWN:classification.layer");
+        assert!(e.to_string().contains("found `strata`"), "{e}");
+        assert!(e.to_string().contains("backbone instrument"), "{e}");
+    }
+
+    #[test]
+    fn an_instrument_outside_the_sandbox_tier_is_refused_in_words() {
+        // The schema's cross-field rule (manifest-schema §2): `layer = instrument` requires
+        // `tier = t2`. E-LAYER-MISMATCH, one actionable line.
+        let mut m = minimal();
+        m.classification.layer = Some("instrument".into()); // tier stays t1
+        let r = m.report();
+        assert!(r.has(CodeKind::LayerMismatch));
+        let e = r.first_at("classification.layer").unwrap();
+        assert_eq!(e.code(), "E-LAYER-MISMATCH");
+        assert!(e.to_string().contains("T2 wasm sandbox"), "{e}");
+        assert!(e.to_string().contains("tier = \"t2\""), "{e}");
+
+        // A missing tier has its OWN error; the cross-field rule must not double-report the
+        // same mistake under a second code.
+        let mut m = minimal();
+        m.classification.layer = Some("instrument".into());
+        m.classification.tier = None;
+        let r = m.report();
+        assert!(!r.has(CodeKind::LayerMismatch));
+        assert!(r.has_path("classification.tier"));
+    }
+
+    #[test]
+    fn a_backbone_module_may_still_declare_any_tier() {
+        // "layer = backbone with tier = t2/t3 is legal but unusual" — the schema's own words;
+        // unusual is not illegal, and the validator's job is not taste.
+        let mut m = minimal();
+        m.classification.layer = Some("backbone".into());
+        m.classification.tier = Some("t2".into());
+        let v = m.validate().unwrap();
+        assert_eq!(v.layer(), Layer::Backbone);
+    }
+
+    #[test]
+    fn the_layers_vocabulary_matches_the_field_table() {
+        // The same pin as TOPS (defect #84's class): the closed domain of classification.layer
+        // exists in TWO copies — the table's `domain` row and [`LAYERS`].
+        use crate::toml::Value;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/api/manifest-fields.toml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let root = crate::toml::parse(&text).unwrap();
+        let row = root
+            .tables("field")
+            .unwrap()
+            .into_iter()
+            .find(|t| t.get("path").and_then(Value::as_str) == Some("classification.layer"))
+            .expect("the field table lost the classification.layer row");
+        let mut table: Vec<String> = row
+            .get("domain")
+            .and_then(Value::as_array)
+            .expect("classification.layer lost its domain")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        let mut code: Vec<String> = LAYERS.iter().map(|s| (*s).to_string()).collect();
+        table.sort();
+        code.sort();
+        assert_eq!(
+            table, code,
+            "classification.layer drifted between the table and LAYERS — defect #84's class"
+        );
     }
 
     #[test]

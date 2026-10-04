@@ -67,7 +67,7 @@ const IDENTITY_KEYS: [&str; 13] = [
     "tags",
     "signature",
 ];
-const CLASSIFICATION_KEYS: [&str; 5] = ["category", "top", "kind", "tier", "stability"];
+const CLASSIFICATION_KEYS: [&str; 6] = ["category", "top", "kind", "tier", "layer", "stability"];
 const PORT_KEYS: [&str; 16] = [
     "id",
     "name",
@@ -131,7 +131,21 @@ const VOICES_KEYS: [&str; 5] =
 // inside an unmodelled section is still refused: accepting the *section* while ignoring its keys
 // would let `colour_klass` through silently, and an invisible failure is the one thing plan §4.3
 // forbids. Sourced from `docs/api/manifest-schema.md` §9–§13 and §5.
-const UI_KEYS: [&str; 4] = ["panel", "display_slots", "custom_draw", "colour_class"];
+const UI_KEYS: [&str; 5] = ["panel", "display_slots", "custom_draw", "colour_class", "displays"];
+/// `ui.displays[]` entries — the frozen v1.1 shape (ADR-010; manifest-schema §9). Displays are
+/// the first `ui` content this decoder validates below the section's own keys: their vocabularies
+/// are part of the frozen instrument contract (WO-017), so a misspelled `kind` must fail at
+/// discovery with the closed set named, not at the first draw call.
+const DISPLAY_KEYS: [&str; 6] = ["id", "kind", "sources", "colormap", "min_size", "lod"];
+/// One `ui.displays[].sources` binding: the guest fetches snapshots by (display-id, source-id),
+/// and the host resolves `port` to that port's analysis ring / scalar / data window (sources.wit).
+const DISPLAY_SOURCE_KEYS: [&str; 2] = ["id", "port"];
+/// `ui.displays[].kind` — the two host-rendered vocabularies (module-api §10): a 2D display list
+/// or a 3D scene descriptor.
+const DISPLAY_KINDS: [&str; 2] = ["display_list", "scene"];
+/// `ui.displays[].lod` — the display's LOD policy; `auto` follows the host's zoom/breakpoint
+/// rules, the others pin a level.
+const DISPLAY_LODS: [&str; 4] = ["auto", "full", "reduced", "minimal"];
 const LIFECYCLE_KEYS: [&str; 5] =
     ["thread_affinity", "init_cost", "supports_hot_reload", "reset_semantics", "suspendable"];
 const CAPABILITY_KEYS: [&str; 9] = [
@@ -225,6 +239,12 @@ fn check_unmodelled(root: &Table, r: &mut ValidationReport) {
     ] {
         if let Some(t) = sub_table(root, name, name, r) {
             check_keys(t, allowed, name, r);
+            if name == "ui" {
+                // v1.1: `displays[]` entries are content-checked against the frozen shape
+                // (ADR-010 / WO-017). The rest of `ui` stays key-checked-only until its typed
+                // decode lands with the painters that need it.
+                check_displays(t, r);
+            }
         }
     }
     for (n, t) in root.tables("data_schemas").unwrap_or_default().iter().enumerate() {
@@ -232,6 +252,165 @@ fn check_unmodelled(root: &Table, r: &mut ValidationReport) {
         check_keys(t, &DATA_SCHEMA_KEYS, &base, r);
         for (c, ch) in t.tables("channels").unwrap_or_default().iter().enumerate() {
             check_keys(ch, &DATA_CHANNEL_KEYS, &format!("{base}.channels[{c}]"), r);
+        }
+    }
+}
+
+/// Content-checks `ui.displays[]` against the frozen v1.1 shape (manifest-schema §9; ADR-010).
+///
+/// What is checked here, and what is deliberately NOT: the closed vocabularies (`kind`, `lod`),
+/// the required unique `id` (the draw/sources ABI is keyed by it), the `min_size` shape and the
+/// source-binding shape are discovery-time properties of the MANIFEST, so they fail here with the
+/// same report discipline as every other field. The emitted-list vocabularies (the primitives
+/// inside a display list / scene descriptor) and the literal-appearance prohibition are properties
+/// of what the module EMITS at runtime — those gates live in `sparq mod validate` (WO-018:
+/// `E-DISPLAY-PRIMITIVE-UNKNOWN`, `E-LITERAL-APPEARANCE`), not in the manifest decoder. The
+/// `colormap` token is prefix-checked here; the full domain check needs the live token bundle and
+/// is the validator's job too.
+fn check_displays(ui: &Table, r: &mut ValidationReport) {
+    let Some(items) = ui.tables("displays") else {
+        if let Some(v) = ui.get("displays") {
+            r.push(
+                ValidationError::new(
+                    CodeKind::ValueMalformed,
+                    "ui.displays",
+                    "displays is a list of tables — write [[ui.displays]] entries",
+                )
+                .with_found(v.type_name()),
+            );
+        }
+        return;
+    };
+    let mut seen_ids: Vec<&str> = Vec::new();
+    for (n, d) in items.iter().enumerate() {
+        let base = format!("ui.displays[{n}]");
+        check_keys(d, &DISPLAY_KEYS, &base, r);
+        // id: required, unique within the module.
+        match d.get("id").and_then(Value::as_str) {
+            None => r.push(ValidationError::new(
+                CodeKind::KeyMissing,
+                format!("{base}.id"),
+                "name the display — draw calls and source bindings are keyed by this id",
+            )),
+            Some(id) => {
+                if seen_ids.contains(&id) {
+                    r.push(
+                        ValidationError::new(
+                            CodeKind::IdDup,
+                            format!("{base}.id"),
+                            "two displays share an id — rename one",
+                        )
+                        .with_found(id),
+                    );
+                }
+                seen_ids.push(id);
+            },
+        }
+        // kind: required, one of the two host-rendered vocabularies.
+        match d.get("kind").and_then(Value::as_str) {
+            None => r.push(ValidationError::new(
+                CodeKind::KeyMissing,
+                format!("{base}.kind"),
+                "declare which vocabulary this display emits: display_list (2D) or scene (3D)",
+            )),
+            Some(k) if !DISPLAY_KINDS.contains(&k) => r.push(
+                ValidationError::new(
+                    CodeKind::EnumUnknown,
+                    format!("{base}.kind"),
+                    "use one of the two display vocabularies (module-api §10)",
+                )
+                .with_found(k)
+                .with_allowed(DISPLAY_KINDS.join(" ")),
+            ),
+            Some(_) => {},
+        }
+        // lod: optional (absent = auto), closed policy vocabulary.
+        if let Some(l) = d.get("lod").and_then(Value::as_str) {
+            if !DISPLAY_LODS.contains(&l) {
+                r.push(
+                    ValidationError::new(
+                        CodeKind::EnumUnknown,
+                        format!("{base}.lod"),
+                        "use one of the LOD policies",
+                    )
+                    .with_found(l)
+                    .with_allowed(DISPLAY_LODS.join(" ")),
+                );
+            }
+        }
+        // min_size: two positive integers [width, height], logical px.
+        if let Some(v) = d.get("min_size") {
+            let ok = v.as_array().is_some_and(|a| {
+                a.len() == 2 && a.iter().all(|x| x.as_i64().is_some_and(|i| i > 0))
+            });
+            if !ok {
+                r.push(
+                    ValidationError::new(
+                        CodeKind::ValueMalformed,
+                        format!("{base}.min_size"),
+                        "two positive integers [width, height], in logical px",
+                    )
+                    .with_found(v.type_name()),
+                );
+            }
+        }
+        // colormap: a colormap token id (prefix rule; the full domain is the token bundle's and
+        // belongs to `sparq mod validate`, WO-018).
+        if let Some(c) = d.get("colormap").and_then(Value::as_str) {
+            if !c.starts_with("colormap.") {
+                r.push(
+                    ValidationError::new(
+                        CodeKind::ValueMalformed,
+                        format!("{base}.colormap"),
+                        "name a colormap token id, e.g. colormap.spectrum.sonogram",
+                    )
+                    .with_found(c),
+                );
+            }
+        }
+        // sources: optional list of {id, port} bindings; ids unique within this display.
+        if let Some(sources) = d.tables("sources") {
+            let mut seen: Vec<&str> = Vec::new();
+            for (s, src) in sources.iter().enumerate() {
+                let sb = format!("{base}.sources[{s}]");
+                check_keys(src, &DISPLAY_SOURCE_KEYS, &sb, r);
+                match src.get("id").and_then(Value::as_str) {
+                    None => r.push(ValidationError::new(
+                        CodeKind::KeyMissing,
+                        format!("{sb}.id"),
+                        "name this binding — the guest fetches snapshots by (display-id, source-id)",
+                    )),
+                    Some(id) => {
+                        if seen.contains(&id) {
+                            r.push(
+                                ValidationError::new(
+                                    CodeKind::IdDup,
+                                    format!("{sb}.id"),
+                                    "two bindings on this display share an id — rename one",
+                                )
+                                .with_found(id),
+                            );
+                        }
+                        seen.push(id);
+                    }
+                }
+                if src.get("port").and_then(Value::as_str).is_none() {
+                    r.push(ValidationError::new(
+                        CodeKind::KeyMissing,
+                        format!("{sb}.port"),
+                        "say which port or analysis source this binding reads",
+                    ));
+                }
+            }
+        } else if let Some(v) = d.get("sources") {
+            r.push(
+                ValidationError::new(
+                    CodeKind::ValueMalformed,
+                    format!("{base}.sources"),
+                    "sources is a list of {id, port} tables",
+                )
+                .with_found(v.type_name()),
+            );
         }
     }
 }
@@ -394,6 +573,7 @@ fn classification(root: &Table, r: &mut ValidationReport) -> Classification {
         top: opt_str(t, "top", "classification.top", r),
         kind: opt_str(t, "kind", "classification.kind", r),
         tier: opt_str(t, "tier", "classification.tier", r),
+        layer: opt_str(t, "layer", "classification.layer", r),
         stability: opt_str(t, "stability", "classification.stability", r),
     }
 }
@@ -776,5 +956,89 @@ supports_hot_reload = true
         let r = decode(&text).unwrap_err();
         assert!(r.has(CodeKind::ValueMalformed), "a single table where an array was declared: {r}");
         assert!(r.first_at("ports").unwrap().to_string().contains("[[ports]]"), "{r}");
+    }
+
+    /// The skeleton package's manifest, byte-pinned into this test at compile time.
+    const TEMPLATE: &str = include_str!("../../../reference/instrument-template/sparqmod.toml");
+
+    #[test]
+    fn the_reference_instrument_template_validates_as_is() {
+        // WO-017 acceptance criterion: "The skeleton template's manifest passes schema validation
+        // as-is." Not a paraphrase of the template — the checked-in file itself, so the template
+        // and the validator can never drift apart silently. What it exercises end to end:
+        // classification.layer = instrument with tier = t2, the [[ui.displays]] frozen shape,
+        // and the capabilities/distribution keys an instrument package declares.
+        let v = match decode(TEMPLATE) {
+            Ok(v) => v,
+            Err(r) => panic!("the reference template no longer validates:\n{r}"),
+        };
+        assert_eq!(v.id(), "you/syn/template");
+        assert_eq!(v.layer(), crate::manifest::Layer::Instrument);
+    }
+
+    #[test]
+    fn displays_entries_are_content_checked_against_the_frozen_shape() {
+        // The frozen v1.1 shape (manifest-schema §9): {id, kind, sources[]{id, port}, colormap?,
+        // min_size, lod}. Each break below must produce ONE actionable line naming the field.
+        const DISPLAY: &str = "\n[ui]\ncolour_class = \"util\"\n\n[[ui.displays]]\nid = \"view\"\nkind = \"display_list\"\nmin_size = [160, 96]\nlod = \"auto\"\n\n[[ui.displays.sources]]\nid = \"scope\"\nport = \"out\"\n";
+        let ok = format!("{GAIN}{DISPLAY}");
+        let v = decode(&ok).unwrap_or_else(|r| panic!("the legal display declaration failed: {r}"));
+        assert_eq!(v.layer(), crate::manifest::Layer::Backbone); // GAIN declares none
+
+        // A kind outside the two vocabularies names the closed set.
+        let r = decode(&ok.replace("kind = \"display_list\"", "kind = \"pixels\"")).unwrap_err();
+        let e = r.first_at("ui.displays[0].kind").unwrap();
+        assert_eq!(e.code(), "E-ENUM-UNKNOWN:ui.displays[0].kind");
+        assert!(e.to_string().contains("display_list scene"), "{e}");
+
+        // A missing id is refused: the draw/sources ABI is keyed by it.
+        let r = decode(&ok.replace("id = \"view\"\n", "")).unwrap_err();
+        assert_eq!(
+            r.first_at("ui.displays[0].id").unwrap().code(),
+            "E-KEY-MISSING:ui.displays[0].id"
+        );
+
+        // Two displays sharing an id.
+        let r = decode(&format!("{ok}\n[[ui.displays]]\nid = \"view\"\nkind = \"scene\"\n"))
+            .unwrap_err();
+        assert!(r.has(CodeKind::IdDup), "{r}");
+
+        // An LOD outside the policy vocabulary.
+        let r = decode(&ok.replace("lod = \"auto\"", "lod = \"sometimes\"")).unwrap_err();
+        assert_eq!(
+            r.first_at("ui.displays[0].lod").unwrap().code(),
+            "E-ENUM-UNKNOWN:ui.displays[0].lod"
+        );
+
+        // min_size must be two positive integers.
+        let r = decode(&ok.replace("min_size = [160, 96]", "min_size = [160]")).unwrap_err();
+        assert!(r.has_path("ui.displays[0].min_size"), "{r}");
+        let r = decode(&ok.replace("min_size = [160, 96]", "min_size = [0, 96]")).unwrap_err();
+        assert!(r.has_path("ui.displays[0].min_size"), "zero is not a size: {r}");
+
+        // A source binding without its port says nothing to resolve.
+        let r = decode(&ok.replace("port = \"out\"\n", "")).unwrap_err();
+        assert_eq!(
+            r.first_at("ui.displays[0].sources[0].port").unwrap().code(),
+            "E-KEY-MISSING:ui.displays[0].sources[0].port"
+        );
+
+        // A colormap must name a colormap token, never a bare value.
+        let r = decode(&ok.replace("lod = \"auto\"", "lod = \"auto\"\ncolormap = \"#ff0000\""))
+            .unwrap_err();
+        let e = r.first_at("ui.displays[0].colormap").unwrap();
+        assert_eq!(e.code(), "E-VALUE-MALFORMED:ui.displays[0].colormap");
+        assert!(
+            e.to_string().contains("colormap.spectrum.sonogram"),
+            "the fix names an example: {e}"
+        );
+
+        // And a key nobody declared is still a typo, inside displays too. (E-UNKNOWN-KEY is a
+        // catalogue code: the path rides in the message, not in a `:` suffix.)
+        let r =
+            decode(&ok.replace("lod = \"auto\"", "lod = \"auto\"\nbrightness = 3")).unwrap_err();
+        let e = r.first_at("ui.displays[0].brightness").unwrap();
+        assert_eq!(e.code(), "E-UNKNOWN-KEY");
+        assert!(e.to_string().contains("brightness"), "{e}");
     }
 }

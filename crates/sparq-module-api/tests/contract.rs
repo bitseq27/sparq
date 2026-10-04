@@ -241,6 +241,7 @@ fn base(id: &str, name: &str, summary: &str, category: &str, top: &str, kind: &s
             top: Some(top.into()),
             kind: Some(kind.into()),
             tier: Some("t1".into()),
+            layer: None,
             stability: Some("stable".into()),
         },
         state: StateDecl { schema_id: Some(format!("sparq/{id}/state")), schema_version: Some(1) },

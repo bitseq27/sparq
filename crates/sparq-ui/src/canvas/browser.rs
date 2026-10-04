@@ -16,6 +16,7 @@
 use crate::canvas::model::NodeSpec;
 use crate::geom::{Rect, Vec2};
 use crate::tokens::{LAYOUT_SPACE_2, LAYOUT_SPACE_3, LAYOUT_TOUCH_ROW_HEIGHT_BROWSER};
+use sparq_module_api::manifest::Layer;
 
 /// One catalogue entry: everything needed to spawn the module and to show it in a row.
 #[derive(Clone, Debug, PartialEq)]
@@ -26,13 +27,18 @@ pub struct BrowserItem {
     pub summary: String,
     /// The manifest's category, e.g. `synth/oscillator/sine` — searchable, shown dim.
     pub category: String,
+    /// The library layer this module plays in (ADR-010, contract v1.1): the data the browser
+    /// groups by. Carried as DATA only — ranking and row geometry do not read it, so the rows
+    /// stay exactly as the audit pinned them until the instrument chrome (visual grouping,
+    /// badging) lands with the WO-018 host.
+    pub layer: Layer,
 }
 
 impl BrowserItem {
     /// An item from a spec alone (tests, and catalogues without manifest prose).
     #[must_use]
     pub fn new(spec: NodeSpec) -> Self {
-        Self { spec, summary: String::new(), category: String::new() }
+        Self { spec, summary: String::new(), category: String::new(), layer: Layer::default() }
     }
 
     /// The row's primary text: the display name and the module id.
@@ -374,6 +380,7 @@ mod tests {
             spec: NodeSpec::new(id, name, vec![]),
             summary: String::new(),
             category: category.into(),
+            layer: Layer::default(),
         }
     }
 
@@ -383,6 +390,20 @@ mod tests {
             item("sparq/util/gain", "Gain", "utility/gain"),
             item("sparq/ana/rms", "RMS", "analysis/rms"),
         ]
+    }
+
+    #[test]
+    fn the_layer_is_data_only_ranking_does_not_read_it() {
+        // The audit-neutrality promise of the WO-017 close: visual grouping is WO-018's chrome,
+        // so until it lands, two catalogues that differ ONLY in `layer` must rank identically —
+        // every geometry the headless audit pinned stays pinned.
+        let a = catalogue();
+        let mut b = catalogue();
+        b[0].layer = Layer::Instrument;
+        for q in ["", "sin", "g", "rms", "s"] {
+            assert_eq!(rank(&a, q), rank(&b, q), "layer moved the ranking for {q:?}");
+        }
+        assert_eq!(a[0].row_text(), b[0].row_text(), "layer moved the row text");
     }
 
     // ---------------------------------------------------------------- fuzzy

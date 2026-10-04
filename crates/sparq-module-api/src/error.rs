@@ -54,6 +54,8 @@ pub enum CodeKind {
     WidgetKindUnknown,
     /// Measured latency is non-zero but the manifest declares zero.
     LatencyUndeclared,
+    /// `classification.layer = instrument` without `tier = t2` (ADR-010, contract v1.1).
+    LayerMismatch,
     /// A key nobody declared. Typo protection.
     UnknownKey,
     /// **Derived.** A required field is absent: `E-KEY-MISSING:<path>`.
@@ -70,7 +72,7 @@ pub enum CodeKind {
 
 impl CodeKind {
     /// Every code kind, catalogue first and derived last.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::IdDup,
         Self::IdUnstableRename,
         Self::PortTypeUnknown,
@@ -89,6 +91,7 @@ impl CodeKind {
         Self::TouchClassTooSmall,
         Self::WidgetKindUnknown,
         Self::LatencyUndeclared,
+        Self::LayerMismatch,
         Self::UnknownKey,
         Self::KeyMissing,
         Self::EnumUnknown,
@@ -119,6 +122,7 @@ impl CodeKind {
             Self::TouchClassTooSmall => "E-TOUCH-CLASS-TOO-SMALL",
             Self::WidgetKindUnknown => "E-WIDGET-KIND-UNKNOWN",
             Self::LatencyUndeclared => "E-LATENCY-UNDECLARED",
+            Self::LayerMismatch => "E-LAYER-MISMATCH",
             Self::UnknownKey => "E-UNKNOWN-KEY",
             Self::KeyMissing => "E-KEY-MISSING",
             Self::EnumUnknown => "E-ENUM-UNKNOWN",
@@ -317,7 +321,7 @@ mod tests {
             assert!(!seen.contains(&p), "{p} is used by two kinds");
             seen.push(p);
         }
-        assert_eq!(seen.len(), 24, "the catalogue is 19 codes plus 5 derived");
+        assert_eq!(seen.len(), 25, "the catalogue is 20 codes plus 5 derived");
     }
 
     #[test]

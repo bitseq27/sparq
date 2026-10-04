@@ -1,0 +1,35 @@
+package sparq:instrument@1.1.0;
+
+// sparq instrument contract — bound stream snapshots for displays (WO-017 freeze set)
+//
+// Status: v0 SKELETON. How a display gets live data: the manifest's `ui.displays[].sources`
+// binds source ids to ports/analysis rings; at draw time the guest asks for a snapshot by
+// (display-id, source-id). Same machinery the first-party inset displays already use (the
+// per-port analysis rings of WO-012 inc 5), exposed across the boundary. UI-thread only;
+// snapshots are read-only copies sized by the negotiated ring rate — the guest never touches
+// a ring buffer directly.
+
+interface sources {
+  use types.{data-record};
+
+  /// A rolling window of an audio/cv analysis ring: `values` newest-last, sampled at
+  /// `rate-hz`, anchored at audio-time `t0-sample` (so a scope can phase-align to transport).
+  record ring-snapshot {
+    values: list<f32>,
+    rate-hz: f64,
+    t0-sample: u64,
+  }
+
+  variant stream-snapshot {
+    ring(ring-snapshot),
+    /// latest value of a scalar analysis output (rms, peak, follower, …)
+    scalar(f64),
+    /// recent records of a `data` source, host-stamped, ordered by stamp
+    window(list<data-record>),
+  }
+
+  /// None = the binding is unconnected or the source is stale-and-expired: draw the display's
+  /// AT-REST state (the shell's existing rule: live where the rings carry it, at rest
+  /// otherwise — and if no rest state is declared, show WORDS, not garbage).
+  snapshot: func(display-id: string, source-id: string) -> option<stream-snapshot>;
+}

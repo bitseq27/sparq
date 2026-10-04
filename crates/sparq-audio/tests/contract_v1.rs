@@ -61,6 +61,7 @@ fn base(id: &str, ports: Vec<PortSpec>, params: Vec<ParamSpec>) -> Manifest {
             top: Some("util".into()),
             kind: Some("processor".into()),
             tier: Some("t1".into()),
+            layer: None,
             stability: Some("experimental".into()),
         },
         state: StateDecl {

@@ -1,6 +1,6 @@
-# Instrument WIT contract — skeleton v0 (WO-017 freeze set, artefact 4)
+# Instrument WIT contract — v1.1 FROZEN (WO-017 freeze set, artefact 4)
 
-**Status:** v0.2 **SKELETON**, drafted 2026-10-04 from the operator ruling (ADR-010 / D-14), then **aligned field-for-field against the native contract** the same day: `module::{BlockStatus, Resources, ModuleError, Oversampling, CvIn, CvOut}`, `params::ParamSet`, `event::{EventKind, Event}` in `crates/sparq-module-api/src/` are now mirrored exactly, and the checklist in §5 records what is settled versus what still lacks a native arbiter. It parses clean (official `wit-parser`, via `jco` 1.35 — see §7) and generates bindings for every interface, but it is **not frozen**: freeze happens at WO-017 close, after which this directory joins the plan's §6.7 machine-checked API-surface snapshot test.
+**Status:** v1.1 **FROZEN** — frozen at WO-017 close, **2026-10-05**, by operator ruling. Drafted 2026-10-04 as the v0.1 skeleton, aligned field-for-field against the native contract the same day (v0.2: `module::{BlockStatus, Resources, ModuleError, Oversampling, CvIn, CvOut}`, `params::ParamSet`, `event::{EventKind, Event}` mirrored exactly), then frozen with two contract rulings (§5): `data-value`/`data-record` **RATIFIED AS-IS** (recheck trigger: the native data-port landing), and `t-wall-ns` **REMOVED** from `host.time-info` (guests never read a wall clock; the draw phase's animation clock is `frame-context.time-sec`, data records are host-stamped). The frozen surface is machine-pinned: sha256 per file in `crates/sparq-module-api/tests/wit_snapshot.rs` (an accidental edit fails `cargo test`; a deliberate amendment repins in the same commit, per the versioning rules in §3), and the SDK vendors a byte-identical snapshot (`tools/sparq-module-guest/wit/`, drift-gated by its own test). Parse-clean (official `wit-parser` via `jco` 1.35) and round-trip smoke **11/11**, both re-verified at freeze (§7).
 
 **What this is:** the WebAssembly Interface Types binding of module-API v1 for the **instrument tier** — the ABI a handed-in instrument component speaks (ADR-010 decision 2). One contract, two bindings: the native Rust `Module` trait (`sparq-module-api`) for backbone T1, this WIT for T2 instruments. The manifest is tier-independent (ADR-002), so an instrument promoted to T1 is a packaging change, not a redesign.
 
@@ -32,7 +32,7 @@ Nothing else. **No WASI imports, no ambient authority** — capability-scoping i
 | `wit/audio.wit` | `audio` | shared | per-block marshalling: `block-input` / `block-output`, audio & cv buffers, timed events |
 | `wit/display.wit` | `display` | shared | display list v1 (2D) + scene descriptor v1 (3D) + `frame-context` + `surface` |
 | `wit/tokens.wit` | `tokens` | import | token-bundle version + serialised bundle |
-| `wit/host.wit` | `host` | import | three clocks, transport, seed-tree roots, diagnostics |
+| `wit/host.wit` | `host` | import | the deterministic clocks (audio + musical; the wall clock stays host-side — §5 ruling 2026-10-05), transport, seed-tree roots, diagnostics |
 | `wit/assets.wit` | `assets` | import | `resource asset` + hash-declared open, capability errors |
 | `wit/sources.wit` | `sources` | import | analysis-ring / scalar / data-window snapshots for `draw` |
 | `wit/guest.wit` | `guest` | **export** | the lifecycle + `process` + `draw` the component implements |
@@ -68,7 +68,7 @@ Nothing else. **No WASI imports, no ambient authority** — capability-scoping i
 | `message(&[u8])`, honest refusal | `guest.message` → `module-error.{message, unsupported}` (native's own cases) | `atom` ports |
 | `activate` / `deactivate` (trait defaults) | `guest.activate/deactivate` (SDK defaults — a WIT world has no optional exports) | `lifecycle.*` |
 | seed tree allocation (§5.6) | `host.random-seed(stream-name)` | — |
-| three clocks (ADR-006) | `host.now()` → `time-info`; `block-input.t-sample`; `frame-context.time-sec` | — |
+| three clocks (ADR-006) — the guest's share | `host.now()` → `time-info` (audio + musical; wall stays host-side) · `block-input.t-sample` · `frame-context.time-sec` | — |
 | `BlockStatus::{Ok, Silenced, Overrun, Failed}` + watchdog auto-bypass (ADR-009 d6) | `block-status` — all four; a fuel-exhaustion trap maps to `overrun` | `capabilities.max_fuel`, `max_cpu_ms_per_block` |
 | analysis rings (WO-012 inc 5) | `sources.snapshot(display, source)` | `ui.displays[].sources` |
 | `tokens.rs` (generated) | `tokens.get-bundle()` (serialised, versioned) | `design/tokens/*.toml` |
@@ -89,15 +89,20 @@ Nothing else. **No WASI imports, no ambient authority** — capability-scoping i
 - [x] Caps cited from native constants: `MAX_PORTS_PER_CLASS = 8` per type per direction, `MAX_PARAMS = 32` (types.wit/audio.wit comments).
 - [x] Voices: the count rides `resources.voices`; per-voice param delivery does not exist in the native snapshot either — it defers *with* module-api §7 (Phase 1 voices), so it is not a WIT gap.
 
-**Still open at freeze (WO-017 close / WO-018):**
+**Closed at WO-017 close (2026-10-05 — operator rulings via the question tool, plus the buildable items):**
 
-- [ ] `data-value`/`data-record`: the one vocabulary with **no native arbiter** (`data` ports are specified in ADR-005/§7.2 but unimplemented in `sparq-module-api`). Ratify as-is or reshape when the native data-port work lands — marked inline in types.wit.
-- [ ] `time-info`/`transport-state` fields vs `sparq-kernel`'s transport (WO-009 as built): tempo/bar/beat representation, and whether `t-wall-ns` belongs in the guest world at all given the host-stamping rule.
-- [ ] The six new validation codes (manifest-schema catalogue) wired to these exact shapes: `E-LAYER-MISMATCH`, `E-PACKAGE-FILECOUNT`, `E-LITERAL-APPEARANCE`, `E-DISPLAY-PRIMITIVE-UNKNOWN`, `E-CAPABILITY-UNDECLARED`, `E-TOKEN-BUNDLE-VERSION` (WO-018 validator).
-- [ ] `gpu_class` → vertex/instance/cell ceiling table (renderer side, WO-018).
-- [ ] Two-instance coherence (decision D): exact ordering of `configure` application across audio/display instances at the boundary swap (WO-018 loader).
-- [ ] `wasmtime` version pin + component-model/WASI baseline recorded (WO-018 `Cargo.toml`); token bundle `bundle-encoding` confirmed as JSON-of-`tokens.json`.
-- [ ] This directory added to the machine-checked API-surface snapshot test (plan §6.7) so an accidental WIT edit fails CI (WO-017 close).
+- [x] `data-value`/`data-record` — **RATIFIED AS-IS**. The one vocabulary with no native arbiter (`data` ports are ADR-005/§7.2-specified, unimplemented in `sparq-module-api`): it mirrors §4's dtype set 1:1, including the f64 `vecN` carrier (the one judgement call — confirmed at freeze). Recheck trigger recorded in types.wit: when the native data-port work lands (Phase 5), compare and reshape only through the versioning rules. Until the host routes data at all, an instrument declaring a `data` port is refused at load IN WORDS (WO-018 validator) — vocabulary frozen, routing pending, never half-working.
+- [x] `time-info` vs the WO-009 transport as built — verified field-by-field against `sparq-kernel::{BlockContext, Clock}` + `sparq-music::Transport` (`sample_offset`, `tick`, `ppqn`, `effective_bpm_at`, `bpm`, `bar_beat_tick`, `is_playing` — every doc citation in host.wit checked against the code this session). **`t-wall-ns` REMOVED**: `frame-context.time-sec` already carries the draw phase's animation clock, outgoing data records are host-stamped anyway, and inside `process` the only lawful clock is `t-sample` — no lawful guest consumer of wall time remained, so `now()` is fully deterministic. (The v0.1 three-case `transport-state` enum was invention and had already been removed in the alignment pass.)
+- [x] `bundle-encoding` — **confirmed JSON-of-`tokens.json`** (tokens.wit's only v1 case), and the bundle is now a generated artefact: `design/tokens/generated/token-bundle.json` from `tools/token_gen.py` (envelope = the tokens' semver from `colors.toml [meta]` + encoding + payload + payload sha256), gated twice — `token_gen.py --check` (staleness + the round-trip invariant) and `crates/sparq-module-api/tests/token_bundle.rs` (the envelope's sha256 IS the checked-in tokens.json's; the semver IS the tokens' version). A token value change propagates to bundle, tokens.rs, CSS and JSON in one commit, or a gate fails — WO-017 acceptance criterion 2, mechanically.
+- [x] `wasmtime` pin recorded: **49.0.2** (crates.io max-stable at 2026-10-05; matches the candidate noted during the planning round), **Component Model + WASI 0.2** baseline (ADR-010 decision 2). The pin becomes the `Cargo.toml` line when `crates/sparq-host-wasm` exists (WO-018); if wasmtime has moved by then, record the choice and the delta — the contract face is the component model, not the runtime's version number.
+- [x] This directory in the machine-checked API-surface snapshot family (plan §6.7): `crates/sparq-module-api/tests/wit_snapshot.rs` pins all nine files by sha256 AND pins the directory's file set, running in every `cargo test --workspace` (gates.bat + CI). Proven failable at freeze by deliberate corruption, then restored — the gate's own header states its limits (hashes detect change, not meaning; parseability is §7's recipe).
+- [x] The six validation codes: **`E-LAYER-MISMATCH` is wired natively** at close (`manifest.rs` `check_cross`: `layer = instrument` requires `tier = t2`, actionable words; alongside the full `classification.layer` + `ui.displays[]` decode and the template acceptance test — the WO-017 close commit). The other five (`E-PACKAGE-FILECOUNT`, `E-LITERAL-APPEARANCE`, `E-DISPLAY-PRIMITIVE-UNKNOWN`, `E-CAPABILITY-UNDECLARED`, `E-TOKEN-BUNDLE-VERSION`) gate package/runtime/load behaviour with their shapes specified in `manifest-schema.md` §7 — wiring is the WO-018 validator's, as ticketed.
+- [x] SDK at freeze (item 9): `tools/sparq-module-guest` vendors this directory's `wit/` byte-for-byte (drift-tested), points `wit_bindgen::generate!` at the vendored copy, and its crate version now CARRIES THE CONTRACT VERSION (`1.1.x` speaks `sparq:instrument@1.1.*`). Round-trip re-proven against the vendored snapshot (§7).
+
+**Still open — WO-018 implementation debts, NOT contract gaps (operator ruling 2026-10-05: the freeze stands without them):**
+
+- [ ] `gpu_class` → vertex/instance/cell ceiling table (renderer side).
+- [ ] Two-instance coherence (decision D): exact ordering of `configure` application across audio/display instances at the boundary swap (loader).
 
 ## 6. What is deliberately NOT here
 
@@ -109,12 +114,23 @@ Nothing else. **No WASI imports, no ambient authority** — capability-scoping i
 
 ## 7. Verification
 
-Parsed and binding-generated with the official `wit-parser` (via `@bytecodealliance/jco` 1.35.0) on 2026-10-04 — all eight interfaces + the world, doc comments carried into the generated bindings. Re-verified after the same day's alignment pass (v0.2): the parser caught two real bugs during drafting (doc comments on repeated `package` items are rejected; `stream` is a WIT keyword — the seed function's parameter is `stream-name`), which is the point of checking rather than eyeballing:
+Re-verified AT FREEZE (2026-10-05, Linux sandbox; node 20, jco 1.35, wasm-tools 1.261.0, rustc 1.99.0), after the `t-wall-ns` removal and the ratification notes:
+
+* **Parse**: `npx jco types docs/api/instrument-wit/wit --world-name instrument -o types` — `.d.ts` for all eight interfaces + the world; the generated `TimeInfo` confirmed free of any wall member.
+* **Round-trip smoke**: the noop example rebuilt against the VENDORED WIT (both faces: `wasm32-unknown-unknown` 49 697 B, `wasm32-wasip1` 80 776 B), componentised, transpiled, driven through the full lifecycle from JS: `harness/smoke.mjs` → **11/11 PASS** (refusals in words, exact negotiated shapes).
+* **Drift gates**: `wit_snapshot.rs` (root workspace) and the SDK's vendor test — each proven failable at freeze by deliberate corruption, then restored.
+
+The recipe, CORRECTED — the round-5 notes said `jco componentize`, but that command takes a **JS/TS** source; the Rust core-wasm path to a component is `wasm-tools component new` (wit-bindgen's export macro embeds the WIT in the module, so no separate `--wit` is needed):
 
 ```sh
-npx jco types docs/api/instrument-wit/wit --world-name instrument   # parse + generate TS bindings
-# equivalent once the Rust side exists:
-wasm-tools component wit ...   # or cargo component check in the guest SDK project
+# 1. build the guest (in tools/sparq-module-guest/):
+cargo build --release --target wasm32-unknown-unknown -p noop-instrument
+# 2. core module -> component (uses the embedded WIT):
+wasm-tools component new target/wasm32-unknown-unknown/release/noop_instrument.wasm -o noop-component.wasm
+# 3. JS bindings, then the harness (smoke.mjs expects ./gen/noop-component.js):
+npx jco transpile noop-component.wasm -o gen && node smoke.mjs
+# parse check alone:
+npx jco types docs/api/instrument-wit/wit --world-name instrument
 ```
 
-CI gate from WO-017: parse the world, diff the generated surface against the checked-in snapshot (the same discipline as `tokens.rs` staleness — generated artefacts are checked in and CI fails if they drift).
+The CI gate (plan §6.7's textual face) is `wit_snapshot.rs` in every `cargo test` cell. The parse + smoke recipe needs node, which the rust CI cells do not carry: it re-runs at each seal on the device and at WO-018's kickoff, and joins CI proper if a node cell ever lands — recorded here rather than silently skipped.

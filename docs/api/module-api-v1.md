@@ -198,9 +198,9 @@ A module may declare a panel; otherwise the shell auto-generates one from the pa
 
 Full schema: `manifest-schema.md` (companion document). Validation happens at **discovery**, before instantiation, and every failure produces an actionable message naming the field and the fix.
 
-Rejected at validation: unknown port type · unknown unit · duplicate ids · param default outside range · undeclared latency for a module that reports non-zero measured latency · missing state schema · asset hash mismatch · `requires` feature not available on this host · unsupported host API version · bad or missing signature when the host is in Perform mode.
+Rejected at validation: unknown port type · unknown unit · duplicate ids · param default outside range · undeclared latency for a module that reports non-zero measured latency · missing state schema · asset hash mismatch · `requires` feature not available on this host · unsupported host API version · layer/tier mismatch — `layer = instrument` without `tier = t2` (`E-LAYER-MISMATCH`, ADR-010) · bad or missing signature when the host is in Perform mode.
 
-Discovery order: built-in registry → user `modules/` directory → project-local modules → registry cache. Conflicts resolve by explicit version pin in the project, never by "latest wins".
+Discovery order: built-in registry → user `modules/` directory → project-local modules → **`instruments/`** (project root first, then the per-user instruments directory — the five-file drop-in packages of ADR-010 decision 5, added at contract v1.1 / WO-017) → registry cache. Conflicts resolve by explicit version pin in the project, never by "latest wins"; the same id may not exist in both layers — a collision is refused in words, not resolved silently.
 
 ---
 

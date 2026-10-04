@@ -153,6 +153,7 @@ fn probe_manifest(id: &str, with_param: bool) -> sparq_module_api::manifest::Val
             top: Some("util".into()),
             kind: Some("source".into()),
             tier: Some("t1".into()),
+            layer: None,
             stability: Some("stable".into()),
         },
         state: StateDecl { schema_id: Some(format!("{id}/state")), schema_version: Some(1) },

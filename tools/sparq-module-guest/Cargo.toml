@@ -1,6 +1,9 @@
 [package]
 name = "sparq-module-guest"
-version = "0.1.0"
+# The crate version CARRIES THE CONTRACT VERSION (WO-017 freeze packaging rule, lib.rs header):
+# 1.1.x speaks sparq:instrument@1.1.*; SDK-only fixes move the patch, a contract minor moves the
+# minor. The vendored ./wit snapshot must match docs/api/instrument-wit/wit/ (drift-tested).
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.80"
 license = "UNLICENSED"

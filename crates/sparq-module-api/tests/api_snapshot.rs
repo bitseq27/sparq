@@ -98,6 +98,16 @@ const _: fn(&ValidatedManifest, u32) -> Option<ValidationError> =
     ValidatedManifest::check_declared_latency;
 const _: fn(ValidatedManifest) -> Manifest = ValidatedManifest::into_manifest;
 const _: fn(&str) -> Option<ParamKind> = ParamKind::parse;
+// The two-layer library (ADR-010, contract v1.1 — WO-017 close): layer is manifest data, and
+// these pins are its frozen face. The value pin on LAYERS means even the SPELLINGS cannot move
+// without this file moving in the same commit.
+const _: [&str; 2] = sparq_module_api::manifest::LAYERS;
+const _: fn(&str) -> Option<sparq_module_api::manifest::Layer> =
+    sparq_module_api::manifest::Layer::parse;
+const _: fn(sparq_module_api::manifest::Layer) -> &'static str =
+    sparq_module_api::manifest::Layer::as_str;
+const _: fn() -> sparq_module_api::manifest::Layer = sparq_module_api::manifest::Layer::default;
+const _: fn(&ValidatedManifest) -> sparq_module_api::manifest::Layer = ValidatedManifest::layer;
 const _: fn(CodeKind) -> &'static str = CodeKind::prefix;
 const _: fn(CodeKind) -> bool = CodeKind::is_derived;
 const _: fn(CodeKind, &'static str, &'static str) -> ValidationError = ValidationError::new;

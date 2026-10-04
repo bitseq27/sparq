@@ -2567,6 +2567,47 @@ commit `9809593`, delivery via the full-tree overlay `sparq-update-2026-10-04.zi
 The full record — incidents, verification matrix, freeze-checklist state, environment recipe,
 device apply steps — is `ROUND5-HANDOFF.md`.
 
+**2026-10-05 — WO-017 CLOSED: contract v1.1 FROZEN (fourteenth session, Linux sandbox).**
+Fresh clone of the round-5 tree (origin public again; the device had applied and pushed the
+overlay), environment rebuilt from nothing per ROUND5-HANDOFF §7, baseline re-measured green
+(899/0/1-ignored, five python gates clean) BEFORE any edit. Four operator rulings via the
+question tool: **`data-value`/`data-record` ratified AS-IS** (recheck trigger = the native
+data-port landing, Phase 5; until the host routes data, an instrument declaring a `data` port
+is refused at load in words); **`t-wall-ns` REMOVED from `host.time-info`** (the guest never
+reads a wall clock: `frame-context.time-sec` carries the draw animation clock, data records are
+host-stamped, `process`'s only lawful clock is `t-sample` — no lawful consumer remained);
+**browser layer work data-side only** this round (visual grouping + badging chrome = WO-018;
+the sandbox cannot run `ui --audit`); **contract v1.1 stamped FROZEN**. What landed on top:
+native `classification.layer` (typed `Layer`, closed vocabulary, default backbone — the 24
+first-party manifests re-validate with ZERO edits; `layer = instrument` requires `tier = t2` as
+`E-LAYER-MISMATCH` in words; the error catalogue moves 24→25) + `ui.displays[]` decoded and
+content-checked against the frozen §9 shape (kind/lod vocabularies, required unique ids,
+`min_size`, colormap token prefix, `sources[]{id, port}` — the binding shape was unspecified
+anywhere and is now frozen in manifest-schema §9 + the field table, with the LAYERS↔table drift
+pin on the defect-#84 discipline); the **template acceptance criterion is mechanical**
+(`include_str!` of the checked-in `reference/instrument-template/sparqmod.toml` decoded in a
+test — template and validator cannot drift silently); `BrowserItem` carries `Layer` with
+ranking/geometry audit-NEUTRAL (pinned by test); **token bundle v1 generated** (`token_gen.py` →
+`design/tokens/generated/token-bundle.json`, envelope = tokens' semver + encoding + payload +
+sha256; double-gated: `--check`'s round-trip invariant + `tests/token_bundle.rs` pinning
+sha256↔tokens.json inside `cargo test` — one-commit propagation or a gate fails); **the WIT is
+hash-pinned** (`tests/wit_snapshot.rs`: nine files + the directory set; every new gate proven
+failable by deliberate corruption, then restored); **SDK at freeze** (vendored `wit/` snapshot +
+byte-drift test; crate version 0.1.0→1.1.0 CARRIES THE CONTRACT VERSION); module-api §11 gained
+the `instruments/` discovery slot (project root, then per-user; cross-layer id collision refused
+in words); wasmtime pin recorded (49.0.2 = crates.io max-stable, the planning round's candidate;
+Component Model + WASI 0.2). Round-trip re-proved end to end against the EDITED contract: both
+wasm faces rebuilt (49 697 B unknown-unknown + wasip1), `wasm-tools component new` — **recipe
+correction: `jco componentize` is JS-only; round 5's §7 note was wrong** — `jco transpile`,
+smoke **11/11**. Paper-instrument walkthrough done (fm-terrain): two confusion points became
+guide amendments (data-port status §6, sources shape §5). Gates on this box: fmt/clippy CLEAN
+(`-D warnings`), `cargo test --workspace` **909/0/1-ignored** (+10 new tests; the digest
+expectation MOVES — src fp now 96f/2717264B), five python gates clean incl. the new bundle
+report line, `module_docs` 24/24, WIT parse-clean (jco 1.35), SDK tests 3+1, `ui --audit` NOT
+re-run (no UI behaviour touched — the one UI-adjacent change is a data field; device re-runs it
+in gates.bat). `sync_check` FAILS BY DESIGN (11 stamped files moved; device re-stamps).
+The full record is `ROUND6-HANDOFF.md`.
+
 ---
 
 ## 3. Work orders
@@ -2954,6 +2995,7 @@ Each module ships: manifest, implementation, golden reference render, unit tests
 ---
 
 ### WO-017 — Instrument contract v1.1: the freeze set
+**Status: CLOSED 2026-10-05** (fourteenth session, Linux sandbox). Contract v1.1 **FROZEN** by the operator rulings of 2026-10-05 (data vocabulary ratified as-is; `t-wall-ns` removed from the guest world; browser work data-side this round; freeze stamped) — the record is `docs/api/instrument-wit/README.md` §5 + `ROUND6-HANDOFF.md`. The two items still open there (`gpu_class` ceiling table, two-instance `configure` ordering) are WO-018 implementation debts, ruled NOT contract gaps.
 **Objective.** Freeze everything an instrument author builds against, *before* any instrument authorship starts — the precondition for core and instruments being built in parallel (ADR-010 decision 7).
 **Depends on.** WO-007/WO-008 contract v1 (shipped), WO-002 tokens (shipped). Phase 1.
 **In scope.**
@@ -2965,10 +3007,10 @@ Each module ships: manifest, implementation, golden reference render, unit tests
 * **`MODULE-BUILD-GUIDE.md` v1** (drafted 2026-10-04, frozen here) + the skeleton package in `reference/instrument-template/`.
 **Out of scope.** The loader, the validator implementation, the harness, any actual instrument (WO-018/019); the registry/marketplace (Phase 5); the pixel-surface escape hatch (parked, `LATER.md`).
 **Acceptance criteria.**
-- [ ] Contract v1.1 documents frozen and versioned; the machine-checked API-surface snapshot test (plan §6.7) covers the WIT binding too.
-- [ ] Token bundle generator emits from the existing TOML with `--check` in CI; a token value change propagates to bundle, `tokens.rs`, CSS and JSON in one commit or CI fails.
-- [ ] A paper instrument (the fm-terrain walkthrough in the guide) validates against the schema with zero engine knowledge required — the two-hour/two-day test, applied to the spec.
-- [ ] The skeleton template's manifest passes schema validation as-is.
+- [x] Contract v1.1 documents frozen and versioned; the machine-checked API-surface snapshot test (plan §6.7) covers the WIT binding too. *(FROZEN stamps 2026-10-05: WIT README, guide v1.0; all nine WIT files + the directory set hash-pinned in `crates/sparq-module-api/tests/wit_snapshot.rs`, proven failable; the SDK vendors the identical snapshot behind its own drift test; native surface pins grew the layer accessors in `api_snapshot.rs`.)*
+- [x] Token bundle generator emits from the existing TOML with `--check` in CI; a token value change propagates to bundle, `tokens.rs`, CSS and JSON in one commit or CI fails. *(`tools/token_gen.py` → `design/tokens/generated/token-bundle.json` — envelope = the tokens' semver + `encoding: json` + payload + `payload_sha256`; the round-trip invariant is a report line under `--check`, and `tests/token_bundle.rs` pins sha256 ↔ tokens.json + semver inside `cargo test`.)*
+- [x] A paper instrument (the fm-terrain walkthrough in the guide) validates against the schema with zero engine knowledge required — the two-hour/two-day test, applied to the spec. *(Walked 2026-10-05: every field of the guide's fragment maps to a `manifest-schema.md` row — `layer`+`tier = t2` now natively validated, the heightfield view declares as `kind = "scene"` with a colormap token and `{id, port}` source bindings. Two confusion points found became guide amendments, logged: the data-port routing status (§6) and the sources-binding shape (§5) — which was previously specified nowhere, and is now frozen in schema §9 + the field table.)*
+- [x] The skeleton template's manifest passes schema validation as-is. *(Mechanical, not visual: `decode::tests::the_reference_instrument_template_validates_as_is` decodes the CHECKED-IN `reference/instrument-template/sparqmod.toml` — `include_str!`'d into the test, so template and validator cannot drift silently — and asserts `layer() == Instrument`.)*
 **Tests/evidence.** Schema conformance tests, token-bundle golden snapshot, WIT round-trip test (a no-op guest component instantiating against the binding).
 **Artefacts.** module-api §10 amendment, manifest-schema amendments, `docs/api/instrument-wit/`, `sparq-module-guest` crate v0.1, `MODULE-BUILD-GUIDE.md` v1, `reference/instrument-template/`.
 **Risks.** Freezing the display vocabularies before the Phase 6 shell exists. Mitigation: the vocabularies are renderer-independent data (the token system's own bet), and WO-019's reference instruments exist to falsify them while amendment is still cheap.

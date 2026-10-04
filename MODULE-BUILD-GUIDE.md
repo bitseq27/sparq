@@ -1,6 +1,6 @@
 # sparq module build guide — instruments and the hand-off system
 
-**Audience:** you, building an **instrument** for sparq — as a hand-off from the core team, or as a third party who has never seen the inside of the engine. **Version:** v1 draft, matching contract v1.1 (ADR-010, WO-017). **Status of the machinery:** the contract documents are frozen; the loader, validator and dev harness are ticketed (WO-018/WO-019) — until they ship, this guide is the specification they are built to.
+**Audience:** you, building an **instrument** for sparq — as a hand-off from the core team, or as a third party who has never seen the inside of the engine. **Version:** v1.0 — **frozen with contract v1.1** at WO-017 close (2026-10-05; ADR-010, WO-017). **Status of the machinery:** the contract documents are frozen and machine-pinned; the loader, validator and dev harness are ticketed (WO-018/WO-019) — until they ship, this guide is the specification they are built to.
 
 **The test this document has to pass** (inherited from module-api §15): a simple module is a **two-hour** task and a complex instrument is a **two-day** task. If any step below needs engine knowledge, the contract has failed and *this document gets amended* — that is the rule, not a courtesy.
 
@@ -85,7 +85,7 @@ Signing follows plan §15: an unsigned package loads **badged** and is disabled 
 
 ## 5. Displays: the two vocabularies
 
-A display is declared in the manifest (`ui.displays[]`: id, kind, source bindings, colormap where data-encoded, minimum size, LOD behaviour) and drawn by your per-frame draw export, which receives the frame rect, the UI LOD level, the bound stream snapshots and the token bundle, and writes a **display list** or **scene descriptor** into the frame buffer the host provides. The exact ABI is WIT-frozen in contract v1.1 (WO-017) — skeleton drafted, parse-verified: [`docs/api/instrument-wit/`](docs/api/instrument-wit/README.md); the vocabularies are:
+A display is declared in the manifest (`ui.displays[]`: `id`; `kind` — `display_list` (2D) or `scene` (3D); source bindings `sources[] = {id, port}` — you name the binding and the port or analysis it reads, and your `draw` fetches snapshots by `(display-id, source-id)`; `colormap` — a colormap token id, wherever colour encodes data; `min_size = [w, h]` in logical px; `lod = auto|full|reduced|minimal`) and drawn by your per-frame draw export, which receives the frame rect, the UI LOD level, the bound stream snapshots and the token bundle, and writes a **display list** or **scene descriptor** into the frame buffer the host provides. The exact ABI is WIT-frozen in contract v1.1 (**frozen 2026-10-05 at WO-017 close**, hash-pinned in CI): [`docs/api/instrument-wit/`](docs/api/instrument-wit/README.md); the vocabularies are:
 
 **Display list v1 (2D)** — every primitive resolves style from tokens; you pass semantic ids, never values:
 
@@ -117,7 +117,7 @@ The real-time contract is unchanged and applies inside the sandbox: **all alloca
 
 * **Simulation inside the instrument** — physics, particle systems, generative grids, CA/L-system/chaos engines — is ordinary wasm compute. Deterministic given the seed tree; budget it against `max_fuel`.
 * **Heavy or non-real-time work** — ML inference, video analysis, network fetching, minutes-long baking — does **not** go inside the instrument. It belongs to the T3 bridged-process plane; your instrument consumes its `data` streams. The host validates that a T2 package declares no capability it cannot honour.
-* **Data formats** — parse anything you like *inside the sandbox*: MIDI files, Scala/KBM tunings, JSON/CSV tables, WAV/SoundFont-class sample data. File access is capability-scoped to declared asset hashes and (where granted) declared paths; there is no ambient filesystem.
+* **Data formats** — parse anything you like *inside the sandbox*: MIDI files, Scala/KBM tunings, JSON/CSV tables, WAV/SoundFont-class sample data. File access is capability-scoped to declared asset hashes and (where granted) declared paths; there is no ambient filesystem. **`data` ports, honest status at v1.1:** the vocabulary is frozen (WIT `types.data-value`/`data-record`, ratified 2026-10-05), but the host does not ROUTE data ports yet — an instrument declaring one is refused at load **in words** until the native data-port work lands (Phase 5). Parse your files from assets; don't declare a `data` port before then.
 
 ## 7. Hand-in: the validation gate
 
