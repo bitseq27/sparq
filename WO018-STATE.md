@@ -1,4 +1,18 @@
-# WO018-STATE.md — in-flight state record (fifteenth session, 2026-10-05) — LIVE, fold into the round handoff at close
+# WO018-STATE.md — state record (fifteenth session, 2026-10-05) — **CLOSED: folded into `ROUND8-HANDOFF.md`**
+
+> **CLOSED 2026-10-05, sixteenth session.** The work this file recorded as "written but NOT
+> compiled" was **lost with its sandbox** before reaching origin (the loss and its evidence:
+> `ROUND8-HANDOFF.md` §0). It was then **REBUILT from this file + `ROUND7-HANDOFF.md`** on a
+> clean clone — the inventory table below is the checklist the rebuild was verified against,
+> every row present — and **compiled, tested and gated for real**: 925/0/1-ignored, fmt+clippy
+> clean, python gates clean, MSVC default cells clean, committed `450c38b…51b25aa` + records.
+> The desk-audit risk list below stayed useful: risk 1 (borrow shapes) and the `r.len()`-after-move
+> shape it cousins were the only real compile failures; risks 2–7 passed as written. The
+> wasmtime probe was re-run and MEASURED (`docs/instrument-host.md` §8): the dependency tree is
+> green to `cranelift-codegen`, which OOMs on a 1.06 GB host — memory, categorically. **Keep
+> this file as the rebuild's source record; the live state is `ROUND8-HANDOFF.md`.**
+
+---
 
 **Why this file exists:** mid-round, the sandbox HOST hit sustained thread-table exhaustion
 (`/proc/loadavg` pinned at `1/1129` against `kernel.threads-max = 1129`; the exhaustion is

@@ -4609,3 +4609,248 @@ exec: PASS
  Over RDP the rasteriser is WARP - slow but functional; the 60 fps
  claim waits for the physical screen, as always.
  operator opened the window session
+
+===== test006 RUN 05/10/2026 16:36:29.97 on SATURN user bitseq =====
+ ================================================================
+ sparq test006 - round 4 + WO-013 inc 3+4+5 and WO-012 inc 2: browser, inspector, levels, rename, scroll, LOD, LIVE audio, round-4 asks
+ at the end you send back ONE file: test006.log from the repo root
+ ================================================================
+ " "
+ [00] environment
+
+---- [RUN] os version ----
+
+Microsoft Windows [Version 10.0.19045.6216]
+---- [RC 0] os version ----
+ tree clean, no stray artefacts
+ " "
+ [00b] sync stamp - every file that decides the binary, hashed against
+ SYNC-STAMP.txt. A FAIL here names files; it is never a rustc error.
+
+---- [RUN] sync check - tools\sync_check.py ----
+sync_check: OK - sync sparq-wo018-rebuild-2026-10-05 (sent unsent)
+  163 of 163 stamped files match byte-for-byte
+  src fingerprint 97f/2731971B - matches the stamp
+  no extras, no line-ending drift, nothing soft differing
+---- [RC 0] sync check - tools\sync_check.py ----
+ " "
+ [01] build - the five first-party crates always recompile now, so that a
+ zip-restored mtime can never serve the last increment's rlib.
+
+---- [RUN] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+sync_check: OK - 163 files match sync sparq-wo018-rebuild-2026-10-05, src 97f/2731971B
+ note: tree content changed since the last good build - the five first-party
+ fingerprints are cleared, so cargo cannot serve a crate from the last sync.
+ building sparq.exe (release, hal-wasapi + bootstrap-audio + ui-window) ...
+ first build takes a few minutes (wgpu is big); later builds are incremental.
+
+   Compiling sparq-kernel v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-kernel)
+   Compiling sparq-app v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-app)
+   Compiling naga v30.0.1
+   Compiling vello_cpu v0.1.0
+   Compiling sparq-module-api v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-module-api)
+   Compiling epaint v0.36.2
+   Compiling sparq-music v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-music)
+   Compiling sparq-host-wasm v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-host-wasm)
+   Compiling sparq-audio v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-audio)
+   Compiling sparq-ui v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-ui)
+warning: unused import: `sparq_module_api::manifest::GPU_CLASSES`
+  --> crates\sparq-host-wasm\src\ceilings.rs:26:5
+   |
+26 | use sparq_module_api::manifest::GPU_CLASSES;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sparq-host-wasm` (lib) generated 1 warning (run `cargo fix --lib -p sparq-host-wasm` to apply 1 suggestion)
+   Compiling egui v0.36.2
+   Compiling egui-winit v0.36.2
+   Compiling wgpu-naga-bridge v30.0.1
+   Compiling wgpu-hal v30.0.1
+   Compiling wgpu-core-deps-windows-linux-android v30.0.1
+   Compiling wgpu-core v30.0.1
+   Compiling wgpu v30.0.1
+   Compiling egui-wgpu v0.36.2
+error[E0308]: `?` operator has incompatible types
+  --> crates\sparq-app\src\instruments.rs:69:22
+   |
+69 |                   dir: dir.ok_or_else(|| {
+   |  ______________________^
+70 | |                     "sparq mod validate needs the package directory, e.g. \
+71 | |                      `sparq mod validate instruments/my-fm-terrain`"
+72 | |                         .to_string()
+73 | |                 })?,
+   | |___________________^ expected `Option<String>`, found `String`
+   |
+   = note: `?` operator cannot convert from `String` to `Option<String>`
+   = note: expected enum `Option<String>`
+            found struct `String`
+help: try wrapping the expression in `Some`
+   |
+69 ~                 dir: Some(dir.ok_or_else(|| {
+70 |                     "sparq mod validate needs the package directory, e.g. \
+71 |                      `sparq mod validate instruments/my-fm-terrain`"
+72 |                         .to_string()
+73 ~                 })?),
+   |
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `sparq-app` (bin "sparq") due to 1 previous error
+
+ ============================================
+  BUILD FAILED
+ ============================================
+  If the error mentions `link.exe` or `linker not found`:
+    the MSVC C++ Build Tools are missing. Run scripts\setup.bat, or install
+    "Build Tools for Visual Studio" with the "Desktop development with C++"
+    workload, then open a NEW terminal and re-run this script.
+
+  If the error mentions `d3d12`, `dxgi` or `wgpu`:
+    the UI shell needs the DX12 backend; make sure the sync included
+    crates\sparq-app\Cargo.toml (the per-target wgpu features live there).
+
+  If the error mentions `alsa` or `pkg-config`:
+    you are not on Windows. On Linux install libasound2-dev and pkg-config.
+
+  If the error is `no method named` or `no field` for something that IS in the
+  file on disk: the cache and the tree disagreed. Run scripts\synccheck.bat, then
+  delete target\release and re-run this script (defect #78).
+
+  Anything else: copy the whole error into a message back to me.
+
+ log saved to Q:\morphosis\code\sparq\scripts\..\logs\build.log
+---- [RC 1] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+ BUILD FAILED - send test006.log back now.
+ " "
+ ================================================================
+ SUMMARY - test006 - 05/10/2026 16:36:59.78
+ ================================================================
+ [00b] tree matches SYNC-STAMP.txt : PASS rc=0
+ [01] build + stamp guard : FAIL rc=1
+ [07] param edit reached the render :
+ operator answers: A= B= C= D= E= F= G= H= I= J= K=
+ L= M= N= O= P= Q= R= S= T= U=
+ steps failing on rc: 1
+ " "
+ SEND BACK: the compact copies when they were made - test006-digest.log
+ and logs\ui-digest.log - else the full files. Verdict lines are
+ byte-identical in the copies; only repeated status lines collapse.
+ full paths: Q:\morphosis\code\sparq\test006.log  and  logs\ui.log
+ ================================================================
+
+===== test006 RUN 05/10/2026 16:37:15.76 on SATURN user bitseq =====
+ ================================================================
+ sparq test006 - round 4 + WO-013 inc 3+4+5 and WO-012 inc 2: browser, inspector, levels, rename, scroll, LOD, LIVE audio, round-4 asks
+ at the end you send back ONE file: test006.log from the repo root
+ ================================================================
+ " "
+ [00] environment
+
+---- [RUN] os version ----
+
+Microsoft Windows [Version 10.0.19045.6216]
+---- [RC 0] os version ----
+ tree clean, no stray artefacts
+ " "
+ [00b] sync stamp - every file that decides the binary, hashed against
+ SYNC-STAMP.txt. A FAIL here names files; it is never a rustc error.
+
+---- [RUN] sync check - tools\sync_check.py ----
+sync_check: OK - sync sparq-wo018-rebuild-2026-10-05 (sent unsent)
+  163 of 163 stamped files match byte-for-byte
+  src fingerprint 97f/2731971B - matches the stamp
+  no extras, no line-ending drift, nothing soft differing
+---- [RC 0] sync check - tools\sync_check.py ----
+ " "
+ [01] build - the five first-party crates always recompile now, so that a
+ zip-restored mtime can never serve the last increment's rlib.
+
+---- [RUN] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+sync_check: OK - 163 files match sync sparq-wo018-rebuild-2026-10-05, src 97f/2731971B
+ note: tree content changed since the last good build - the five first-party
+ fingerprints are cleared, so cargo cannot serve a crate from the last sync.
+ building sparq.exe (release, hal-wasapi + bootstrap-audio + ui-window) ...
+ first build takes a few minutes (wgpu is big); later builds are incremental.
+
+   Compiling sparq-kernel v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-kernel)
+   Compiling sparq-app v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-app)
+   Compiling sparq-module-api v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-module-api)
+   Compiling sparq-ui v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-ui)
+   Compiling sparq-host-wasm v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-host-wasm)
+   Compiling sparq-audio v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-audio)
+   Compiling sparq-music v0.0.0-phase0 (Q:\morphosis\code\sparq\crates\sparq-music)
+warning: unused import: `sparq_module_api::manifest::GPU_CLASSES`
+  --> crates\sparq-host-wasm\src\ceilings.rs:26:5
+   |
+26 | use sparq_module_api::manifest::GPU_CLASSES;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sparq-host-wasm` (lib) generated 1 warning (run `cargo fix --lib -p sparq-host-wasm` to apply 1 suggestion)
+error[E0308]: `?` operator has incompatible types
+  --> crates\sparq-app\src\instruments.rs:69:22
+   |
+69 |                   dir: dir.ok_or_else(|| {
+   |  ______________________^
+70 | |                     "sparq mod validate needs the package directory, e.g. \
+71 | |                      `sparq mod validate instruments/my-fm-terrain`"
+72 | |                         .to_string()
+73 | |                 })?,
+   | |___________________^ expected `Option<String>`, found `String`
+   |
+   = note: `?` operator cannot convert from `String` to `Option<String>`
+   = note: expected enum `Option<String>`
+            found struct `String`
+help: try wrapping the expression in `Some`
+   |
+69 ~                 dir: Some(dir.ok_or_else(|| {
+70 |                     "sparq mod validate needs the package directory, e.g. \
+71 |                      `sparq mod validate instruments/my-fm-terrain`"
+72 |                         .to_string()
+73 ~                 })?),
+   |
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `sparq-app` (bin "sparq") due to 1 previous error
+
+ ============================================
+  BUILD FAILED
+ ============================================
+  If the error mentions `link.exe` or `linker not found`:
+    the MSVC C++ Build Tools are missing. Run scripts\setup.bat, or install
+    "Build Tools for Visual Studio" with the "Desktop development with C++"
+    workload, then open a NEW terminal and re-run this script.
+
+  If the error mentions `d3d12`, `dxgi` or `wgpu`:
+    the UI shell needs the DX12 backend; make sure the sync included
+    crates\sparq-app\Cargo.toml (the per-target wgpu features live there).
+
+  If the error mentions `alsa` or `pkg-config`:
+    you are not on Windows. On Linux install libasound2-dev and pkg-config.
+
+  If the error is `no method named` or `no field` for something that IS in the
+  file on disk: the cache and the tree disagreed. Run scripts\synccheck.bat, then
+  delete target\release and re-run this script (defect #78).
+
+  Anything else: copy the whole error into a message back to me.
+
+ log saved to Q:\morphosis\code\sparq\scripts\..\logs\build.log
+---- [RC 1] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+ BUILD FAILED - send test006.log back now.
+ " "
+ ================================================================
+ SUMMARY - test006 - 05/10/2026 16:37:21.74
+ ================================================================
+ [00b] tree matches SYNC-STAMP.txt : PASS rc=0
+ [01] build + stamp guard : FAIL rc=1
+ [07] param edit reached the render :
+ operator answers: A= B= C= D= E= F= G= H= I= J= K=
+ L= M= N= O= P= Q= R= S= T= U=
+ steps failing on rc: 1
+ " "
+ SEND BACK: the compact copies when they were made - test006-digest.log
+ and logs\ui-digest.log - else the full files. Verdict lines are
+ byte-identical in the copies; only repeated status lines collapse.
+ full paths: Q:\morphosis\code\sparq\test006.log  and  logs\ui.log
+ ================================================================

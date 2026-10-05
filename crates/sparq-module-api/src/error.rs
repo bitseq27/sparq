@@ -1,7 +1,9 @@
 //! Validation errors: a catalogue **derived** from the schema rather than accumulated by hand.
 //!
-//! `docs/api/manifest-schema.md` lists 19 codes that grew case-by-case as the design was written,
-//! which left two holes big enough to block WO-007's acceptance criteria: nothing rejected a
+//! `docs/api/manifest-schema.md` lists 25 catalogue codes: 19 that grew case-by-case as the
+//! design was written, and six contract v1.1 added for the instrument layer (`E-LAYER-MISMATCH`
+//! at WO-017's close, the five package/runtime codes WO-018 pre-registers). The original 19 left
+//! two holes big enough to block WO-007's acceptance criteria: nothing rejected a
 //! *missing* required field, and nothing rejected an invalid value for the ~20 closed vocabularies
 //! that had no code of their own (defect #55). Both are here as the five derived kinds, and the rule
 //! going forward is that a new field in `docs/api/manifest-fields.toml` brings its own codes with it
@@ -13,8 +15,12 @@
 
 use std::fmt;
 
-/// The kind of a validation failure. The first nineteen are the catalogue in
-/// `docs/api/manifest-schema.md`; the last five are derived (defect #55).
+/// The kind of a validation failure. The first twenty-five are the catalogue in
+/// `docs/api/manifest-schema.md` — nineteen accumulated case-by-case, `E-LAYER-MISMATCH` from
+/// contract v1.1's WO-017 close, and the five v1.1 package/runtime codes WO-018 pre-registers
+/// (the house precedent is pre-registered spellings: `E-TOUCH-CLASS-TOO-SMALL` and
+/// `E-WIDGET-KIND-UNKNOWN` shipped before widget validation existed, and the spellings are the
+/// frozen part — manifest-schema §7). The last five are derived (defect #55).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CodeKind {
@@ -56,6 +62,24 @@ pub enum CodeKind {
     LatencyUndeclared,
     /// `classification.layer = instrument` without `tier = t2` (ADR-010, contract v1.1).
     LayerMismatch,
+    /// An instrument package over the five-file cap (ADR-010 decision 5; manifest-schema §9's
+    /// package note). Wired by the WO-018 package model.
+    PackageFilecount,
+    /// A colour, size or duration literal where a token id is required (token-spec §3 rule 1,
+    /// extended to guests by ADR-010 decision 4). Registered at v1.1; policed by `sparq mod
+    /// validate`'s visual-conformance stage, which needs the runtime half (WO-018).
+    LiteralAppearance,
+    /// A display-list or scene-descriptor primitive outside the closed vocabularies (module-api
+    /// §10). Registered at v1.1; wired by the WO-018 visual-conformance stage.
+    DisplayPrimitiveUnknown,
+    /// A T2/T3 guest requesting a capability it did not declare. Registered at v1.1; wired by
+    /// the WO-018 runtime half — the static face is capability by *absence* (the WIT world has
+    /// no door for what was not declared; decision E).
+    CapabilityUndeclared,
+    /// A guest pinned to a token-bundle major the host does not speak (tokens.wit: refused at
+    /// load with words, never mis-themed silently). Registered at v1.1; wired by the WO-018
+    /// runtime half's load-time negotiation.
+    TokenBundleVersion,
     /// A key nobody declared. Typo protection.
     UnknownKey,
     /// **Derived.** A required field is absent: `E-KEY-MISSING:<path>`.
@@ -72,7 +96,7 @@ pub enum CodeKind {
 
 impl CodeKind {
     /// Every code kind, catalogue first and derived last.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 30] = [
         Self::IdDup,
         Self::IdUnstableRename,
         Self::PortTypeUnknown,
@@ -92,6 +116,11 @@ impl CodeKind {
         Self::WidgetKindUnknown,
         Self::LatencyUndeclared,
         Self::LayerMismatch,
+        Self::PackageFilecount,
+        Self::LiteralAppearance,
+        Self::DisplayPrimitiveUnknown,
+        Self::CapabilityUndeclared,
+        Self::TokenBundleVersion,
         Self::UnknownKey,
         Self::KeyMissing,
         Self::EnumUnknown,
@@ -123,6 +152,11 @@ impl CodeKind {
             Self::WidgetKindUnknown => "E-WIDGET-KIND-UNKNOWN",
             Self::LatencyUndeclared => "E-LATENCY-UNDECLARED",
             Self::LayerMismatch => "E-LAYER-MISMATCH",
+            Self::PackageFilecount => "E-PACKAGE-FILECOUNT",
+            Self::LiteralAppearance => "E-LITERAL-APPEARANCE",
+            Self::DisplayPrimitiveUnknown => "E-DISPLAY-PRIMITIVE-UNKNOWN",
+            Self::CapabilityUndeclared => "E-CAPABILITY-UNDECLARED",
+            Self::TokenBundleVersion => "E-TOKEN-BUNDLE-VERSION",
             Self::UnknownKey => "E-UNKNOWN-KEY",
             Self::KeyMissing => "E-KEY-MISSING",
             Self::EnumUnknown => "E-ENUM-UNKNOWN",
@@ -321,7 +355,7 @@ mod tests {
             assert!(!seen.contains(&p), "{p} is used by two kinds");
             seen.push(p);
         }
-        assert_eq!(seen.len(), 25, "the catalogue is 20 codes plus 5 derived");
+        assert_eq!(seen.len(), 30, "the catalogue is 25 codes plus 5 derived");
     }
 
     #[test]

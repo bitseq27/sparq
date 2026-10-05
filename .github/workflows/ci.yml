@@ -101,6 +101,17 @@ jobs:
       - name: Test (default features — no audio device required)
         run: cargo test --workspace
 
+      # WO-018: the instrument host. The default cells above ARE the feature-off acceptance
+      # criterion (the zero-dependency core build, this matrix and every golden are untouched by
+      # the crate); this cell proves the feature-ON half compiles, lints and tests. Linux only
+      # (the HAL's own split) — windows-crosscheck below covers the MSVC face without a Windows
+      # runner. wasmtime is exact-pinned (=49.0.2, root Cargo.toml) so this cell's cost is stable.
+      - name: Instrument host (feature-on cell)
+        if: runner.os == 'Linux'
+        run: |
+          cargo clippy -p sparq-host-wasm --features instrument-host --all-targets -- -D warnings
+          cargo test -p sparq-host-wasm --features instrument-host
+
       # WO-012: the shell. `ui` is the hermetic egui half (headless driver, audit); `ui-window`
       # adds winit + wgpu — on the Windows runner that is a NATIVE dx12-backend compile (the
       # closest thing to the SATURN build), on Linux the gles backend (the sandbox-fit cell),
@@ -135,6 +146,13 @@ jobs:
 
       - name: Release build
         run: cargo build --release --workspace
+
+      # WO-018: the release-binary smoke of the instrument door. An empty instruments/ is a legal
+      # state (the folder ships with only its layout README, which the door exempts); --strict
+      # makes the step fail if anything in it would not load — a misdropped package is a refusal,
+      # and a refusal is a failure.
+      - name: Instrument discovery smoke (release binary)
+        run: ./target/release/sparq mod list --strict
 
       - name: Golden reference matches (bit-exact on x86_64, rms/peak elsewhere)
         run: cargo test --release -p sparq-audio --test golden -- --nocapture
@@ -189,6 +207,14 @@ jobs:
         run: |
           cargo clippy --target x86_64-pc-windows-msvc -p sparq-kernel --features hal-wasapi --all-targets -- -D warnings
           cargo clippy --target x86_64-pc-windows-msvc -p sparq-app --features hal-wasapi --all-targets -- -D warnings
+
+      # WO-018: the instrument host's MSVC face (the HAL's own split — clippy, no link, no run).
+      # RECORDED UNMEASURED RISK (docs/instrument-host.md §8): wasmtime's build scripts under
+      # cross-clippy have never run anywhere; if they refuse, the documented fallback is
+      # feature-OFF MSVC clippy plus the feature-on Linux cell, and the narrowing is recorded
+      # there before it is applied.
+      - name: Clippy the instrument host for x86_64-pc-windows-msvc
+        run: cargo clippy --target x86_64-pc-windows-msvc -p sparq-host-wasm --features instrument-host --all-targets -- -D warnings
 
       # Default features on the Windows target is its own combination — defect #36 was code
       # gated on `cfg(windows)` whose dependency only exists under the feature, which no other

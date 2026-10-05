@@ -667,6 +667,7 @@ fn resources(root: &Table, r: &mut ValidationReport) -> ResourceDecl {
         return ResourceDecl::default();
     };
     check_keys(t, &RESOURCE_KEYS, "resources", r);
+    check_gpu_class(t, r);
     // `latency` is `int | "param:<id>"` in the schema: a constant, or a promise that it follows a
     // parameter (convolution, granular). Both forms are accepted; neither may be absent.
     let (latency_samples, latency_param) = match t.get("latency") {
@@ -692,6 +693,38 @@ fn resources(root: &Table, r: &mut ValidationReport) -> ResourceDecl {
         cpu_class: opt_str(t, "cpu_class", "resources.cpu_class", r),
         oversampling: opt_str(t, "oversampling", "resources.oversampling", r),
         requires: str_vec(t, "requires", "resources.requires", r),
+    }
+}
+
+/// Domain-checks `resources.gpu_class` at decode — the `displays` precedent, deliberately NOT
+/// modelled into [`ResourceDecl`]. The class is a closed v1.1 vocabulary (contract freeze,
+/// WO-017), but what the classes MEAN — the vertex/instance/heat-cell ceiling table — lives in
+/// `sparq-host-wasm::ceilings` (WO-018), and this crate does not depend on that one. A misspelled
+/// class must fail at discovery with the closed set named, not at the first draw call; the
+/// ceiling arithmetic stays on the host side. `cpu_class`/`mem_class` are diagnostics-only
+/// strings today (schema §8: "a module that lies shows up in diagnostics") and stay unmodelled
+/// until a scheduler consumes them.
+fn check_gpu_class(t: &Table, r: &mut ValidationReport) {
+    let Some(v) = t.get("gpu_class") else { return };
+    match v.as_str() {
+        Some(s) if crate::manifest::GPU_CLASSES.contains(&s) => {},
+        Some(s) => r.push(
+            ValidationError::new(
+                CodeKind::EnumUnknown,
+                "resources.gpu_class",
+                "use one of the renderer budget classes (manifest-schema §8) — the ceiling table is sparq-host-wasm::ceilings",
+            )
+            .with_found(s)
+            .with_allowed(crate::manifest::GPU_CLASSES.join(" ")),
+        ),
+        None => r.push(
+            ValidationError::new(
+                CodeKind::ValueMalformed,
+                "resources.gpu_class",
+                "gpu_class is a string from the closed vocabulary",
+            )
+            .with_found(v.type_name()),
+        ),
     }
 }
 
@@ -974,6 +1007,35 @@ supports_hot_reload = true
         };
         assert_eq!(v.id(), "you/syn/template");
         assert_eq!(v.layer(), crate::manifest::Layer::Instrument);
+    }
+
+    #[test]
+    fn gpu_class_is_domain_checked_at_decode() {
+        // WO-018: the renderer budget class is a closed v1.1 vocabulary. The check lives at
+        // decode (the `displays` precedent) because the ceiling TABLE lives in
+        // sparq-host-wasm::ceilings and this crate must not depend on it — but a misspelled
+        // class still has to fail at discovery, with the closed set named in the fix.
+        fn with_gpu(v: &str) -> String {
+            GAIN.replace(
+                "cpu_class = \"trivial\"",
+                &format!("cpu_class = \"trivial\"\ngpu_class = {v}"),
+            )
+        }
+        for ok in ["\"none\"", "\"light\"", "\"medium\"", "\"heavy\"", "\"very_heavy\""] {
+            let text = with_gpu(ok);
+            decode(&text).unwrap_or_else(|r| panic!("gpu_class = {ok} should decode: {r}"));
+        }
+        let bad = with_gpu("\"ultra\"");
+        let r = decode(&bad).unwrap_err();
+        let e = r.first_at("resources.gpu_class").unwrap();
+        assert_eq!(e.code(), "E-ENUM-UNKNOWN:resources.gpu_class");
+        assert!(e.to_string().contains("none light medium heavy very_heavy"), "{e}");
+        let wrong_type = with_gpu("3");
+        let r = decode(&wrong_type).unwrap_err();
+        assert_eq!(
+            r.first_at("resources.gpu_class").unwrap().code(),
+            "E-VALUE-MALFORMED:resources.gpu_class"
+        );
     }
 
     #[test]

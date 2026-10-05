@@ -4,7 +4,7 @@
 
 use std::process::ExitCode;
 
-use crate::{demo, devices, exec, modules, play, render, selftest, soak, ui};
+use crate::{demo, devices, exec, instruments, modules, play, render, selftest, soak, ui};
 
 /// Parsed `render` options.
 pub struct RenderOpts {
@@ -48,6 +48,11 @@ USAGE
                 [--backend offline|null|wasapi-exclusive|wasapi-shared] [--heavy N]
   sparq devices [--backend NAME] [--caps] [--conformance]
   sparq modules [--root DIR] [--strict]     discover modules/ and report every refusal verbatim
+  sparq mod validate DIR               the hand-in gate (MODULE-BUILD-GUIDE §7): static stages run,
+                                       runtime stages refuse in words; PARTIAL exits non-zero
+  sparq mod list [--root DIR] [--strict]
+                                       the launch view of instruments/: what loads, what is
+                                       refused and why, verbatim (WO-018)
   sparq exec    [--out FILE] [--seconds N] [--rate HZ] [--block N] [--patch demo|mod-demo|drum-demo]
                 [--format f32|pcm16|pcm24|pcm32]
                 render a patch through the WO-008 executor: registry → graph → WAV, no device
@@ -107,6 +112,7 @@ pub fn run(args: &[String]) -> Result<ExitCode> {
         "soak" => soak::run(parse_soak(rest)?),
         "devices" => devices::run(parse_devices(rest)?),
         "modules" => modules::run(modules::parse(rest)?),
+        "mod" => instruments::run(instruments::parse(rest)?),
         "exec" => exec::run(exec::parse(rest)?),
         "play" => play::run(parse_play(rest)?),
         "ui" => {

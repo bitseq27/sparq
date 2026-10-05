@@ -59,6 +59,14 @@ pub const STABILITIES: [&str; 3] = ["experimental", "stable", "deprecated"];
 pub const PARAM_TYPES: [&str; 6] = ["float", "int", "bool", "enum", "text", "blob"];
 /// `params[].morph`.
 pub const MORPHS: [&str; 2] = ["continuous", "discrete"];
+/// `resources.gpu_class` — the renderer's scene-data budget class (ADR-010; manifest-schema §8).
+/// The ceiling table that gives the classes meaning (vertex/instance/heat-cell caps) lives in
+/// `sparq-host-wasm::ceilings` (WO-018 — freeze debt #1 from the v1.1 close, settled as data);
+/// the SPELLINGS are the frozen part, drift-pinned against `docs/api/manifest-fields.toml` below
+/// and value-pinned in `tests/api_snapshot.rs`. Note the first class is `none`, not `trivial`:
+/// a module that emits no scene data at all is the common case, and the zero ceiling row cannot
+/// be honoured by a `scene` display — the validator refuses that combination in words.
+pub const GPU_CLASSES: [&str; 5] = ["none", "light", "medium", "heavy", "very_heavy"];
 /// `identity.summary` is one line, used in tooltips and search.
 pub const SUMMARY_MAX_CHARS: usize = 120;
 /// The most ports a module may declare in v0.
@@ -1406,6 +1414,40 @@ mod tests {
         assert_eq!(
             table, code,
             "classification.layer drifted between the table and LAYERS — defect #84's class"
+        );
+    }
+
+    #[test]
+    fn the_gpu_class_vocabulary_matches_the_field_table() {
+        // The same pin as LAYERS and TOPS (defect #84's class): the closed domain of
+        // resources.gpu_class exists in TWO copies — the table's `domain` row and [`GPU_CLASSES`].
+        // The ceiling NUMBERS live in a third place (`sparq-host-wasm::ceilings`) and are pinned
+        // there; this test pins the spellings, which are the frozen contract part.
+        use crate::toml::Value;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/api/manifest-fields.toml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let root = crate::toml::parse(&text).unwrap();
+        let row = root
+            .tables("field")
+            .unwrap()
+            .into_iter()
+            .find(|t| t.get("path").and_then(Value::as_str) == Some("resources.gpu_class"))
+            .expect("the field table lost the resources.gpu_class row");
+        let mut table: Vec<String> = row
+            .get("domain")
+            .and_then(Value::as_array)
+            .expect("resources.gpu_class lost its domain")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        let mut code: Vec<String> = GPU_CLASSES.iter().map(|s| (*s).to_string()).collect();
+        table.sort();
+        code.sort();
+        assert_eq!(
+            table, code,
+            "resources.gpu_class drifted between the table and GPU_CLASSES — defect #84's class"
         );
     }
 

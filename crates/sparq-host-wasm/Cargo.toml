@@ -1,0 +1,29 @@
+[package]
+name = "sparq-host-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The instrument host (WO-018): the five-file package model, drop-in discovery, the hand-in gate's static stages, and the gpu_class ceiling table"
+
+[dependencies]
+# The contract crate is the only dependency of the static half. Everything here — package model,
+# discovery, ceilings, the validator's stages 1/2/5-static/7 — runs with zero third-party crates,
+# which is what lets acceptance criterion 2 ("default `cargo test --workspace` passes with the
+# feature off") mean something: the gate is testable on a runner that will never host a sandbox.
+sparq-module-api.workspace = true
+
+# wasmtime rides the `instrument-host` feature and nothing else (ADR-010's consequence: feature-
+# gated exactly like egui/wgpu). Exact-pinned at the workspace level; see the root Cargo.toml for
+# the rationale. The runtime half (loader, fuel, hot reload, stages 3/4/6) lands behind this
+# feature — `docs/instrument-host.md` carries the design and the test plan.
+wasmtime = { workspace = true, optional = true }
+
+[features]
+default = []
+# The wasm runtime. OFF by default: the zero-dependency core build, the CI default cells and
+# every golden stay untouched without it.
+instrument-host = ["dep:wasmtime"]
+
+[lints]
+workspace = true

@@ -6,7 +6,43 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-10-05, END of fourteenth session (Linux sandbox box) — the **WO-017
+**Last updated:** 2026-10-05, END of sixteenth session (Linux sandbox box) — the **WO-018
+REBUILD round: the zero-dependency half BUILT and measured green**. The session opened on a
+fresh clone of the re-publicised origin (`6681f87`) and confirmed the loss with evidence: the
+round-7 PROSE (`ROUND7-HANDOFF.md`, `WO018-STATE.md`) had reached origin, but the round-7 CODE
+had not — the uncommitted WO-018 tree died with its sandbox (ROUND5 §3.1's defect class; no
+bundle carries it: round 7 made zero commits by design). Rebuilt from the handoff + state card +
+ticket + the frozen contract on the round-4 precedent (`READ-ME-FIRST.txt`), keeping all seven
+recorded ROUND7 judgement calls, then did what round 7 never could — **compile and gate it**:
+environment from nothing (rust 1.99 standalone + zigcc-direct + the MSVC std face), pristine
+baseline measured BEFORE any edit (**909/0/1-ignored** = the round-6 seal, exactly), then the
+full inventory rebuilt: `sparq-host-wasm` (the five-file package model + the
+`E-PACKAGE-FILECOUNT` cap, launch-vs-strict profiles, sorted discovery + loose-file words, the
+`gpu_class` ceiling table = **freeze debt #1 CLOSED as data**, the §7 gate's static stages with
+the runtime stages REFUSED IN WORDS — the PARTIAL verdict), `sparq mod validate` (PARTIAL exits
+non-zero: a partial gate is not a hand-in) / `sparq mod list [--root] [--strict]` (the CI
+smoke), the catalogue **25→30** (five v1.1 codes pre-registered; `E-PACKAGE-FILECOUNT` wired),
+`check_gpu_class` at decode + the `GPU_CLASSES` drift/value pins + the field-table domain row,
+`instruments/` + its README, `docs/instrument-host.md` (loader architecture, fuel/epoch↔watchdog,
+the **two-instance ordering = freeze debt #2 CLOSED as spec**, the code-wiring matrix, the
+runtime test plan, §8's blockage record + retry recipe), the CI cells (feature-on Linux + MSVC
+crosscheck — both recorded NEVER-MEASURED with the narrowed risk + documented fallback).
+**Gates (measured):** `cargo test --workspace` **925/0/1-ignored** (+16 = the state card's
+itemised expectation exactly), fmt + clippy `-D warnings` CLEAN (workspace, all targets), **all
+default-feature MSVC crosscheck cells CLEAN** (module-api, host-wasm, music, kernel, audio, ui,
+app), python gates clean, `module_docs` **24/24**, `mod list --strict` exit 0, WIT pins
+UNTOUCHED and passing (the rebuild touched no frozen surface), `sync_check` FAIL-BY-DESIGN
+(15 files; the device re-stamps). **The wasmtime probe, measured:** the dependency tree checks
+green to `cranelift-codegen`, then OOM SIGKILL at 4 m 21 s — the blockage is this sandbox's
+1.06 GB categorically (swap refused, EPERM; threads healthy throughout), NOT the pin, NOT the
+code: the runtime half is deferred to a ≥ 2 GB host (device/CI) with the recipe in
+`docs/instrument-host.md` §8. Committed in the recipe's four increments (`450c38b`, `7eee56b`,
+`b3f2091`, `51b25aa`), bundled after each; no operator rulings were needed (the eight NEW
+judgement calls are flagged in `ROUND8-HANDOFF.md` §4). Round-4 device obligations stand
+untouched. **Next: the WO-018 runtime increment** (`docs/instrument-host.md` §2–§4 + §7's test
+plan, on a ≥ 2 GB host), then WO-019. Full record: `ROUND8-HANDOFF.md`.
+
+**Previous update:** 2026-10-05, END of fourteenth session (Linux sandbox box) — the **WO-017
 CLOSE round: contract v1.1 FROZEN**. Fresh clone of the round-5 tree from the re-publicised
 origin, environment rebuilt from nothing (ROUND5-HANDOFF §7), baseline measured green BEFORE any
 edit (899/0/1-ignored, python gates clean). **Four operator rulings** (question tool,

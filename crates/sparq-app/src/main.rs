@@ -25,6 +25,7 @@ mod cli;
 mod demo;
 mod devices;
 mod exec;
+mod instruments;
 mod modules;
 mod play;
 

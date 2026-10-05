@@ -480,6 +480,9 @@ required = false
 path = "resources.gpu_class"
 type = "enum"
 required = false
+domain = ["none","light","medium","heavy","very_heavy"]
+note = "renderer scene-data budget class; the ceiling table (vertex/instance/heat-cell caps) is sparq-host-wasm::ceilings (WO-018); `scene` displays require a class above none"
+on_violation = ["E-ENUM-UNKNOWN*"]
 [[field]]
 path = "resources.oversampling"
 type = "enum"

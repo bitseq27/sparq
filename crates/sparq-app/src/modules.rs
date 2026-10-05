@@ -156,7 +156,7 @@ fn print_report(report: &DiscoveryReport, root: &Path) {
         for s in &shadowed {
             println!("    {} — {} wins, hiding {}", s.id, s.kept, s.hidden.join(", "));
         }
-        println!("  (precedence is built-in > user modules/ > project-local > registry cache)");
+        println!("  (precedence is built-in > user modules/ > project-local > instruments/ > registry cache)");
     }
     let _ = root;
 }

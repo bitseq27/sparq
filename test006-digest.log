@@ -1,5 +1,5 @@
-==== DIGEST of test006.log - tools/log_digest.py 2026-10-03 ====
-  source 4391 lines -> digest 4331 body lines; collapsed: 0 periodic, 72 cargo, 0 duplicate
+==== DIGEST of test006.log - tools/log_digest.py 2026-10-05 ====
+  source 4851 lines -> digest 4764 body lines; collapsed: 0 periodic, 103 cargo, 0 duplicate
   every line outside a collapsed run is reproduced byte-identical; collapsed periodic
   runs keep their first 2 and last 2 lines. The full log stays on disk beside this file.
  
@@ -4334,5 +4334,438 @@ sync_check: FAIL - this tree is NOT sync sync-ui-round-2026-10-01 (23 file(s) di
  L= M= N= O= P= Q= R= S= T= U=
  steps failing on rc: 2
  " "
+ SEND BACK: the compact copies when they were made - test006-digest.log
+ and logs\ui-digest.log - else the full files. Verdict lines are
+ byte-identical in the copies; only repeated status lines collapse.
+ full paths: Q:\morphosis\code\sparq\test006.log  and  logs\ui.log
+ ================================================================
+
+===== test006 RUN 03/10/2026 11:23:54.08 on SATURN user bitseq =====
+ ================================================================
+ sparq test006 - round 4 + WO-013 inc 3+4+5 and WO-012 inc 2: browser, inspector, levels, rename, scroll, LOD, LIVE audio, round-4 asks
+ at the end you send back ONE file: test006.log from the repo root
+ ================================================================
+ " "
+ [00] environment
+
+---- [RUN] os version ----
+
+Microsoft Windows [Version 10.0.19045.6216]
+---- [RC 0] os version ----
+ tree clean, no stray artefacts
+ " "
+ [00b] sync stamp - every file that decides the binary, hashed against
+ SYNC-STAMP.txt. A FAIL here names files; it is never a rustc error.
+
+---- [RUN] sync check - tools\sync_check.py ----
+sync_check: OK - sync sync-ui-round-2026-10-03 (sent unsent)
+  162 of 162 stamped files match byte-for-byte
+  src fingerprint 96f/2694477B - matches the stamp
+  no extras, no line-ending drift, nothing soft differing
+---- [RC 0] sync check - tools\sync_check.py ----
+ " "
+ [01] build - the five first-party crates always recompile now, so that a
+ zip-restored mtime can never serve the last increment's rlib.
+
+---- [RUN] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+sync_check: OK - 162 files match sync sync-ui-round-2026-10-03, src 96f/2694477B
+ note: tree content changed since the last good build - the five first-party
+ fingerprints are cleared, so cargo cannot serve a crate from the last sync.
+ building sparq.exe (release, hal-wasapi + bootstrap-audio + ui-window) ...
+ first build takes a few minutes (wgpu is big); later builds are incremental.
+
+  ---- digest: 6 cargo build lines collapsed ----
+    Finished `release` profile [optimized + debuginfo] target(s) in 34.83s
+ stamp guard: sources 96f/2694477B  -  binary 96f/2694477B
+
+sparq 0.0.0-phase0 · newest source 20728 d since epoch · src 96f/2694477B
+  module api v0 (unfrozen) · kernel 0.0.0-phase0
+
+  If that source stamp is older than your last sync, this binary is stale.
+  Fix: run scripts\build.bat, or delete target\release\sparq.exe.
+
+ built: Q:\morphosis\code\sparq\target\release\sparq.exe
+ size : 10356736 bytes
+
+ next:  scripts\devices.bat   then   scripts\run.bat
+
+ log saved to Q:\morphosis\code\sparq\scripts\..\logs\build.log
+---- [RC 0] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+
+---- [RUN] version stamp ----
+sparq 0.0.0-phase0 · newest source 20728 d since epoch · src 96f/2694477B
+  module api v0 (unfrozen) · kernel 0.0.0-phase0
+
+  If that source stamp is older than your last sync, this binary is stale.
+  Fix: run scripts\build.bat, or delete target\release\sparq.exe.
+---- [RC 0] version stamp ----
+ " "
+ [02] module registry - the twenty-four manifests, strict
+
+---- [RUN] modules --strict ----
+sparq modules: scanning `modules` — 24 manifest(s) found
+  loaded 24:
+    sparq/ana/rms                      v0.2.0      2 ports, 2 params
+    sparq/ana/tap                      v0.1.0      4 ports, 1 params
+    sparq/dsp/scope                    v0.1.0      2 ports, 5 params
+    sparq/env/ad                       v0.1.0      2 ports, 4 params
+    sparq/flt/svf                      v0.2.0      3 ports, 4 params
+    sparq/fx/bitcrush                  v0.1.0      2 ports, 4 params
+    sparq/fx/fold                      v0.1.0      2 ports, 1 params
+    sparq/mod/clk                      v0.2.0      5 ports, 1 params
+    sparq/mod/clk-div                  v0.1.0      2 ports, 3 params
+    sparq/mod/lfo                      v0.2.0      2 ports, 5 params
+    sparq/mod/rand                     v0.1.0      4 ports, 2 params
+    sparq/mod/seq                      v0.2.0      3 ports, 2 params
+    sparq/out/main                     v0.1.0      2 ports, 2 params
+    sparq/syn/membrane                 v0.1.0      2 ports, 5 params
+    sparq/syn/noise                    v0.1.0      1 ports, 2 params
+    sparq/syn/polyblep                 v0.1.0      1 ports, 5 params
+    sparq/syn/sine                     v0.1.0      1 ports, 2 params
+    sparq/util/delay                   v0.3.0      3 ports, 6 params
+    sparq/util/gain                    v0.1.0      2 ports, 1 params
+    sparq/util/mixer                   v0.2.0      13 ports, 24 params
+    sparq/util/mult                    v0.1.0      6 ports, 0 params
+    sparq/util/panner                  v0.1.0      2 ports, 2 params
+    sparq/util/quant                   v0.1.0      3 ports, 2 params
+    sparq/util/vca                     v0.2.0      3 ports, 1 params
+---- [RC 0] modules --strict ----
+ " "
+ [03] offline render - the exec demo chain, 5 s, no device
+
+---- [RUN] exec --out exec.wav --seconds 5 ----
+sparq exec · WO-008 executor render · patch `demo`
+  registry    24 built-in module(s) compiled in
+  discovery   24 manifest(s) scanned under `modules` · 24 shadowed by built-ins · 0 without a factory
+  patch       sine(440 Hz, 0.5) → gain(0.5) → master · rms analysis tap · 3 node(s), 2 edge(s)
+  budget      1796 bytes of audio buffers, all pre-allocated
+  meters      rms tap value Some(0.16621882) (0.25 amp sine, 0.59-cycle window → ≈ 0.16..0.19) · master peak Some(0.24996915) rms Some(0.16621882)
+  rendered    3750 blocks · 240000 frames · hash d46736fd9a1c48a1
+  wrote       exec.wav (1920000 bytes of sample data, f32 · 240000 frames × 2 ch)
+exec: PASS
+---- [RC 0] exec --out exec.wav --seconds 5 ----
+ " "
+ [04] canvas bridge - the audit drives synthetic touch through 59 smokes,
+ including the five live-session ones: PLAY on the manual null device,
+ a live param edit crossing the command ring with the level FOLLOWING,
+ a live structural edit re-staging at the boundary, the STOP evidence
+ line, and an unplug ending the session with the canvas untouched.
+ Its RENDER WAV smoke writes canvas-render.wav
+ at MANIFEST DEFAULTS - the baseline for step [07].
+
+---- [RUN] ui --audit - 59 smokes incl. rename, cv levels, scroll, LOD, live, scope, chrome, mouse, round-4 wells, cable nodes ----
+sparq exec · WO-008 executor render · patch `demo`
+  registry    24 built-in module(s) compiled in
+  discovery   24 manifest(s) scanned under `modules` · 24 shadowed by built-ins · 0 without a factory
+  patch       sine(440 Hz, 0.5) → gain(0.5) → master · rms analysis tap · 3 node(s), 2 edge(s)
+  budget      1796 bytes of audio buffers, all pre-allocated
+  meters      rms tap value Some(0.16621882) (0.25 amp sine, 0.59-cycle window → ≈ 0.16..0.19) · master peak Some(0.24996915) rms Some(0.16621882)
+  rendered    3750 blocks · 240000 frames · hash d46736fd9a1c48a1
+  wrote       exec.wav (1920000 bytes of sample data, f32 · 240000 frames × 2 ch)
+exec: PASS
+---- [RC 0] ui --audit - 59 smokes incl. rename, cv levels, scroll, LOD, live, scope, chrome, mouse, round-4 wells, cable nodes ----
+ " "
+ [05] baseline - hash the default-param render and keep a copy to A/B listen
+ canvas-render.wav MISSING - step 04 did not write; step 07 will say CANNOT-CHECK.
+ " "
+ [06] WINDOW SESSION - the window opens when you press a key. In it:
+ A. long-press the EMPTY canvas - tap ADD MODULE - type sine on the
+ keyboard - tap the Sine row. A Sine node appears where you pressed.
+ B. tap the new Sine node - the INSPECTOR shows Frequency and
+ Amplitude - drag the Frequency slider. The value follows your
+ finger; the log band reports Frequency = ... Hz when you lift.
+ C. long-press the empty canvas - tap RENDER WAV. This overwrites
+ canvas-render.wav WITH YOUR EDIT - step [07] hashes it.
+ D. drag the small ring near a wire END onto another port - the wire
+ moves. Three-finger tap - it returns, same wire.
+ E. three-finger tap again - the slider drag undoes, value returns.
+ F. long-press a NODE - tap RENAME - type a name - press ENTER:
+ the header shows it. Three-finger tap: the old name is back.
+ Reopen RENAME, press ESC or tap outside: cancels, name kept.
+ G. add a Mixer via the browser, tap it: 20 rows, the last ones
+ clipped. Two-finger drag UP inside the panel: the rows scroll,
+ the thin thumb at the right edge moves, the CANVAS does not.
+ H. bypass a node from its menu, then pinch two fingers together
+ on the canvas to zoom out: first the boxes lose ALL text -
+ states ride patterns now: hatched body = bypassed, dashed
+ border = muted, double border = locked, header chip = master.
+ Pinch further: dots and HAIRLINE wires; the bypassed dot is a
+ hollow ring. Compare with design\mockups\design-mode.svg and
+ write what differs into the H answer below.
+ I. wire the thesis chain: spawn an SVF via the browser, drag
+ gain OUT to svf IN, drag rms LEVEL to svf CUTOFF-MOD, then
+ long-press empty canvas - RENDER WAV. The cyan cv wire lights
+ from the rms value; the audio wires light as before.
+ J. LIVE AUDIO, the WO-012 inc2 acceptance: tap PLAY on the rail.
+ The log names the backend, the NEGOTIATED rate and the latency;
+ you HEAR the patch through the device - shared mode, about
+ 22.67 ms - and the wires animate CONTINUOUSLY from the engine's
+ own meters while it plays, not only after RENDER WAV.
+ K. while it plays: drag a slider - the sound changes LIVE, no stop,
+ no click at the moment of the edit; drag a new wire - it goes
+ audible at the next block boundary. Tap STOP: sound stops and
+ the evidence line names blocks, xruns, swaps and allocations.
+ L. THE CLIP LED: make the patch hot - raise a gain until the master
+ meter pins. A red cap rides the bar tops and the CLIP word shows
+ on the info band WHILE it plays; the latch holds; STOP clears it.
+ M. Add mod/clk: four rings - 4th, 8th, 16th, 32nd - left of the outs.
+ Under PLAY all four turn, the outer fastest; at rest they stand
+ still at twelve o'clock.
+ N. Add mod/seq, wire the clock in: under PLAY a cursor cell walks the
+ sixteen step buttons - the walking light rides OVER the pattern
+ fill, both readable. Add mod/rand: bars with a lit cursor bar;
+ the same seed shows the same bars - the display is the module.
+ O. Add util/quant, wire a pitch through it: the card shows a 12-key
+ keyboard; the current scale's keys are filled; a passing pitch
+ lights its key. Tap a key: in Custom the membership flips; under
+ a preset scale the tap REFUSES in words that name the remedy.
+ P. THE CABLE NODE: hover a wire - a ghost dot at its midpoint. Tap -
+ the node appears and NOTHING is heard: identity renders bit-
+ identical. Drag up/down: amp, and you hear it. Drag left/right:
+ offset - on an AUDIO wire that axis is inert by rule, DC never
+ enters the audio path, and the log says so. Tap the node: gone;
+ one three-finger tap restores; one undo per whole drag.
+ Q. util/mult: the card is a QUARTER width with no words, six dots in
+ one centred column; fan one source out to two and back.
+ R. Wire lfo OUT to vca CV: the connect is ACCEPTED - round 3 refused
+ it, round 4 fixed the manifest - and the tremolo is audible
+ under PLAY.
+ S. fx/fold: put it in the chain and raise amount - the sound blooms
+ into the fold; at zero it is a wire.
+ T. ana/rms: the rolling level graph beside the floor bar under PLAY -
+ a 240-frame window, cleared at session start. flt/svf: wire a cv
+ to cutoff-mod and watch the response curve MOVE with it.
+ U. Round-4 chrome: event cables are SOLID magenta - no dash - while
+ control wires stay dashed cyan, and ports float 6 px beside the
+ card edge.
+ WITH A MOUSE, if one is handy: right-click a node opens its menu
+ where a finger long-presses; the wheel scrolls the inspector over
+ the panel and pans the canvas over the canvas; plain hover is
+ silent. Write what felt wrong into the K answer too.
+ OPTIONAL, only with a spare cable: unplug the output device
+ mid-play - one honest Removed line, the session ends, and the
+ canvas is untouched. Write what you heard into the J/K answers.
+ Then close the window; the script continues by itself.
+ Over RDP the rasteriser is WARP - slow but functional; the 60 fps
+ claim waits for the physical screen, as always.
+ operator opened the window session
+
+===== test006 RUN 05/10/2026 16:36:29.97 on SATURN user bitseq =====
+ ================================================================
+ sparq test006 - round 4 + WO-013 inc 3+4+5 and WO-012 inc 2: browser, inspector, levels, rename, scroll, LOD, LIVE audio, round-4 asks
+ at the end you send back ONE file: test006.log from the repo root
+ ================================================================
+ " "
+ [00] environment
+
+---- [RUN] os version ----
+
+Microsoft Windows [Version 10.0.19045.6216]
+---- [RC 0] os version ----
+ tree clean, no stray artefacts
+ " "
+ [00b] sync stamp - every file that decides the binary, hashed against
+ SYNC-STAMP.txt. A FAIL here names files; it is never a rustc error.
+
+---- [RUN] sync check - tools\sync_check.py ----
+sync_check: OK - sync sparq-wo018-rebuild-2026-10-05 (sent unsent)
+  163 of 163 stamped files match byte-for-byte
+  src fingerprint 97f/2731971B - matches the stamp
+  no extras, no line-ending drift, nothing soft differing
+---- [RC 0] sync check - tools\sync_check.py ----
+ " "
+ [01] build - the five first-party crates always recompile now, so that a
+ zip-restored mtime can never serve the last increment's rlib.
+
+---- [RUN] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+sync_check: OK - 163 files match sync sparq-wo018-rebuild-2026-10-05, src 97f/2731971B
+ note: tree content changed since the last good build - the five first-party
+ fingerprints are cleared, so cargo cannot serve a crate from the last sync.
+ building sparq.exe (release, hal-wasapi + bootstrap-audio + ui-window) ...
+ first build takes a few minutes (wgpu is big); later builds are incremental.
+
+  ---- digest: 10 cargo build lines collapsed ----
+warning: unused import: `sparq_module_api::manifest::GPU_CLASSES`
+  --> crates\sparq-host-wasm\src\ceilings.rs:26:5
+   |
+26 | use sparq_module_api::manifest::GPU_CLASSES;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sparq-host-wasm` (lib) generated 1 warning (run `cargo fix --lib -p sparq-host-wasm` to apply 1 suggestion)
+  ---- digest: 8 cargo build lines collapsed ----
+error[E0308]: `?` operator has incompatible types
+  --> crates\sparq-app\src\instruments.rs:69:22
+   |
+69 |                   dir: dir.ok_or_else(|| {
+   |  ______________________^
+70 | |                     "sparq mod validate needs the package directory, e.g. \
+71 | |                      `sparq mod validate instruments/my-fm-terrain`"
+72 | |                         .to_string()
+73 | |                 })?,
+   | |___________________^ expected `Option<String>`, found `String`
+   |
+   = note: `?` operator cannot convert from `String` to `Option<String>`
+   = note: expected enum `Option<String>`
+            found struct `String`
+help: try wrapping the expression in `Some`
+   |
+69 ~                 dir: Some(dir.ok_or_else(|| {
+70 |                     "sparq mod validate needs the package directory, e.g. \
+71 |                      `sparq mod validate instruments/my-fm-terrain`"
+72 |                         .to_string()
+73 ~                 })?),
+   |
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `sparq-app` (bin "sparq") due to 1 previous error
+
+ ============================================
+  BUILD FAILED
+ ============================================
+  If the error mentions `link.exe` or `linker not found`:
+    the MSVC C++ Build Tools are missing. Run scripts\setup.bat, or install
+    "Build Tools for Visual Studio" with the "Desktop development with C++"
+    workload, then open a NEW terminal and re-run this script.
+
+  If the error mentions `d3d12`, `dxgi` or `wgpu`:
+    the UI shell needs the DX12 backend; make sure the sync included
+    crates\sparq-app\Cargo.toml (the per-target wgpu features live there).
+
+  If the error mentions `alsa` or `pkg-config`:
+    you are not on Windows. On Linux install libasound2-dev and pkg-config.
+
+  If the error is `no method named` or `no field` for something that IS in the
+  file on disk: the cache and the tree disagreed. Run scripts\synccheck.bat, then
+  delete target\release and re-run this script (defect #78).
+
+  Anything else: copy the whole error into a message back to me.
+
+ log saved to Q:\morphosis\code\sparq\scripts\..\logs\build.log
+---- [RC 1] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+ BUILD FAILED - send test006.log back now.
+ " "
+ ================================================================
+ SUMMARY - test006 - 05/10/2026 16:36:59.78
+ ================================================================
+ [00b] tree matches SYNC-STAMP.txt : PASS rc=0
+ [01] build + stamp guard : FAIL rc=1
+ [07] param edit reached the render :
+ operator answers: A= B= C= D= E= F= G= H= I= J= K=
+ L= M= N= O= P= Q= R= S= T= U=
+ steps failing on rc: 1
+ " "
+ SEND BACK: the compact copies when they were made - test006-digest.log
+ and logs\ui-digest.log - else the full files. Verdict lines are
+ byte-identical in the copies; only repeated status lines collapse.
+ full paths: Q:\morphosis\code\sparq\test006.log  and  logs\ui.log
+ ================================================================
+
+===== test006 RUN 05/10/2026 16:37:15.76 on SATURN user bitseq =====
+ ================================================================
+ sparq test006 - round 4 + WO-013 inc 3+4+5 and WO-012 inc 2: browser, inspector, levels, rename, scroll, LOD, LIVE audio, round-4 asks
+ at the end you send back ONE file: test006.log from the repo root
+ ================================================================
+ " "
+ [00] environment
+
+---- [RUN] os version ----
+
+Microsoft Windows [Version 10.0.19045.6216]
+---- [RC 0] os version ----
+ tree clean, no stray artefacts
+ " "
+ [00b] sync stamp - every file that decides the binary, hashed against
+ SYNC-STAMP.txt. A FAIL here names files; it is never a rustc error.
+
+---- [RUN] sync check - tools\sync_check.py ----
+sync_check: OK - sync sparq-wo018-rebuild-2026-10-05 (sent unsent)
+  163 of 163 stamped files match byte-for-byte
+  src fingerprint 97f/2731971B - matches the stamp
+  no extras, no line-ending drift, nothing soft differing
+---- [RC 0] sync check - tools\sync_check.py ----
+ " "
+ [01] build - the five first-party crates always recompile now, so that a
+ zip-restored mtime can never serve the last increment's rlib.
+
+---- [RUN] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+sync_check: OK - 163 files match sync sparq-wo018-rebuild-2026-10-05, src 97f/2731971B
+ note: tree content changed since the last good build - the five first-party
+ fingerprints are cleared, so cargo cannot serve a crate from the last sync.
+ building sparq.exe (release, hal-wasapi + bootstrap-audio + ui-window) ...
+ first build takes a few minutes (wgpu is big); later builds are incremental.
+
+  ---- digest: 7 cargo build lines collapsed ----
+warning: unused import: `sparq_module_api::manifest::GPU_CLASSES`
+  --> crates\sparq-host-wasm\src\ceilings.rs:26:5
+   |
+26 | use sparq_module_api::manifest::GPU_CLASSES;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sparq-host-wasm` (lib) generated 1 warning (run `cargo fix --lib -p sparq-host-wasm` to apply 1 suggestion)
+error[E0308]: `?` operator has incompatible types
+  --> crates\sparq-app\src\instruments.rs:69:22
+   |
+69 |                   dir: dir.ok_or_else(|| {
+   |  ______________________^
+70 | |                     "sparq mod validate needs the package directory, e.g. \
+71 | |                      `sparq mod validate instruments/my-fm-terrain`"
+72 | |                         .to_string()
+73 | |                 })?,
+   | |___________________^ expected `Option<String>`, found `String`
+   |
+   = note: `?` operator cannot convert from `String` to `Option<String>`
+   = note: expected enum `Option<String>`
+            found struct `String`
+help: try wrapping the expression in `Some`
+   |
+69 ~                 dir: Some(dir.ok_or_else(|| {
+70 |                     "sparq mod validate needs the package directory, e.g. \
+71 |                      `sparq mod validate instruments/my-fm-terrain`"
+72 |                         .to_string()
+73 ~                 })?),
+   |
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `sparq-app` (bin "sparq") due to 1 previous error
+
+ ============================================
+  BUILD FAILED
+ ============================================
+  If the error mentions `link.exe` or `linker not found`:
+    the MSVC C++ Build Tools are missing. Run scripts\setup.bat, or install
+    "Build Tools for Visual Studio" with the "Desktop development with C++"
+    workload, then open a NEW terminal and re-run this script.
+
+  If the error mentions `d3d12`, `dxgi` or `wgpu`:
+    the UI shell needs the DX12 backend; make sure the sync included
+    crates\sparq-app\Cargo.toml (the per-target wgpu features live there).
+
+  If the error mentions `alsa` or `pkg-config`:
+    you are not on Windows. On Linux install libasound2-dev and pkg-config.
+
+  If the error is `no method named` or `no field` for something that IS in the
+  file on disk: the cache and the tree disagreed. Run scripts\synccheck.bat, then
+  delete target\release and re-run this script (defect #78).
+
+  Anything else: copy the whole error into a message back to me.
+
+ log saved to Q:\morphosis\code\sparq\scripts\..\logs\build.log
+---- [RC 1] build via scripts\build.bat - sync check, fingerprint purge, stamp guard ----
+ BUILD FAILED - send test006.log back now.
+ " "
+ ================================================================
+ SUMMARY - test006 - 05/10/2026 16:37:21.74
+ ================================================================
+ [00b] tree matches SYNC-STAMP.txt : PASS rc=0
+ [01] build + stamp guard : FAIL rc=1
+ [07] param edit reached the render :
+ operator answers: A= B= C= D= E= F= G= H= I= J= K=
+ L= M= N= O= P= Q= R= S= T= U=
+ steps failing on rc: 1
+ " "
  
-==== END DIGEST of test006.log (source had 4391 lines) ====
+==== END DIGEST of test006.log (source had 4851 lines) ====

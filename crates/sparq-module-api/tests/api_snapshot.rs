@@ -102,6 +102,10 @@ const _: fn(&str) -> Option<ParamKind> = ParamKind::parse;
 // these pins are its frozen face. The value pin on LAYERS means even the SPELLINGS cannot move
 // without this file moving in the same commit.
 const _: [&str; 2] = sparq_module_api::manifest::LAYERS;
+// The renderer budget classes (WO-018 — the ceiling table itself lives in sparq-host-wasm, and
+// the spellings are the frozen part): value-pinned on the LAYERS precedent, so even a spelling
+// cannot move without this file moving in the same commit.
+const _: [&str; 5] = sparq_module_api::manifest::GPU_CLASSES;
 const _: fn(&str) -> Option<sparq_module_api::manifest::Layer> =
     sparq_module_api::manifest::Layer::parse;
 const _: fn(sparq_module_api::manifest::Layer) -> &'static str =

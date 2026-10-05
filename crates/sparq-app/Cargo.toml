@@ -12,6 +12,7 @@ sparq-audio.workspace = true
 sparq-ui.workspace = true
 sparq-module-api.workspace = true
 sparq-music.workspace = true
+sparq-host-wasm.workspace = true
 cpal = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }
 egui-winit = { workspace = true, optional = true }
@@ -38,6 +39,11 @@ hal-wasapi = ["sparq-kernel/hal-wasapi"]
 # superset so `--features ui-window` alone is enough to build the real thing.
 ui = ["dep:egui"]
 ui-window = ["ui", "dep:winit", "dep:egui-winit", "dep:egui-wgpu", "dep:wgpu", "dep:pollster"]
+# WO-018: the instrument host's runtime half (wasmtime). Pure passthrough to sparq-host-wasm's
+# own feature — the app crate holds no wasmtime code of its own, and the default build stays
+# zero-dependency: `sparq mod validate`/`list` work without it, refusing the runtime stages in
+# words. scripts\build.bat enables it alongside the audio features.
+instrument-host = ["sparq-host-wasm/instrument-host"]
 
 # The renderer backend is a per-target choice, made here and nowhere else:
 #   Windows  -> wgpu dx12  (the stage OS is Windows; DX12 also means WARP works over RDP,
