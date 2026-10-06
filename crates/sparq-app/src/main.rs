@@ -43,6 +43,7 @@ mod render;
 mod selftest;
 mod soak;
 mod stamp;
+mod streams;
 mod ui;
 
 use std::process::ExitCode;

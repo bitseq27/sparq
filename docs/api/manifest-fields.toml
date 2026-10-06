@@ -508,12 +508,13 @@ flag = "RESOLVED (was G10, which this row mis-numbered as G8). Sub-block process
 path = "ui.panel.widgets[]"
 type = "{kind, param|port|display, x, y, w, h, touch_class, visible_if}"
 required = false
-note = "absent => the shell auto-generates a panel from params"
+note = "absent => the shell auto-generates a panel from params. `visible_if` (WO-020 / ADR-011, plan D7): an OPTIONAL conditional-visibility predicate, `{ param = \"<id>\", equals = <value> }` — v1 is ONE equality on ONE param (an enum option index, a float within 1e-6, or a bool as 0.0/1.0); the widget shows only when the named param equals the value. This is how sixteen per-cell STREAM pickers read as one dropdown editing the selected cell. The decoder shape-checks it; `sparq mod validate` stage 1 cross-checks that `visible_if.param` is a declared param (E-CROSS-FIELD). Anything richer (AND/OR, ranges) is a later minor."
 domain_kind = ["slider","knob","xy_pad","matrix","enum_select","toggle","numeric_entry","label","meter_attach","display_slot","button","waveview","grid_pad"]
 domain_touch_class = ["S","M","L","XL"]
+domain_visible_if = ["{param, equals} — both required when visible_if is present; no other keys in v1"]
 layout = "positions on the 8 px grid, sizes in grid units"
-on_violation = ["E-WIDGET-KIND-UNKNOWN", "E-TOUCH-CLASS-TOO-SMALL"]
-cross_check = "the >=44 px audit is sparq-ui's audit.rs, already implemented and gated (WO-012 inc 1)"
+on_violation = ["E-WIDGET-KIND-UNKNOWN", "E-TOUCH-CLASS-TOO-SMALL", "E-VALUE-MALFORMED (visible_if shape; WO-020)", "E-KEY-MISSING (visible_if.param/equals; WO-020)", "E-CROSS-FIELD (visible_if.param not declared; WO-020 validator)", "E-UNKNOWN-KEY (a key outside {param, equals} in visible_if)"]
+cross_check = "the >=44 px audit is sparq-ui's audit.rs, already implemented and gated (WO-012 inc 1); visible_if shape is sparq-module-api decode.rs check_widget_visible_ifs, its param existence is sparq-host-wasm validate.rs check_stream_bindings (WO-020)"
 
 [[field]]
 path = "ui.display_slots[]"
@@ -521,14 +522,14 @@ type = "{source_port, display_module, colormap, mode}"
 required = false
 [[field]]
 path = "ui.displays[]"
-type = "{id, kind, sources[]{id, port}, colormap?, min_size [w,h], lod}"
+type = "{id, kind, sources[]{id, port|stream}, colormap?, min_size [w,h], lod}"
 required = false
 domain_kind = ["display_list","scene"]
 domain_lod = ["auto","full","reduced","minimal"]
-on_violation = ["E-KEY-MISSING*", "E-ENUM-UNKNOWN*", "E-ID-DUP*", "E-VALUE-MALFORMED*", "E-DISPLAY-PRIMITIVE-UNKNOWN (emitted lists; WO-018 validator)", "E-LITERAL-APPEARANCE (emitted lists; WO-018 validator)"]
-added_by = "ADR-010 / contract v1.1; frozen shape at WO-017 close, 2026-10-05"
-note = "host-rendered graphical display: per-frame content is a display list (2D primitives) or scene descriptor (3D) emitted by the module and resolved against the runtime token bundle; the module never owns pixels. colormap names a colormap token id (prefix-checked at discovery; the full domain is checked against the live bundle by sparq mod validate)"
-cross_check = "WIT face: docs/api/instrument-wit/wit/display.wit (frozen v1.1); native decoder: sparq-module-api decode.rs check_displays; vocabularies: module-api §10"
+on_violation = ["E-KEY-MISSING*", "E-ENUM-UNKNOWN*", "E-ID-DUP*", "E-VALUE-MALFORMED*", "E-CROSS-FIELD (a source binds both/neither of port|stream; WO-020)", "E-STREAM-UNKNOWN (a stream id, or a param: enum option, is not in the registry; WO-020)", "E-DISPLAY-PRIMITIVE-UNKNOWN (emitted lists; WO-018 validator)", "E-LITERAL-APPEARANCE (emitted lists; WO-018 validator)"]
+added_by = "ADR-010 / contract v1.1; frozen shape at WO-017 close, 2026-10-05. The `stream` source key added by ADR-011 / WO-020 (2026-10-06) — additive, WIT untouched."
+note = "host-rendered graphical display: per-frame content is a display list (2D primitives) or scene descriptor (3D) emitted by the module and resolved against the runtime token bundle; the module never owns pixels. colormap names a colormap token id (prefix-checked at discovery; the full domain is checked against the live bundle by sparq mod validate). Each `sources[]` binding carries an `id` (the guest fetches by (display-id, source-id)) and EXACTLY ONE of `port` (a declared port/analysis source) or `stream` (ADR-011): a bare registry id (`swpc.kp`) binds a fixed stream, `param:<id>` binds whatever enum param `<id>` selects (resolved host-side at snapshot time — per-cell runtime stream selection from a static manifest). The registry is `crates/sparq-streams/streams.toml`."
+cross_check = "WIT face: docs/api/instrument-wit/wit/{sources,display}.wit (frozen v1.1, UNCHANGED by WO-020 — sources.snapshot keeps its opaque signature and window(list<data-record>) already exists); native decoder: sparq-module-api decode.rs check_displays + check_stream_binding (shape); stream resolution: sparq-host-wasm validate.rs check_stream_bindings against the sparq-streams registry (E-STREAM-UNKNOWN); vocabularies: module-api §10"
 
 [[field]]
 path = "ui.custom_draw"

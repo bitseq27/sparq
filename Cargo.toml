@@ -7,6 +7,7 @@ members = [
     "crates/sparq-module-api",
     "crates/sparq-music",
     "crates/sparq-host-wasm",
+    "crates/sparq-streams",
     "crates/sparq-app",
 ]
 
@@ -16,7 +17,10 @@ members = [
 exclude = ["tools/dispatch-bench", "tools/sparq-module-guest"]
 
 # Empty crates are debt (ADR-000): a crate is added to this list only when it has contents.
-# Planned, not yet created: sparq-stream, sparq-sample, sparq-assets, sparq-visual,
+# Created since: sparq-streams (WO-020 — the stream plane's broker, ADR-011). Its hermetic half
+# (registry, normalizers, windows, cache, replay) is dependency-free by default; serde_json rides
+# its `streams` feature and ureq its `streams-net` feature, so the default build stays zero-dep.
+# Planned, not yet created: sparq-sample, sparq-assets, sparq-visual,
 # sparq-perform, sparq-io, sparq-bridge.
 
 [workspace.package]
@@ -34,12 +38,20 @@ sparq-ui = { path = "crates/sparq-ui" }
 sparq-module-api = { path = "crates/sparq-module-api" }
 sparq-music = { path = "crates/sparq-music" }
 sparq-host-wasm = { path = "crates/sparq-host-wasm" }
+sparq-streams = { path = "crates/sparq-streams" }
 
 # Optional / feature-gated only. The core build has ZERO third-party dependencies:
 # everything testable (engine, DSP, render, golden tests) runs on std alone, so CI on a
 # device-less runner is fast and hermetic. See ADR-008: the bootstrap audio path is the
 # only place a device crate is permitted, and it is scheduled for deletion at end of WO-006.
 cpal = { version = "0.15" }
+
+# WO-020: the stream plane's broker (ADR-011). serde_json is the ONE dependency of the
+# hermetic half of `sparq-streams` — it parses the live JSON/GeoJSON payloads the normalizers
+# turn into frozen `data-record`s. It rides sparq-streams' `streams` feature (the live ureq/TLS
+# transport rides `streams-net`, added by the device increment), so the default build compiles
+# neither and the zero-dependency promise is untouched. Joined to the feature-gated family below.
+serde_json = { version = "1" }
 
 # WO-018: the instrument host's runtime (ADR-010 decision 2 — the T2 wasm sandbox, pulled
 # forward from Phase 5). EXACT-PINNED with `=`: wasmtime moves fast, and a minor bump can

@@ -1,0 +1,330 @@
+# sparq stream registry — THE single source of truth for stream ids (WO-020 / ADR-011).
+#
+# Read by: the broker (`crates/sparq-streams/src/registry.rs`), the validator's stream-binding
+# checks (INC2), and the manifest generator (`instruments-src/observatory/gen_manifest.py`, INC3).
+# It is checked-in DATA, never code-path folklore: adding or retiring a stream is a row here, and
+# every probe-verified endpoint below was hit live from the build sandbox on 2026-10-06 (the probe
+# log is `reference/fixtures/observatory/PROBE-LOG-2026-10-06.md`).
+#
+# Field vocabulary (every [[stream]] row):
+#   id            the stable stream id — what a manifest `stream = "…"` binding names.
+#   domain        SW space weather · SAT satellites · GEO geological/Earth · WX weather/ocean · SP space.
+#   label         the dropdown label (the picker shows domain-grouped labels; §5.2).
+#   endpoint      the URL template. Placeholders the fetcher/recorder fills at request time:
+#                   {lat} {lon}   from SPARQ_OBSERVATORY_LOC (default 51.5,-0.1 London)
+#                   {st}          from SPARQ_OBSERVATORY_TIDE_STATION (default 9447130 Seattle)
+#                   {KEY}         the resolved key (key_env's value, else key_fallback)
+#                   {CC}          FIRMS country code (default_country)
+#                   {d} {d-1} {d-3} {d-7} {d-30}   UTC dates, today minus N days (YYYY-MM-DD)
+#                   {D} {D-1} {D-3} {D-7} {D-30}   the same, compact YYYYMMDD (NASA POWER 422s on
+#                                                  the dashed form — API drift recorded 2026-10-06)
+#   cadence_s     the MINIMUM poll interval the broker enforces — a floor, never a target (§11.1).
+#   view          the renderer hint (§5.5): map-heat · map-points · map · timeseries · bars ·
+#                 bars+gauge · gauge · timeline-scatter · timeline · text. The guest picks the
+#                 renderer (INC3); this is the registry's advice and the picker's grouping.
+#   schema        the frozen record schema this stream normalizes into (`observatory/<kind>@1`).
+#   units         the unit string the cell's axis/footer must carry (token rule 9: numbers WITH units).
+#   attribution   the source credit the package README carries (§11.3).
+#   key_env       (optional) env var holding an API key. Unset + no fallback ⇒ the stream reports
+#                 KEY NEEDED in words and is never fetched (plan D14) — never a silent hole.
+#   key_fallback  (optional) value used when key_env is unset (NASA runs on DEMO_KEY; §11.4).
+#   transform     (optional) a declared broker-side transform, as data — `regrid:2deg` bins the
+#                 ~28 k-row 1° aurora payload to a 2° grid before any window or guest (§6.4).
+#   uses_location (optional bool) endpoint carries {lat}/{lon} from SPARQ_OBSERVATORY_LOC.
+#   default_tide_station / default_country  (optional) config-knob defaults (§6.2).
+#
+# DEAD ENDS, probed and recorded 2026-10-06 so the build session does not re-probe ghosts (§3.3):
+#   * NASA DONKI is DECOMMISSIONED — every api.nasa.gov/DONKI/* call returns API_KEY_MISSING or a
+#     60 444-byte CCMC "Announcements" HTML page, never JSON (four endpoint variants probed). Live
+#     space weather therefore rides NOAA SWPC below; DONKI stays out until NASA re-publishes it.
+#   * SWPC legacy paths are GONE (all 404): json/xray-latest.json, products/summary/xray-flux.json,
+#     json/goes/primary/xray-flux-latest.json, …/integral-protons-latest.json,
+#     products/summary/relativistic-electron-flux.json, products/summary/aurora-30-minutes.json.
+#     The working faces are the ones listed below.
+#   * Smithsonian GVP weekly-volcano RSS: 403 (bot wall). Volcanoes ride EONET + GDACS instead.
+#   * NASA GIBS WMTS answers GetCapabilities (200) but serves IMAGE TILES, and the display
+#     vocabulary has no image primitive by design (ADR-010 decision 3). Imagery→heat-cells is a
+#     broker-side transform parked in INC6, not v1.
+#   * api.alerts.weather.gov did NOT resolve from the build sandbox (DNS quirk); api.weather.gov
+#     did — the registry carries the resolving host. The device run-sheet re-probes both (§3.3.5).
+
+# ── SW · space weather (NOAA SWPC — NASA DONKI is dead, see above) ─────────────────────────────
+
+[[stream]]
+id = "swpc.aurora"
+domain = "SW"
+label = "Aurora forecast — OVATION grid"
+endpoint = "https://services.swpc.noaa.gov/json/ovation_aurora_latest.json"
+cadence_s = 300
+view = "map-heat"
+schema = "observatory/grid@1"
+units = "intensity %"
+attribution = "NOAA/SWPC OVATION aurora forecast"
+transform = "regrid:2deg"
+
+[[stream]]
+id = "swpc.kp"
+domain = "SW"
+label = "Planetary Kp index (3-day)"
+endpoint = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json"
+cadence_s = 300
+view = "bars+gauge"
+schema = "observatory/timeseries@1"
+units = "Kp"
+attribution = "NOAA/SWPC planetary K-index"
+
+[[stream]]
+id = "swpc.solar-wind"
+domain = "SW"
+label = "Solar wind speed"
+endpoint = "https://services.swpc.noaa.gov/products/summary/solar-wind-speed.json"
+cadence_s = 60
+view = "timeseries"
+schema = "observatory/timeseries@1"
+units = "km/s"
+attribution = "NOAA/SWPC solar wind summary"
+
+[[stream]]
+id = "swpc.bz"
+domain = "SW"
+label = "Solar wind Bz (IMF)"
+endpoint = "https://services.swpc.noaa.gov/products/summary/solar-wind-mag-field.json"
+cadence_s = 60
+view = "timeseries"
+schema = "observatory/timeseries@1"
+units = "nT"
+attribution = "NOAA/SWPC solar wind summary"
+
+[[stream]]
+id = "swpc.xray-flares"
+domain = "SW"
+label = "GOES X-ray flares (7-day)"
+endpoint = "https://services.swpc.noaa.gov/json/goes/primary/xray-flares-7-day.json"
+cadence_s = 300
+view = "timeline-scatter"
+schema = "observatory/events@1"
+units = "GOES class"
+attribution = "NOAA/SWPC GOES X-ray flares"
+
+[[stream]]
+id = "swpc.flux10cm"
+domain = "SW"
+label = "10.7 cm radio flux"
+endpoint = "https://services.swpc.noaa.gov/products/summary/10cm-flux.json"
+cadence_s = 900
+view = "timeseries"
+schema = "observatory/timeseries@1"
+units = "sfu"
+attribution = "NOAA/SWPC 10.7 cm flux summary"
+
+[[stream]]
+id = "swpc.wwv"
+domain = "SW"
+label = "WWV geophysical alert (raw text)"
+endpoint = "https://services.swpc.noaa.gov/text/wwv.txt"
+cadence_s = 600
+view = "text"
+schema = "observatory/text@1"
+units = ""
+attribution = "NOAA/SWPC WWV geophysical alert"
+
+[[stream]]
+id = "swpc.geomag-forecast"
+domain = "SW"
+label = "3-day geomag forecast (raw text)"
+endpoint = "https://services.swpc.noaa.gov/text/3-day-geomag-forecast.txt"
+cadence_s = 1800
+view = "text"
+schema = "observatory/text@1"
+units = ""
+attribution = "NOAA/SWPC 3-day geomagnetic forecast"
+
+# ── SAT · satellites ────────────────────────────────────────────────────────────────────────────
+
+[[stream]]
+id = "sat.iss"
+domain = "SAT"
+label = "ISS — live position"
+endpoint = "https://api.wheretheiss.at/v1/satellites/25544"
+cadence_s = 5
+view = "map"
+schema = "observatory/position@1"
+units = "km, km/s"
+attribution = "wheretheiss.at (free tier ≤ 1 req/s — the 5 s cadence honours it)"
+
+[[stream]]
+id = "sat.tle-stations"
+domain = "SAT"
+label = "Satellite TLEs — CelesTrak stations"
+endpoint = "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=json"
+cadence_s = 3600
+view = "text"
+schema = "observatory/text@1"
+units = ""
+attribution = "CelesTrak (TLEs; SGP4 ground tracks are INC6)"
+
+# ── GEO · geological & Earth events ─────────────────────────────────────────────────────────────
+
+[[stream]]
+id = "geo.quakes-hour"
+domain = "GEO"
+label = "Earthquakes — past hour (USGS)"
+endpoint = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
+cadence_s = 60
+view = "map-points"
+schema = "observatory/events@1"
+units = "magnitude"
+attribution = "USGS Earthquake Hazards Program"
+
+[[stream]]
+id = "geo.quakes-day"
+domain = "GEO"
+label = "Earthquakes — M2.5+ past day (USGS)"
+endpoint = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson"
+cadence_s = 300
+view = "map-points"
+schema = "observatory/events@1"
+units = "magnitude"
+attribution = "USGS Earthquake Hazards Program"
+
+[[stream]]
+id = "geo.gdacs"
+domain = "GEO"
+label = "GDACS — EQ/TC/FL events"
+endpoint = "https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?eventlist=EQ;TC;FL&alertlevel=Green;Orange;Red&fromDate={d-7}&toDate={d}"
+cadence_s = 900
+view = "map-points"
+schema = "observatory/events@1"
+units = "severity"
+attribution = "GDACS (UN/JRC)"
+
+[[stream]]
+id = "geo.eonet"
+domain = "GEO"
+label = "NASA EONET — all open events"
+endpoint = "https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=200"
+cadence_s = 300
+view = "map-points"
+schema = "observatory/events@1"
+units = "category"
+attribution = "NASA EONET"
+
+[[stream]]
+id = "geo.wildfires"
+domain = "GEO"
+label = "NASA EONET — wildfires"
+# DATA OBSERVATION (recorded 2026-10-06): EONET v3 applies `limit` BEFORE the `categories` filter, so
+# with limit=200 this returns the same first-200 open events as geo.eonet (the category filter is
+# effectively ignored). Kept as its own stream per the plan's §3.1 registry; the normalizer treats
+# both identically (events). INC3/the operator may drop the limit (a ~5 MB payload) or retire this
+# row if a distinct wildfire-only face is wanted — flagged, not silently papered over.
+endpoint = "https://eonet.gsfc.nasa.gov/api/v3/events?categories=wildfires&status=open&limit=200"
+cadence_s = 300
+view = "map-points"
+schema = "observatory/events@1"
+units = "category"
+attribution = "NASA EONET"
+
+[[stream]]
+id = "geo.firms"
+domain = "GEO"
+label = "NASA FIRMS — active fires 24 h"
+endpoint = "https://firms.modaps.eosdis.nasa.gov/api/country/csv/{KEY}/viirs_snpp_nrt/{CC}/1"
+cadence_s = 900
+view = "map-points"
+schema = "observatory/events@1"
+units = "brightness K"
+attribution = "NASA FIRMS (VIIRS S/NPP)"
+key_env = "SPARQ_FIRMS_KEY"
+default_country = "USA"
+
+# ── WX · weather & ocean ────────────────────────────────────────────────────────────────────────
+
+[[stream]]
+id = "wx.openmeteo"
+domain = "WX"
+label = "Weather — selected location"
+endpoint = "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,wind_speed_10m,cloud_cover,precipitation,pressure_msl&hourly=temperature_2m,precipitation_probability,wind_speed_10m&forecast_days=2"
+cadence_s = 300
+view = "timeseries"
+schema = "observatory/timeseries@1"
+units = "°C"
+attribution = "Open-Meteo.com (free for non-commercial use with attribution — see LATER.md)"
+uses_location = true
+
+[[stream]]
+id = "wx.air"
+domain = "WX"
+label = "Air quality — PM2.5 / US AQI"
+endpoint = "https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&current=pm2_5,us_aqi"
+cadence_s = 900
+view = "gauge"
+schema = "observatory/timeseries@1"
+units = "US AQI"
+attribution = "Open-Meteo.com air quality"
+uses_location = true
+
+[[stream]]
+id = "wx.tides"
+domain = "WX"
+label = "Water level — NOAA CO-OPS station"
+endpoint = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=water_level&application=sparq&begin_date={d-1}&end_date={d}&datum=MLLW&station={st}&time_zone=gmt&units=metric&interval=hilo&format=json"
+cadence_s = 900
+view = "timeseries"
+schema = "observatory/timeseries@1"
+units = "m MLLW"
+attribution = "NOAA CO-OPS water level"
+default_tide_station = "9447130"
+
+[[stream]]
+id = "wx.alerts"
+domain = "WX"
+label = "US weather alerts (NWS)"
+endpoint = "https://api.weather.gov/alerts/active"
+cadence_s = 300
+view = "map-points"
+schema = "observatory/events@1"
+units = "severity"
+attribution = "US National Weather Service (requires a descriptive User-Agent, §11.2)"
+
+# ── SP · space & planetary (NASA — DEMO_KEY works, a free key raises the ceiling; §11.4) ────────
+
+[[stream]]
+id = "space.neo"
+domain = "SP"
+label = "NASA NEO — close approaches"
+endpoint = "https://api.nasa.gov/neo/rest/v1/feed?start_date={d}&end_date={d}&api_key={KEY}"
+cadence_s = 1800
+view = "timeline"
+schema = "observatory/events@1"
+units = "miss distance km"
+attribution = "NASA JPL NeoWs"
+key_env = "SPARQ_NASA_API_KEY"
+key_fallback = "DEMO_KEY"
+
+[[stream]]
+id = "space.epic"
+domain = "SP"
+label = "NASA EPIC — Earth imagery metadata"
+endpoint = "https://api.nasa.gov/EPIC/api/natural?api_key={KEY}"
+cadence_s = 3600
+view = "text"
+schema = "observatory/text@1"
+units = ""
+attribution = "NASA EPIC/DSCOVR (metadata only — the imagery is pixels, §13)"
+key_env = "SPARQ_NASA_API_KEY"
+key_fallback = "DEMO_KEY"
+
+[[stream]]
+id = "space.power"
+domain = "SP"
+label = "NASA POWER — daily met/solar point"
+endpoint = "https://power.larc.nasa.gov/api/temporal/daily/point?parameters=T2M,ALLSKY_SFC_SW_DWN&community=RE&longitude={lon}&latitude={lat}&start={D-30}&end={D-3}&format=JSON"
+cadence_s = 3600
+view = "timeseries"
+schema = "observatory/timeseries@1"
+units = "°C, kWh/m²"
+attribution = "NASA POWER (2–3 day publication lag — labelled NEAR-REALTIME in the cell footer)"
+uses_location = true
+key_env = "SPARQ_NASA_API_KEY"
+key_fallback = "DEMO_KEY"

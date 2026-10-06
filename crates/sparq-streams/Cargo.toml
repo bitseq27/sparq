@@ -1,0 +1,33 @@
+[package]
+name = "sparq-streams"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The sparq stream plane's broker (WO-020 / ADR-011): the checked-in stream registry, the frozen-vocabulary normalizers, rolling windows, the disk cache and fixture replay — the hermetic half that never touches the network"
+
+# The hermetic half of the broker is dependency-free by default (ADR-008 / the zero-dep promise):
+# the registry rides sparq-module-api's hand-rolled TOML subset parser, and the data model, the
+# windows and the stale policy are pure std. serde_json — the ONE third-party dependency — is
+# pulled only by the `streams` feature, which turns on the JSON/GeoJSON/CSV normalizers, the disk
+# cache and fixture replay. The live transport (ureq + TLS, `fetch.rs`) rides `streams-net` and
+# lands with the device increment (WO-020 INC5); it is not in this crate yet, so every network
+# verb refuses in words until it does.
+[dependencies]
+sparq-module-api = { workspace = true }
+serde_json = { workspace = true, optional = true }
+
+[features]
+default = []
+# The hermetic data half: normalizers (JSON/GeoJSON/CSV/text -> frozen data-records), the disk
+# cache and fixture replay. One dependency (serde_json). Everything the sandbox can prove lives
+# here; goldens and tests run from recorded fixtures, never from a socket (the determinism
+# firewall, plan D11).
+streams = ["dep:serde_json"]
+# The live transport half (ureq + TLS + `fetch.rs`). Declared so the feature surface is stable and
+# the CLI can key its refusals on it, but the transport itself is the device increment (INC5):
+# until it lands, enabling this feature adds nothing and every network verb still refuses in words.
+streams-net = ["streams"]
+
+[lints]
+workspace = true

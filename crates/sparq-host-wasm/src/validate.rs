@@ -398,6 +398,14 @@ pub fn schema_check(pkg: &package::Package) -> ValidationReport {
         }
     }
 
+    // WO-020 (ADR-011): resolve display `stream` source bindings against the checked-in registry and
+    // cross-check `visible_if` params. Static, zero-dep (the registry is sparq-streams' hermetic
+    // half); it runs where the decoder's shape checks left off — membership and indirection, which
+    // need the registry and the params the contract crate must not itself depend on.
+    if let Some(ui) = sub_table(parsed.as_ref(), "ui") {
+        check_stream_bindings(ui, parsed.as_ref(), &mut r);
+    }
+
     r
 }
 
@@ -483,6 +491,160 @@ fn check_capability_honour(caps: &Table, r: &mut ValidationReport) {
                 .with_found(format!("fs_write = [{} entries]", list.len()))
                 .with_allowed("fs_write = [] or absent"),
             );
+        }
+    }
+}
+
+/// Resolves the WO-020 stream-plane bindings (ADR-011) that the decoder shape-checked but could not
+/// resolve, because resolution needs the checked-in registry and the manifest's params — neither of
+/// which the contract crate may depend on. Two jobs:
+///
+/// 1. `ui.displays[].sources[].stream` — a bare id must be a registry stream id (`E-STREAM-UNKNOWN`
+///    otherwise, with the registry's own actionable words); a `param:<id>` indirection must name an
+///    ENUM param whose every option value is a registry id or the empty OFF value (plan D4).
+/// 2. `ui.panel.widgets[].visible_if.param` — must name a declared param (plan D7).
+///
+/// The registry is loaded lazily, only when a `stream` binding is actually present, so an instrument
+/// with no stream sources never pays for it (and a hypothetical broken registry cannot fail one).
+fn check_stream_bindings(ui: &Table, parsed: Option<&Table>, r: &mut ValidationReport) {
+    let params = parsed.map(|p| p.tables("params").unwrap_or_default()).unwrap_or_default();
+    let param_ids: Vec<&str> =
+        params.iter().filter_map(|p| p.get("id").and_then(Value::as_str)).collect();
+
+    // (2) visible_if.param existence — no registry needed.
+    if let Some(panel) = ui.get("panel").and_then(Value::as_table) {
+        for (wn, w) in panel.tables("widgets").unwrap_or_default().iter().enumerate() {
+            let Some(vif) = w.get("visible_if").and_then(Value::as_table) else { continue };
+            let Some(pid) = vif.get("param").and_then(Value::as_str) else { continue };
+            if !param_ids.contains(&pid) {
+                r.push(
+                    ValidationError::new(
+                        CodeKind::CrossField,
+                        format!("ui.panel.widgets[{wn}].visible_if.param"),
+                        "visible_if gates a widget on a param this module does not declare — name \
+                         a declared param id (plan D7)",
+                    )
+                    .with_found(pid.to_string())
+                    .with_allowed(param_ids.join(" ")),
+                );
+            }
+        }
+    }
+
+    // (1) stream bindings — only load the registry if a `stream` binding is present.
+    let displays = ui.tables("displays").unwrap_or_default();
+    let has_stream = displays
+        .iter()
+        .any(|d| d.tables("sources").unwrap_or_default().iter().any(|s| s.get("stream").is_some()));
+    if !has_stream {
+        return;
+    }
+    let registry = match sparq_streams::Registry::load() {
+        Ok(reg) => reg,
+        Err(e) => {
+            r.push(ValidationError::new(
+                CodeKind::StreamUnknown,
+                "ui.displays.sources.stream",
+                format!(
+                    "the checked-in stream registry failed to load, so no stream binding can be \
+                     resolved: {e}"
+                ),
+            ));
+            return;
+        },
+    };
+
+    for (dn, d) in displays.iter().enumerate() {
+        for (sn, src) in d.tables("sources").unwrap_or_default().iter().enumerate() {
+            let Some(stream) = src.get("stream").and_then(Value::as_str) else { continue };
+            let path = format!("ui.displays[{dn}].sources[{sn}].stream");
+            match stream.strip_prefix("param:") {
+                Some(pid) => {
+                    let param = params
+                        .iter()
+                        .copied()
+                        .find(|p| p.get("id").and_then(Value::as_str) == Some(pid));
+                    resolve_param_binding(pid, param, &path, &registry, r);
+                },
+                None => {
+                    if !registry.contains(stream) {
+                        r.push(ValidationError::new(
+                            CodeKind::StreamUnknown,
+                            path,
+                            registry.unknown_id_message(stream),
+                        ));
+                    }
+                },
+            }
+        }
+    }
+}
+
+/// Resolves one `param:<id>` stream indirection: the param must exist, be an `enum`, and every one
+/// of its option values must be a registry stream id or the empty OFF value `""` (plan D4). Each
+/// failure is one actionable line; the fix names the rule.
+fn resolve_param_binding(
+    pid: &str,
+    param: Option<&Table>,
+    path: &str,
+    registry: &sparq_streams::Registry,
+    r: &mut ValidationReport,
+) {
+    let Some(param) = param else {
+        r.push(
+            ValidationError::new(
+                CodeKind::CrossField,
+                path.to_string(),
+                "this `param:` stream binding names a param the module does not declare — declare \
+                 it as an enum whose options are stream ids, or bind a fixed registry id instead",
+            )
+            .with_found(format!("param:{pid}")),
+        );
+        return;
+    };
+    if param.get("type").and_then(Value::as_str) != Some("enum") {
+        r.push(
+            ValidationError::new(
+                CodeKind::CrossField,
+                path.to_string(),
+                "a `param:` stream binding must target an ENUM param — its option values are the \
+                 streams the cell can be switched to at runtime (plan D4)",
+            )
+            .with_found(format!(
+                "param `{pid}` is type \"{}\"",
+                param.get("type").and_then(Value::as_str).unwrap_or("?")
+            ))
+            .with_allowed("type = \"enum\""),
+        );
+        return;
+    }
+    let Some(opts) = param.get("options").and_then(Value::as_array) else {
+        r.push(
+            ValidationError::new(
+                CodeKind::CrossField,
+                path.to_string(),
+                "an enum param backing a `param:` stream binding must declare options[] — the \
+                 selectable stream ids (plus \"\" for OFF)",
+            )
+            .with_found(format!("param `{pid}` has no options")),
+        );
+        return;
+    };
+    for (oi, opt) in opts.iter().enumerate() {
+        let val = opt.as_table().and_then(|t| t.get("value")).and_then(Value::as_str).unwrap_or("");
+        if val.is_empty() {
+            continue; // the OFF value is legal — the cell shows nothing
+        }
+        if !registry.contains(val) {
+            r.push(ValidationError::new(
+                CodeKind::StreamUnknown,
+                path.to_string(),
+                format!(
+                    "enum param `{pid}` option[{oi}] value `{val}` is not a registry stream id — \
+                     every selectable value must be a stream (or \"\" for OFF). {}",
+                    registry.unknown_id_message(val)
+                ),
+            ));
         }
     }
 }

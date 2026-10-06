@@ -6,7 +6,60 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-10-05, END of sixteenth session (Linux sandbox box) — the **WO-018
+**Last updated:** 2026-10-06, this build session (Linux sandbox, ~1 GB / 2 cores) — **WO-020 INC1 +
+INC2 CLOSED: the stream broker's hermetic half AND the contract additions, built and measured
+green**. The operator scoped the session (question tool) to **INC1, then INC2** and
+**install-Rust-and-verify** (not source-only).
+Environment from nothing — rustup via python (no curl/wget in the box) + `apt-get install gcc` for
+the linker rustc needs; neither persists across snapshots, so the resume recipe re-installs both.
+Pristine baseline measured BEFORE any edit (**925/0/1-ignored** = the round-8 seal exactly), then
+built the first increment of The Observatory's stream plane (ADR-011): the new crate
+**`sparq-streams`** (the 23-stream `streams.toml` registry as the single source of truth + the §3.3
+dead ends as comments; the frozen `data-record` mirror; the five `observatory/*@1` schema builders;
+the registry with KEY-NEEDED-in-words, D14; clock-free rolling windows + the stale(3×)/offline(10×)
+policy; dependency-free timestamp parsing; **all 23 normalizers written against RECORDED payloads**;
+the disk cache; fixture replay), **`tools/streams_record.py`** (reads the registry, fills the
+endpoint templates, records raw payloads + `_meta.json` + `PROBE-LOG-2026-10-06.md`), the recorded
+fixtures (**23/23 at HTTP 200**, FIRMS synthetic — free key unavailable; each fixture byte-faithful,
+worst ratio **1.000** ≤ 1.2), and the app CLI **`sparq streams list|cache`** (hermetic) +
+probe/fetch/tail/record **refusing in words, exit non-zero** without `streams-net` (the transport
+half is the device increment INC5). **Gates (measured, not invented):** `cargo test --workspace`
+**971/0/1-ignored** (+46), `sparq-streams --features streams` **75/0** (incl. 23 per-stream
+normalizer tests + the registry↔normalizer drift gate + bit-identical-twice determinism),
+`sparq-app --features streams` green, clippy `-D warnings` **CLEAN** (default + both feature cells),
+fmt **CLEAN**, and the **default build stays zero third-party deps** (`cargo tree` verified;
+serde_json only under `streams`). WIT pins, goldens, the 24 module manifests and `SYNC-STAMP.txt`
+UNTOUCHED. **API drift caught by recording live (the probe-first rule, §12.6):** NASA POWER now
+**422s on dashed dates** (wants compact `YYYYMMDD` — fix landed: `{D-N}` placeholders alongside
+`{d-N}`) and EONET's `categories=wildfires` is **ignored under `limit`** (returns the all-events
+superset — flagged in `streams.toml` for INC3/operator, not papered over). **INC2 then added the one
+contract addition the stream plane needs — additive, WIT UNTOUCHED (§7.4 proved: `wit_snapshot`
+byte-identical, no git diff under `docs/api/instrument-wit/`):** `docs/adr/011-stream-plane.md`;
+`CodeKind::StreamUnknown` = **`E-STREAM-UNKNOWN`** (the catalogue's 26th, count test moved
+in-commit); the `ui.displays[].sources[].stream` binding (`decode.rs` shape-checks `port`⊕`stream` +
+the `param:<id>` form; `validate.rs` stage 1 resolves ids against the registry and the `param:`
+enum's options, + `visible_if.param` existence — plan D4/D7); `visible_if` specified as
+`{param, equals}`; the `node_width_instrument_max = 2400` layout token + card-sizing rule (D6,
+`token_gen` re-run, `--check` deterministic); and the schema-doc / field-table / MODULE-BUILD-GUIDE
+§5 rows. **9 new validator tests** (`crates/sparq-host-wasm/tests/stream_bindings.rs`): the
+representative Observatory draft passes stages 1–2 with real bindings, each hostile variant fails
+its rule in words, and all 23 registry ids are accepted as fixed bindings (the registry↔contract
+drift gate). **INC2 gates (measured):** `cargo test --workspace` **982/0/1-ignored** (+11 over INC1),
+`sparq-streams --features streams` 75/0, clippy CLEAN (default + host-wasm + streams cell), fmt
+CLEAN, `token_gen --check` CLEAN, `api_snapshot` + the three field-table drift tests PASS, goldens +
+the 24 manifests untouched. Two §10 draft-manifest gaps found by building it (INC3 generator
+concerns, recorded not papered over): `unit = "min"` is not in the closed `UNITS` vocabulary, and
+bool params need `default = 1.0` not `true`. Committed `7da006a` (INC1) + seal + the INC2 commit;
+bundled `handoff/sparq-wo020-inc1.bundle` + an INC2 bundle. **Environment note:** the snapshot
+dropped the toolchain AND `.git` between turns — recovered by re-installing rustup+gcc and
+re-cloning origin (base `48d3074`) then fetching the INC1 bundle; exactly the loss class the
+per-increment bundle discipline exists for. No operator rulings were needed beyond the two that
+scoped the session. **Next: WO-020 INC3** (the guest source project `instruments-src/observatory/`,
+the seven renderers, `make_coastline.py`, `gen_manifest.py` — which must emit valid units/defaults —
+the five-file package + the wasm build attempt), then INC4 (sandbox painters/shell) and INC5
+(device). Full record: `WO020-STATE.md`.
+
+**Previous update:** 2026-10-05, END of sixteenth session (Linux sandbox box) — the **WO-018
 REBUILD round: the zero-dependency half BUILT and measured green**. The session opened on a
 fresh clone of the re-publicised origin (`6681f87`) and confirmed the loss with evidence: the
 round-7 PROSE (`ROUND7-HANDOFF.md`, `WO018-STATE.md`) had reached origin, but the round-7 CODE

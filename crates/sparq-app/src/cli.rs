@@ -4,7 +4,7 @@
 
 use std::process::ExitCode;
 
-use crate::{demo, devices, exec, instruments, modules, play, render, selftest, soak, ui};
+use crate::{demo, devices, exec, instruments, modules, play, render, selftest, soak, streams, ui};
 
 /// Parsed `render` options.
 pub struct RenderOpts {
@@ -53,6 +53,14 @@ USAGE
   sparq mod list [--root DIR] [--strict]
                                        the launch view of instruments/: what loads, what is
                                        refused and why, verbatim (WO-018)
+  sparq streams list                   the stream registry as data (WO-020): every stream's domain,
+                                       cadence, view, schema and key state (KEY NEEDED in words)
+  sparq streams cache [path|clear]     the disk cache location / last-good payloads (hermetic)
+  sparq streams probe [--live] | fetch ID [--out FILE] | tail ID | record-fixtures --out DIR
+                                       the live transport verbs; they REFUSE IN WORDS and exit
+                                       non-zero without --features streams-net (the device
+                                       increment, WO-020 INC5). Fixtures record with python:
+                                       tools/streams_record.py (needs --features streams to list)
   sparq exec    [--out FILE] [--seconds N] [--rate HZ] [--block N] [--patch demo|mod-demo|drum-demo]
                 [--format f32|pcm16|pcm24|pcm32]
                 render a patch through the WO-008 executor: registry → graph → WAV, no device
@@ -113,6 +121,7 @@ pub fn run(args: &[String]) -> Result<ExitCode> {
         "devices" => devices::run(parse_devices(rest)?),
         "modules" => modules::run(modules::parse(rest)?),
         "mod" => instruments::run(instruments::parse(rest)?),
+        "streams" => streams::run(streams::parse(rest)?),
         "exec" => exec::run(exec::parse(rest)?),
         "play" => play::run(parse_play(rest)?),
         "ui" => {

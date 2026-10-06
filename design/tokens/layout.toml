@@ -94,6 +94,15 @@ snap                = 8
 node_width_default  = 240
 node_width_min      = 160
 node_width_max      = 480
+# WO-020 (ADR-011 / plan D6): the INSTRUMENT-layer card ceiling. The backbone's 480 ceiling above is
+# untouched — a wall-class instrument (the Observatory) is a different animal and sizes its card from
+# its display's own min_size, not the backbone grid. Sizing rule (the layout audit enforces it):
+#   card = display.min_size + chrome, where chrome = space.gutter each side (16) + node_header_height
+#   (32) + the panel band (rows × touch.target_s + gaps) + the port band (0 for a port-less
+#   instrument, D5). The Observatory declares min_size = [2176, 1120] → card ≈ 2208 × 1288 world px,
+#   which at the 2560×1600 reference covers ≥ 95% of the canvas-rect width at zoom 1.0 (audit row).
+# Moving this ceiling needs an operator ruling (it is a wall-class contract, not a taste knob).
+node_width_instrument_max = 2400
 node_header_height  = 32
 node_port_row       = 48       # >= 2 x touch.port_capture_radius, so capture circles on one edge never overlap
 node_param_row      = 32       # inline parameter row on the node card (PN convergence, inc 6);

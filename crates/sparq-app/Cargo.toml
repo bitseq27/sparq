@@ -13,6 +13,7 @@ sparq-ui.workspace = true
 sparq-module-api.workspace = true
 sparq-music.workspace = true
 sparq-host-wasm.workspace = true
+sparq-streams = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }
 egui-winit = { workspace = true, optional = true }
@@ -44,6 +45,15 @@ ui-window = ["ui", "dep:winit", "dep:egui-winit", "dep:egui-wgpu", "dep:wgpu", "
 # zero-dependency: `sparq mod validate`/`list` work without it, refusing the runtime stages in
 # words. scripts\build.bat enables it alongside the audio features.
 instrument-host = ["sparq-host-wasm/instrument-host"]
+
+# WO-020: the stream plane's broker (ADR-011). `streams` pulls sparq-streams and its hermetic half
+# (registry, normalizers, windows, cache, replay — one dependency, serde_json), which powers the
+# `sparq streams list|cache` verbs and, in INC4, the fixture-fed at-rest wall. `streams-net` is the
+# live transport (ureq + TLS + fetch.rs), the DEVICE increment (INC5): it is declared so the CLI's
+# refusals key on a stable feature name, but until fetch.rs lands the network verbs (probe/fetch/
+# tail/record) refuse in words either way. The default build compiles neither (zero-dep promise).
+streams = ["dep:sparq-streams", "sparq-streams/streams"]
+streams-net = ["streams", "sparq-streams/streams-net"]
 
 # The renderer backend is a per-target choice, made here and nowhere else:
 #   Windows  -> wgpu dx12  (the stage OS is Windows; DX12 also means WARP works over RDP,

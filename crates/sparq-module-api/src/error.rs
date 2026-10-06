@@ -1,8 +1,9 @@
 //! Validation errors: a catalogue **derived** from the schema rather than accumulated by hand.
 //!
-//! `docs/api/manifest-schema.md` lists 25 catalogue codes: 19 that grew case-by-case as the
-//! design was written, and six contract v1.1 added for the instrument layer (`E-LAYER-MISMATCH`
-//! at WO-017's close, the five package/runtime codes WO-018 pre-registers). The original 19 left
+//! `docs/api/manifest-schema.md` lists 26 catalogue codes: 19 that grew case-by-case as the
+//! design was written, six contract v1.1 added for the instrument layer (`E-LAYER-MISMATCH`
+//! at WO-017's close, the five package/runtime codes WO-018 pre-registers), and `E-STREAM-UNKNOWN`
+//! WO-020 pre-registers for the stream plane (ADR-011). The original 19 left
 //! two holes big enough to block WO-007's acceptance criteria: nothing rejected a
 //! *missing* required field, and nothing rejected an invalid value for the ~20 closed vocabularies
 //! that had no code of their own (defect #55). Both are here as the five derived kinds, and the rule
@@ -15,12 +16,13 @@
 
 use std::fmt;
 
-/// The kind of a validation failure. The first twenty-five are the catalogue in
+/// The kind of a validation failure. The first twenty-six are the catalogue in
 /// `docs/api/manifest-schema.md` — nineteen accumulated case-by-case, `E-LAYER-MISMATCH` from
-/// contract v1.1's WO-017 close, and the five v1.1 package/runtime codes WO-018 pre-registers
+/// contract v1.1's WO-017 close, the five v1.1 package/runtime codes WO-018 pre-registers
 /// (the house precedent is pre-registered spellings: `E-TOUCH-CLASS-TOO-SMALL` and
 /// `E-WIDGET-KIND-UNKNOWN` shipped before widget validation existed, and the spellings are the
-/// frozen part — manifest-schema §7). The last five are derived (defect #55).
+/// frozen part — manifest-schema §7), and `E-STREAM-UNKNOWN` WO-020 pre-registers for the stream
+/// plane (ADR-011). The last five are derived (defect #55).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CodeKind {
@@ -80,6 +82,13 @@ pub enum CodeKind {
     /// load with words, never mis-themed silently). Registered at v1.1; wired by the WO-018
     /// runtime half's load-time negotiation.
     TokenBundleVersion,
+    /// A `ui.displays[].sources[].stream` binding naming a stream id that is not in the checked-in
+    /// registry (`crates/sparq-streams/streams.toml`), or a `param:` indirection whose enum options
+    /// are not all registry ids (or the empty OFF value). Registered at WO-020 (the stream plane,
+    /// ADR-011); wired by the WO-020 INC2 stream-binding validation in `sparq mod validate` stage 1.
+    /// The message names the field, the value found, the allowed registry ids, and the fix — the
+    /// actionable style every catalogue code carries.
+    StreamUnknown,
     /// A key nobody declared. Typo protection.
     UnknownKey,
     /// **Derived.** A required field is absent: `E-KEY-MISSING:<path>`.
@@ -96,7 +105,7 @@ pub enum CodeKind {
 
 impl CodeKind {
     /// Every code kind, catalogue first and derived last.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 31] = [
         Self::IdDup,
         Self::IdUnstableRename,
         Self::PortTypeUnknown,
@@ -121,6 +130,7 @@ impl CodeKind {
         Self::DisplayPrimitiveUnknown,
         Self::CapabilityUndeclared,
         Self::TokenBundleVersion,
+        Self::StreamUnknown,
         Self::UnknownKey,
         Self::KeyMissing,
         Self::EnumUnknown,
@@ -157,6 +167,7 @@ impl CodeKind {
             Self::DisplayPrimitiveUnknown => "E-DISPLAY-PRIMITIVE-UNKNOWN",
             Self::CapabilityUndeclared => "E-CAPABILITY-UNDECLARED",
             Self::TokenBundleVersion => "E-TOKEN-BUNDLE-VERSION",
+            Self::StreamUnknown => "E-STREAM-UNKNOWN",
             Self::UnknownKey => "E-UNKNOWN-KEY",
             Self::KeyMissing => "E-KEY-MISSING",
             Self::EnumUnknown => "E-ENUM-UNKNOWN",
@@ -355,7 +366,7 @@ mod tests {
             assert!(!seen.contains(&p), "{p} is used by two kinds");
             seen.push(p);
         }
-        assert_eq!(seen.len(), 30, "the catalogue is 25 codes plus 5 derived");
+        assert_eq!(seen.len(), 31, "the catalogue is 26 codes plus 5 derived");
     }
 
     #[test]

@@ -2204,6 +2204,7 @@
       "layout.canvas.node_well_height": 48,
       "layout.canvas.node_well_height_scope": 160,
       "layout.canvas.node_width_default": 240,
+      "layout.canvas.node_width_instrument_max": 2400,
       "layout.canvas.node_width_max": 480,
       "layout.canvas.node_width_min": 160,
       "layout.canvas.snap": 8,
@@ -2398,7 +2399,7 @@
     },
     "version": "0.1.0"
   },
-  "payload_sha256": "a9c3fec912468d3c09c45d02037f835f649602c81aa472cdae34dc5ab90ab5db",
+  "payload_sha256": "ff7a35dd1232a1e0043b1d6742e0ec25b672228cec4c62dda6a659a13b456f50",
   "version": {
     "major": 0,
     "minor": 1,

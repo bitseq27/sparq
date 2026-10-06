@@ -1,0 +1,25 @@
+:Product: Geomagnetic Forecast
+:Issued: 2026 Oct 05 2205 UTC
+# Prepared by the U.S. Dept. of Commerce, NOAA, Space Weather Prediction Center
+#
+NOAA Ap Index Forecast
+Observed Ap 04 Oct 036
+Estimated Ap 05 Oct 024
+Predicted Ap 06 Oct-08 Oct 014-008-008
+
+NOAA Geomagnetic Activity Probabilities 06 Oct-08 Oct
+Active                35/20/20
+Minor storm           25/05/05
+Moderate storm        05/01/01
+Strong-Extreme storm  01/01/01
+
+NOAA Kp index forecast 06 Oct - 08 Oct
+             Oct 06    Oct 07    Oct 08
+00-03UT        4.00      2.67      2.67      
+03-06UT        3.67      2.67      2.33      
+06-09UT        3.00      2.33      2.00      
+09-12UT        2.33      2.00      1.00      
+12-15UT        2.00      1.67      1.33      
+15-18UT        2.00      1.67      2.00      
+18-21UT        2.33      2.00      2.33      
+21-00UT        2.67      2.00      2.00      

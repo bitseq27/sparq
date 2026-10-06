@@ -1,0 +1,4 @@
+latitude,longitude,brightness,scan,track,acq_date,acq_time,satellite,instrument,confidence,version,bright_t31,frp,daynight
+34.052,-118.243,318.4,1.0,1.0,2026-10-06,1432,N,suomi-npp-viirs-c2,n,1,288.0,14.7,day
+35.681,-105.938,305.9,1.2,1.1,2026-10-06,1433,N,suomi-npp-viirs-c2,n,1,281.5,9.2,night
+40.713,-111.891,342.1,0.9,1.0,2026-10-06,1433,N,suomi-npp-viirs-c2,h,1,295.0,41.3,day

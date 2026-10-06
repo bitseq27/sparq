@@ -17,6 +17,7 @@ An ADR is written *when the decision is made*, not afterwards. If you find yours
 | [008](008-bootstrap-device.md) | Disposable bootstrap audio path | accepted | 2026-09-20 |
 | [009](009-executor-and-hal.md) | Graph executor and audio HAL shape | draft — ratify in WO-006/WO-008 | 2026-09-20 |
 | [010](010-instrument-layer.md) | The instrument layer and the third-party hand-off system | accepted (D-14) — amends 002 | 2026-10-04 |
+| [011](011-stream-plane.md) | The stream plane: host-side broker and stream-source bindings | accepted (WO-020) — extends 010 | 2026-10-06 |
 
 ## Decisions still open
 

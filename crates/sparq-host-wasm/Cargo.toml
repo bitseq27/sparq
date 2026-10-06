@@ -13,6 +13,13 @@ description = "The instrument host (WO-018): the five-file package model, drop-i
 # feature off") mean something: the gate is testable on a runner that will never host a sandbox.
 sparq-module-api.workspace = true
 
+# WO-020 (ADR-011): the stream registry, so stage 1 can resolve a `ui.displays[].sources[].stream`
+# binding against `streams.toml` (the single source of truth for stream ids) and refuse an unknown id
+# with `E-STREAM-UNKNOWN`. sparq-streams' DEFAULT build is zero third-party deps (its registry rides
+# sparq-module-api's TOML subset parser; serde_json is behind its `streams` feature, which the
+# validator does NOT enable), so the static half stays zero-dependency.
+sparq-streams.workspace = true
+
 # wasmtime rides the `instrument-host` feature and nothing else (ADR-010's consequence: feature-
 # gated exactly like egui/wgpu). Exact-pinned at the workspace level; see the root Cargo.toml for
 # the rationale. The runtime half (loader, fuel, hot reload, stages 3/4/6) lands behind this

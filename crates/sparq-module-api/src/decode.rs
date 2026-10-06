@@ -138,8 +138,14 @@ const UI_KEYS: [&str; 5] = ["panel", "display_slots", "custom_draw", "colour_cla
 /// discovery with the closed set named, not at the first draw call.
 const DISPLAY_KEYS: [&str; 6] = ["id", "kind", "sources", "colormap", "min_size", "lod"];
 /// One `ui.displays[].sources` binding: the guest fetches snapshots by (display-id, source-id),
-/// and the host resolves `port` to that port's analysis ring / scalar / data window (sources.wit).
-const DISPLAY_SOURCE_KEYS: [&str; 2] = ["id", "port"];
+/// and the host resolves EITHER `port` (that port's analysis ring / scalar / data window,
+/// sources.wit) OR `stream` (a broker stream binding — a registry id or a `param:` indirection,
+/// ADR-011 / WO-020). The two are mutually exclusive; exactly one is required.
+const DISPLAY_SOURCE_KEYS: [&str; 3] = ["id", "port", "stream"];
+/// The keys a `ui.panel.widgets[].visible_if` predicate carries (v1: one equality on one param —
+/// plan D7). Anything richer is a later minor; the shape is pinned here so a typo is a word, not a
+/// silently-ignored widget that never shows.
+const VISIBLE_IF_KEYS: [&str; 2] = ["param", "equals"];
 /// `ui.displays[].kind` — the two host-rendered vocabularies (module-api §10): a 2D display list
 /// or a 3D scene descriptor.
 const DISPLAY_KINDS: [&str; 2] = ["display_list", "scene"];
@@ -242,8 +248,11 @@ fn check_unmodelled(root: &Table, r: &mut ValidationReport) {
             if name == "ui" {
                 // v1.1: `displays[]` entries are content-checked against the frozen shape
                 // (ADR-010 / WO-017). The rest of `ui` stays key-checked-only until its typed
-                // decode lands with the painters that need it.
+                // decode lands with the painters that need it (WO-014) — EXCEPT the two shapes
+                // WO-020 specifies and needs now: display `stream` bindings (ADR-011) and the
+                // panel widgets' `visible_if` predicate (plan D7).
                 check_displays(t, r);
+                check_widget_visible_ifs(t, r);
             }
         }
     }
@@ -368,7 +377,7 @@ fn check_displays(ui: &Table, r: &mut ValidationReport) {
                 );
             }
         }
-        // sources: optional list of {id, port} bindings; ids unique within this display.
+        // sources: optional list of {id, port|stream} bindings; ids unique within this display.
         if let Some(sources) = d.tables("sources") {
             let mut seen: Vec<&str> = Vec::new();
             for (s, src) in sources.iter().enumerate() {
@@ -394,12 +403,30 @@ fn check_displays(ui: &Table, r: &mut ValidationReport) {
                         seen.push(id);
                     }
                 }
-                if src.get("port").and_then(Value::as_str).is_none() {
-                    r.push(ValidationError::new(
+                // Exactly one of `port` or `stream` (ADR-011 / WO-020 plan D4): a binding reads
+                // EITHER a port/analysis source OR a broker stream, never both, never neither.
+                match (src.get("port").and_then(Value::as_str), src.get("stream")) {
+                    (Some(_), Some(_)) => r.push(
+                        ValidationError::new(
+                            CodeKind::CrossField,
+                            sb.clone(),
+                            "a source binding reads EITHER a port/analysis source OR a broker \
+                             stream, not both (ADR-011) — remove one",
+                        )
+                        .with_found("both `port` and `stream`")
+                        .with_allowed(
+                            "port = \"<port/analysis id>\"  |  stream = \"<registry-id>\" or \
+                             \"param:<param-id>\"",
+                        ),
+                    ),
+                    (None, None) => r.push(ValidationError::new(
                         CodeKind::KeyMissing,
                         format!("{sb}.port"),
-                        "say which port or analysis source this binding reads",
-                    ));
+                        "say what this binding reads: `port = \"<port/analysis id>\"` or \
+                         `stream = \"<registry-id>\" | \"param:<param-id>\"` (ADR-011)",
+                    )),
+                    (Some(_), None) => {}, // a port binding — the port-id check is the validator's
+                    (None, Some(sv)) => check_stream_binding(sv, &sb, r),
                 }
             }
         } else if let Some(v) = d.get("sources") {
@@ -407,10 +434,95 @@ fn check_displays(ui: &Table, r: &mut ValidationReport) {
                 ValidationError::new(
                     CodeKind::ValueMalformed,
                     format!("{base}.sources"),
-                    "sources is a list of {id, port} tables",
+                    "sources is a list of {id, port|stream} tables",
                 )
                 .with_found(v.type_name()),
             );
+        }
+    }
+}
+
+/// Shape-checks a `ui.displays[].sources[].stream` binding (ADR-011 / WO-020 plan D4). The decoder
+/// checks the SHAPE only — a non-empty string, either a bare registry id or a `param:<id>`
+/// indirection with a non-empty param id. Whether the registry id EXISTS in `streams.toml`, and
+/// whether a `param:` target exists / is an enum / has options inside the registry, is resolved by
+/// `sparq mod validate` (it owns the registry and the decoded params — sparq-host-wasm), because the
+/// contract crate must not depend on the broker crate.
+fn check_stream_binding(v: &Value, sb: &str, r: &mut ValidationReport) {
+    let Some(s) = v.as_str() else {
+        r.push(
+            ValidationError::new(
+                CodeKind::ValueMalformed,
+                format!("{sb}.stream"),
+                "stream is a string: a registry id (`swpc.kp`) or a param indirection \
+                 (`param:cell_01`) — ADR-011",
+            )
+            .with_found(v.type_name()),
+        );
+        return;
+    };
+    if s.is_empty() {
+        r.push(ValidationError::new(
+            CodeKind::ValueMalformed,
+            format!("{sb}.stream"),
+            "stream must name a registry id or `param:<id>`; an empty string binds nothing",
+        ));
+        return;
+    }
+    if let Some(param) = s.strip_prefix("param:") {
+        if param.trim().is_empty() {
+            r.push(ValidationError::new(
+                CodeKind::ValueMalformed,
+                format!("{sb}.stream"),
+                "`param:` needs a param id after the colon (e.g. `param:cell_01`) — the host \
+                 resolves the indirection to whatever enum stream that param selects",
+            ));
+        }
+    }
+}
+
+/// Shape-checks `ui.panel.widgets[].visible_if` (WO-020 plan D7 — the semantics this specifies: v1
+/// is ONE equality predicate on ONE param value). The widget vocabulary itself stays key-checked-only
+/// until WO-014 types the panel; this walks just far enough to pin `visible_if`'s shape, so a widget
+/// that means to be conditional cannot silently never show. The referenced param's EXISTENCE is the
+/// validator's cross-check (sparq-host-wasm), not the decoder's.
+fn check_widget_visible_ifs(ui: &Table, r: &mut ValidationReport) {
+    let Some(panel) = ui.get("panel").and_then(Value::as_table) else {
+        return;
+    };
+    for (w, widget) in panel.tables("widgets").unwrap_or_default().iter().enumerate() {
+        let Some(vif) = widget.get("visible_if") else {
+            continue;
+        };
+        let wb = format!("ui.panel.widgets[{w}].visible_if");
+        let Some(t) = vif.as_table() else {
+            r.push(
+                ValidationError::new(
+                    CodeKind::ValueMalformed,
+                    wb.clone(),
+                    "visible_if is a table { param = \"<id>\", equals = <value> } — one equality \
+                     predicate on one param (plan D7)",
+                )
+                .with_found(vif.type_name()),
+            );
+            continue;
+        };
+        check_keys(t, &VISIBLE_IF_KEYS, &wb, r);
+        match t.get("param").and_then(Value::as_str) {
+            Some(p) if !p.is_empty() => {},
+            _ => r.push(ValidationError::new(
+                CodeKind::KeyMissing,
+                format!("{wb}.param"),
+                "name the param whose value gates this widget's visibility",
+            )),
+        }
+        if t.get("equals").is_none() {
+            r.push(ValidationError::new(
+                CodeKind::KeyMissing,
+                format!("{wb}.equals"),
+                "the value the param must equal for the widget to show (an enum option index, a \
+                 float within 1e-6, or a bool as 0.0/1.0 — plan D7)",
+            ));
         }
     }
 }
@@ -1102,5 +1214,96 @@ supports_hot_reload = true
         let e = r.first_at("ui.displays[0].brightness").unwrap();
         assert_eq!(e.code(), "E-UNKNOWN-KEY");
         assert!(e.to_string().contains("brightness"), "{e}");
+    }
+
+    #[test]
+    fn stream_source_bindings_are_shape_checked() {
+        // ADR-011 / WO-020 plan D4: a display source binds EITHER a port OR a broker `stream`. The
+        // decoder checks the SHAPE; registry membership and `param:` resolution are the validator's
+        // (sparq-host-wasm), because the contract crate must not depend on the broker crate.
+        const DISP: &str = "\n[ui]\ncolour_class = \"dat\"\n\n[[ui.displays]]\nid = \"wall\"\nkind = \"display_list\"\nmin_size = [2176, 1120]\nlod = \"auto\"\n\n[[ui.displays.sources]]\nid = \"cell-01\"\nstream = \"param:cell_01\"\n";
+        // A param: indirection and a bare registry id are both shape-legal.
+        decode(&format!("{GAIN}{DISP}"))
+            .unwrap_or_else(|r| panic!("param: stream binding should decode: {r}"));
+        let bare = DISP.replace("stream = \"param:cell_01\"", "stream = \"swpc.kp\"");
+        decode(&format!("{GAIN}{bare}"))
+            .unwrap_or_else(|r| panic!("bare registry id should decode: {r}"));
+
+        // Both port and stream on one binding => E-CROSS-FIELD (mutually exclusive).
+        let both =
+            DISP.replace("stream = \"param:cell_01\"", "port = \"out\"\nstream = \"swpc.kp\"");
+        let r = decode(&format!("{GAIN}{both}")).unwrap_err();
+        assert_eq!(
+            r.first_at("ui.displays[0].sources[0]").unwrap().code(),
+            "E-CROSS-FIELD:ui.displays[0].sources[0]"
+        );
+
+        // An empty stream binds nothing => E-VALUE-MALFORMED.
+        let empty = DISP.replace("stream = \"param:cell_01\"", "stream = \"\"");
+        let r = decode(&format!("{GAIN}{empty}")).unwrap_err();
+        assert_eq!(
+            r.first_at("ui.displays[0].sources[0].stream").unwrap().code(),
+            "E-VALUE-MALFORMED:ui.displays[0].sources[0].stream"
+        );
+
+        // `param:` with no id after the colon => E-VALUE-MALFORMED.
+        let noparam = DISP.replace("stream = \"param:cell_01\"", "stream = \"param:\"");
+        let r = decode(&format!("{GAIN}{noparam}")).unwrap_err();
+        assert!(r.has_path("ui.displays[0].sources[0].stream"), "{r}");
+
+        // A non-string stream => E-VALUE-MALFORMED.
+        let nonstr = DISP.replace("stream = \"param:cell_01\"", "stream = 42");
+        let r = decode(&format!("{GAIN}{nonstr}")).unwrap_err();
+        assert_eq!(
+            r.first_at("ui.displays[0].sources[0].stream").unwrap().code(),
+            "E-VALUE-MALFORMED:ui.displays[0].sources[0].stream"
+        );
+    }
+
+    #[test]
+    fn visible_if_is_shape_checked() {
+        // WO-020 plan D7: visible_if is { param = "<id>", equals = <value> } — one equality on one
+        // param. Shape is the decoder's; the param's existence is the validator's cross-check.
+        const PANEL: &str = "\n[ui]\ncolour_class = \"dat\"\n\n[[ui.panel.widgets]]\nkind = \"enum_select\"\nparam = \"selected_cell\"\nvisible_if = { param = \"selected_cell\", equals = 2 }\n";
+        decode(&format!("{GAIN}{PANEL}"))
+            .unwrap_or_else(|r| panic!("a legal visible_if should decode: {r}"));
+
+        // visible_if must be a table.
+        let bad = PANEL.replace(
+            "visible_if = { param = \"selected_cell\", equals = 2 }",
+            "visible_if = \"selected_cell\"",
+        );
+        let r = decode(&format!("{GAIN}{bad}")).unwrap_err();
+        assert_eq!(
+            r.first_at("ui.panel.widgets[0].visible_if").unwrap().code(),
+            "E-VALUE-MALFORMED:ui.panel.widgets[0].visible_if"
+        );
+
+        // Missing `equals`.
+        let noeq = PANEL.replace(
+            "visible_if = { param = \"selected_cell\", equals = 2 }",
+            "visible_if = { param = \"selected_cell\" }",
+        );
+        let r = decode(&format!("{GAIN}{noeq}")).unwrap_err();
+        assert!(r.has_path("ui.panel.widgets[0].visible_if.equals"), "{r}");
+
+        // Missing `param`.
+        let noparam = PANEL.replace(
+            "visible_if = { param = \"selected_cell\", equals = 2 }",
+            "visible_if = { equals = 2 }",
+        );
+        let r = decode(&format!("{GAIN}{noparam}")).unwrap_err();
+        assert!(r.has_path("ui.panel.widgets[0].visible_if.param"), "{r}");
+
+        // An unknown key inside visible_if (v1 is exactly {param, equals}).
+        let extra = PANEL.replace(
+            "visible_if = { param = \"selected_cell\", equals = 2 }",
+            "visible_if = { param = \"selected_cell\", equals = 2, unless = 3 }",
+        );
+        let r = decode(&format!("{GAIN}{extra}")).unwrap_err();
+        assert_eq!(
+            r.first_at("ui.panel.widgets[0].visible_if.unless").unwrap().code(),
+            "E-UNKNOWN-KEY"
+        );
     }
 }

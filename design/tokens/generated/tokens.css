@@ -207,6 +207,7 @@
   --sparq-layout-canvas-node-width-default: 240;
   --sparq-layout-canvas-node-width-min: 160;
   --sparq-layout-canvas-node-width-max: 480;
+  --sparq-layout-canvas-node-width-instrument-max: 2400;
   --sparq-layout-canvas-node-header-height: 32;
   --sparq-layout-canvas-node-port-row: 48;
   --sparq-layout-canvas-node-param-row: 32;
