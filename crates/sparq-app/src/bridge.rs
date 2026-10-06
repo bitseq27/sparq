@@ -1386,4 +1386,116 @@ mod tests {
         let (mut ex_c, m_c, _, _) = build_with_map_at(&gc, svf_id(&gc), &reg, cfg).unwrap();
         assert_ne!(hash_a, t_render_hash(&mut ex_c, m_c, &cfg), "the composition moves the sound");
     }
+
+    // ── WO-020 INC3: the port-less node proof (plan D5) — bridge + browser + canvas legs ────────
+    //
+    // The executor half lives in crates/sparq-audio/tests/portless_instrument.rs. Here: the three
+    // surfaces between the registry and the operator's eyes. The manifest under test is the
+    // CHECKED-IN package manifest (include_str! — so a stale or port-growing ship fails to compile
+    // this test, the drift gate by construction).
+
+    use sparq_module_api::decode;
+    use sparq_module_api::module::{BlockStatus, ModuleError};
+    use sparq_module_api::Resources;
+
+    /// The checked-in Observatory manifest (drift gate by compilation).
+    const OBS_MANIFEST: &str = include_str!("../../../instruments/observatory/sparqmod.toml");
+
+    /// A port-less native stand-in for the component (the executor is tier-agnostic; the T2 wasm
+    /// face lands in INC5 behind wasmtime).
+    struct PortlessStub;
+    impl sparq_module_api::module::Module for PortlessStub {
+        fn id(&self) -> &str {
+            "dat/observatory"
+        }
+        fn configure(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+            Ok(())
+        }
+        fn prepare(&mut self, _: &Resources) -> Result<(), ModuleError> {
+            Ok(())
+        }
+        fn process(&mut self, _ctx: &mut sparq_module_api::module::AudioCtx<'_>) -> BlockStatus {
+            BlockStatus::Ok
+        }
+        fn message(&mut self, _: &[u8]) -> Result<(), ModuleError> {
+            Err(ModuleError::Message("the Observatory takes no atom messages in v1"))
+        }
+    }
+    fn portless() -> Box<dyn sparq_module_api::module::Module> {
+        Box::new(PortlessStub)
+    }
+
+    fn registry_with_wall() -> Registry {
+        let mut r = registry();
+        r.register(OBS_MANIFEST, portless).expect("the port-less manifest must register");
+        r
+    }
+
+    fn nid_of(op: &Op) -> CanvasNodeId {
+        match op {
+            Op::AddNode(n) => n.id,
+            _ => unreachable!(),
+        }
+    }
+
+    /// The port-less wall beside the permanent master, no wires (the wall has no ports to wire).
+    fn wall_beside_master(reg: &Registry) -> (CanvasGraph, CanvasNodeId) {
+        let obs = decode(OBS_MANIFEST).unwrap();
+        let out_m = reg.get("sparq/out/main").unwrap().manifest().clone();
+        let mut g = CanvasGraph::new();
+        let _obs = nid_of(&g.op_add_node(NodeSpec::from_manifest(&obs), Vec2::new(400.0, 0.0)));
+        let master = nid_of(&g.op_add_node(NodeSpec::from_manifest(&out_m), Vec2::ZERO));
+        (g, master)
+    }
+
+    #[test]
+    fn the_bridge_builds_an_executor_with_a_port_less_node_in_the_graph() {
+        let reg = registry_with_wall();
+        let (g, master) = wall_beside_master(&reg);
+        let (mut ex, km) =
+            build(&g, master, &reg).expect("bridge::build must not refuse a port-less node");
+        let mut buf = vec![0.0f32; RENDER_BLOCK * RENDER_CHANNELS];
+        ex.render_block(km, &mut buf).unwrap();
+    }
+
+    #[test]
+    fn the_browser_lists_the_port_less_instrument_under_its_layer() {
+        let reg = registry_with_wall();
+        let cat = browser_catalog(&reg);
+        let obs = cat
+            .iter()
+            .find(|b| b.spec.module_id == "dat/observatory")
+            .expect("a module the browser cannot show is a module nobody can patch in");
+        assert!(obs.spec.ports.is_empty(), "the catalog carries the port-less spec honestly");
+        assert_eq!(obs.layer, sparq_module_api::manifest::Layer::Instrument);
+        assert_eq!(obs.spec.params.len(), 26, "the inspector will show the 26 params");
+    }
+
+    #[test]
+    fn the_canvas_layout_computes_a_card_for_a_zero_port_spec() {
+        let obs = decode(OBS_MANIFEST).unwrap();
+        let spec = NodeSpec::from_manifest(&obs);
+        assert!(spec.ports.is_empty());
+        let (param_h, well, total) = sparq_ui::canvas::layout::node_bands(&spec);
+        assert!(total >= param_h, "bands sum consistently");
+        assert!(
+            well.is_none(),
+            "no inset well is synthesised for an instrument display (INC4 adds the display band)"
+        );
+        let size = sparq_ui::canvas::layout::node_size(&spec);
+        assert!(
+            size.x.is_finite() && size.y.is_finite() && size.y > 0.0,
+            "a finite card, no refusal"
+        );
+    }
+
+    #[test]
+    fn a_port_less_node_survives_a_full_canvas_layout_pass() {
+        let reg = registry_with_wall();
+        let (g, _m) = wall_beside_master(&reg);
+        let cam = sparq_ui::canvas::Camera::default();
+        let view = sparq_ui::geom::Rect::from_min_size(Vec2::ZERO, Vec2::new(2560.0, 1600.0));
+        let layout = sparq_ui::canvas::layout::compute(&g, &cam, view);
+        assert_eq!(layout.nodes.len(), 2, "both cards (incl. the port-less wall) are laid out");
+    }
 }

@@ -5,6 +5,10 @@
 //! the Phase 6 renderer swap (ADR-003) safe: the identity lives in data, and the drawing backend
 //! is a consumer of it.
 //!
+//! WO-020 INC4 adds [`displaylist`]: the host-side painter core for the frozen display-list
+//! vocabulary (plan §8.1) — the D13 interchange in, resolved geometry + style out, for the SVG and
+//! egui backends — and [`json`], the subset reader that keeps it dependency-free.
+//!
 //! WO-012 adds the parts of the shell that must *survive* that swap (input-model.md §1): the
 //! pointer model, the gesture recogniser, the shell layout computation and the touch-target
 //! audit. WO-013 adds [`canvas`]: the graph surface — model, camera, computed layout, connection
@@ -25,8 +29,10 @@
 
 pub mod audit;
 pub mod canvas;
+pub mod displaylist;
 pub mod geom;
 pub mod gesture;
+pub mod json;
 pub mod pointer;
 pub mod shell;
 pub mod tokens;

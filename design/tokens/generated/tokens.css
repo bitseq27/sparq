@@ -163,6 +163,9 @@
   --sparq-layout-corner-micro: 2;
   --sparq-layout-corner-panel: 4;
   --sparq-layout-corner-max: 4;
+  --sparq-layout-marker-radius-s: 3;
+  --sparq-layout-marker-radius-m: 5;
+  --sparq-layout-marker-radius-l: 8;
   --sparq-layout-elevation-shadow: forbidden;
   --sparq-layout-elevation-overlay-opacity: 0.95;
   --sparq-layout-touch-min-target: 44;

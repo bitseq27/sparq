@@ -758,6 +758,49 @@ fn params(root: &Table, r: &mut ValidationReport) -> Vec<ParamSpec> {
                 default: opt_f64(t, "default", &format!("{base}.default"), r),
                 per_voice: opt_bool(t, "per_voice", &format!("{base}.per_voice"), r),
                 morph: opt_str(t, "morph", &format!("{base}.morph"), r),
+                options: param_options(t, &base, r),
+            }
+        })
+        .collect()
+}
+
+/// Parses an enum param's `options[]` (an array of inline tables with `value` + `label`). A
+/// malformed entry is a words refusal naming the index — an option the picker cannot label is an
+/// option the operator cannot choose.
+fn param_options(
+    t: &Table,
+    base: &str,
+    r: &mut ValidationReport,
+) -> Vec<crate::manifest::ParamOption> {
+    let Some(items) = t.get("options").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            let ob = format!("{base}.options[{i}]");
+            let ot = match o.as_table() {
+                Some(ot) => ot,
+                None => {
+                    r.push(
+                        ValidationError::new(
+                            CodeKind::ValueMalformed,
+                            ob.clone(),
+                            "an option is an inline table { value = \"…\", label = \"…\" }",
+                        )
+                        .with_found(o.type_name()),
+                    );
+                    return crate::manifest::ParamOption::default();
+                },
+            };
+            crate::manifest::ParamOption {
+                value: opt_str(ot, "value", &format!("{ob}.value"), r)
+                    .unwrap_or_default()
+                    .to_string(),
+                label: opt_str(ot, "label", &format!("{ob}.label"), r)
+                    .unwrap_or_default()
+                    .to_string(),
             }
         })
         .collect()

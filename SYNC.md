@@ -1,6 +1,78 @@
-# Sync manifest — operator UI rounds: rev 4 (2026-10-02), the cable-node / living-wells round
+# Sync manifest — WO-020 The Observatory: INC1–INC4 (2026-10-06)
 
-**Current bundle: `sparq-update-2026-10-02.zip` REV 4 (operator round 4 of 2026-10-02 — a
+**Current bundle: `sparq-update-2026-10-06-wo020-inc4.zip` (a FULL-TREE pack, 471 entries —
+defect #94's remedy stands: it overlays any tree at or after `sparq-update-2026-10-05-r8.zip` /
+git `96fe57d` and does not depend on a base the receiver might not have).** Excluded from the
+pack by the standing rule: `.git/`, `target/`, `Cargo.lock` (untracked by house rule; cargo
+re-resolves on first build), `logs/`, `*.wav`, `handoff/` (the receiver's copies win), and
+`SYNC-STAMP.txt` — **the stamp does NOT ride** (rev-3 pattern): after applying, re-run
+`python tools\sync_check.py --write --sync sparq-wo020-inc4-2026-10-06` on the machine that will
+own the tree; until then `scripts\build.bat` / `test006`'s `[00b]` name the stamp mismatch in
+words, which is EXPECTED, not a failure. The zip's sha256 is recorded in the delivery message and
+in `handoff/sha256sums-wo020.txt` (which rides the repo, not the zip). **Provenance:** sandbox
+branch `wo020-observatory` off main `96fe57d` (the operator's Fresh-start re-publish, which
+already carries WO-020 INC1+INC2, the plan and the §18 mockups); durable history in
+`handoff/sparq-wo020-inc1…inc4.bundle` + the closing `sparq-wo020-delivery.bundle`
+(`96fe57d`..the delivery commit), each with a `.sha256` sidecar; packer
+`handoff/make_pack_wo020.py` (self-verifying: entry-by-entry zip↔tree hashes, count assertions
+against this manifest and the run sheet, MUST-NOT-MOVE surfaces diffed vs base — it refuses to
+write a pack whose documents would lie about it).
+
+**What it carries:** WO-020 "The Observatory" (`dat/observatory`) **through INC4** — the stream
+plane's hermetic half (INC1, on main already: `sparq-streams`, the 23-stream registry as data,
+all 23 fixtures at HTTP 200), the contract additions (INC2, on main: ADR-011, the `stream`
+binding, `E-STREAM-UNKNOWN`), **INC3 the guest**: the `instruments-src/observatory/` workspace
+(pure core + wasm glue + native harness over one object, D13), the coastline asset (128 rings /
+3 500 pts / 14 524 B), the generated manifest (26 params, 27 toolbar widgets, 16 stream
+bindings), the **206 081 B component** (`wasm-tools validate` clean, `sparq:instrument/guest@1.1.0`),
+the 4-file package `instruments/observatory/`, the pinned golden IR
+(`bdf59cdb232f947091451017f50712a444687c8b1f0a62b5a630763775e974fa`), and **INC4 the host**:
+`sparq-ui::{json,displaylist}` (zero-dep painter core + SVG backend), the egui backend, the
+dropdown picker (**round-4's OWED item 11 discharged**; 44 px rows, undoable), camera FOCUS, D6
+wall-card sizing (2208×1288), the browser's instrument grouping, the at-rest wall in the shell
+(`SPARQ_ATREST` / cache dir, WORDS when none), `sparq instrument render`. Sandbox gates at the
+seal: root **1033 / 0 / 1-ignored**; observatory workspace **124 + 6**; `sparq-streams`
+**75 / 0**; clippy clean in every runnable cell; fmt clean both workspaces; every python gate;
+`ui --audit` **PASS**, coverage **97.5 %**; `mod validate` **PARTIAL exit 1 BY DESIGN** (stages
+3/4/6 refuse in words — the runtime half is INC5); goldens untouched (`ba577186c988db21`); WIT
+pins, the 24 module manifests and `SYNC-STAMP.txt` unmoved (asserted by the packer). **Two
+honest states ride along:** `token_audit` still fails the pre-existing §18 mockup SVGs (14 groups
+/ 298 occurrences — on main before this pack; `gates.bat`'s `design conformance` row will be red
+on exactly that), and **PLAY with the Observatory on canvas refuses in words (#58)** until INC5's
+wasmtime loader registers packages.
+
+**Namelist** (95 paths vs git `96fe57d` — 61 A / 34 M; the pack carries the whole tree, this
+names what moved; the 10 `handoff/` artefacts — inc3/inc4 + delivery bundles and sidecars, the
+packer, the pack's committed copy, the sums — do not ride): `instruments-src/observatory/**` (34 —
+the whole guest workspace: core 17, wasm glue 2, harness 9, package 3, `gen_manifest.py`, the
+coastline asset) · `instruments/observatory/` (4 — the shipped package incl. the component) ·
+`crates/sparq-ui/` (11 — `json.rs` + `displaylist.rs` + `canvas/picker.rs` new; browser, inset,
+inspector, interact, layout, model, mod, lib touched) · `crates/sparq-app/` (11 — `ui/atrest.rs` +
+`ui/displaylist_egui.rs` new; canvas_ui, headless, shell_ui, ui/mod, bridge, cli, instruments,
+Cargo.toml, `tests/r3_controls.rs`) · `crates/sparq-host-wasm/` (3 — `sources.rs` new + the
+`streams` feature) · `crates/sparq-module-api/` (2 — `ParamSpec.options` decode + manifest) ·
+`crates/sparq-audio/tests/portless_instrument.rs` (the D5 proof, +9 tests) · `design/tokens/` (6
+— additive `layout.marker.radius_s/m/l` + regenerated bundle) · `tools/` (5 —
+`make_coastline.py`, `observatory_package.py`, `fetch_wasm_tools.py` new; `streams_record.py`
+text-I/O fix, `token_gen.py` LUT lookups) · `reference/observatory/` (2 — the INC4 convergence
+sheet + README) · root docs (6 — `WO020-INC4-RUN-SHEET.md` new; `SYNC.md`, `WO020-STATE.md`,
+`CHECKLIST.md`, `LATER.md`, `.gitignore`).
+
+**THE ASK:** apply → re-stamp → `scripts\gates.bat` (expect the single pre-existing
+`design conformance` red, everything else ok) → the WO-020 device column of
+`WO020-INC4-RUN-SHEET.md` §2 (first device measurements: streams 23, guest tests + budget block
+exact-match, `mod validate` PARTIAL, the at-rest render via `SPARQ_ATREST`, the shell visual row,
+the audit) → send back §3's list. The Windows at-rest cache-dir disagreement (harness
+`%USERPROFILE%\.cache\…` vs app `%APPDATA%\…`) is recorded in `LATER.md` — use the env door; INC5
+aligns it. Standing asks from ROUND8-HANDOFF §7 step 4 unchanged. **Next: WO-020 INC5**
+(device-only: wasmtime loader, `BrokerProvider`, stage-6 at-rest publishing, the full validate
+chain, `scripts\test007.bat` live acceptance) on a ≥ 2 GB host.
+
+---
+
+## Previous bundle — operator UI rounds: rev 4 (2026-10-02), the cable-node / living-wells round
+
+**Rev 4 was `sparq-update-2026-10-02.zip` (operator round 4 of 2026-10-02 — a
 FULL-TREE pack, defect #94's remedy: it overlays any tree at git `871d725` or later and does not
 depend on a base the receiver might not have).** Excluded from the pack by rule: `.git/`,
 `target/`, `Cargo.lock` (regenerates on first build), `logs/`, `*.wav`, and `SYNC-STAMP.txt` —

@@ -1,9 +1,13 @@
-# WO020-STATE.md — state record (The Observatory, WO-020) — **INC1 + INC2 CLOSED, built and measured green**
+# WO020-STATE.md — state record (The Observatory, WO-020) — **INC1–INC4 CLOSED, built and measured green**
 
-**Last touched:** 2026-10-06, this build session (Linux sandbox, ~1 GB / 2 cores). Plan of record:
-`WO020-OBSERVATORY-PLAN.md`. Operator rulings for this session (via the question tool): **build
-INC1, then continue into INC2**, and **install Rust + compile/test for real** (not source-only).
-INC3–INC6 are NOT started; INC5 is device-only by construction and INC6 is deferred/gated.
+**Last touched:** 2026-10-06, delivery session (same sandbox, after the INC4 seal) — **INC1–INC4
+PACKED FOR THE DEVICE**: `sparq-update-2026-10-06-wo020-inc4.zip` + `WO020-INC4-RUN-SHEET.md` +
+the closing `handoff/sparq-wo020-delivery.bundle` (see **Delivery** below). **Previous touch:**
+the INC4 session — **INC4 CLOSED**:
+the host painters over INC3's IR, the dropdown picker (round-4 OWED item 11 discharged), camera
+FOCUS, the D6 wall-card sizing, the browser's instrument grouping, the at-rest wall in the shell,
+`sparq instrument render`. Plan of record: `WO020-OBSERVATORY-PLAN.md`. Remaining: **INC5 is
+device-only by construction** (the run sheet's §4), INC6 is deferred/gated.
 
 > **Environment note (survives a re-read):** the sandbox snapshot does NOT persist the installed
 > toolchain or `.git`. This session re-installed rustup (via python — no curl/wget) + `gcc` (apt),
@@ -12,6 +16,101 @@ INC3–INC6 are NOT started; INC5 is device-only by construction and INC6 is def
 > recoverable after the snapshot dropped `.git` (and one working-tree file, `modules/out/main/`,
 > restored from HEAD). The resume recipe below re-installs both. **Commit + bundle every increment:**
 > the bundle in `handoff/` is the durable artefact, not `.git`.
+
+---
+
+## Delivery — 2026-10-06 (handoff prep: the pack, the run sheet, the closing bundle)
+
+Operator instruction: **"prep handoff and sync zip."** The device delivery for INC1–INC4, in the
+r8/rev-4 house shape:
+
+| artefact | what |
+|---|---|
+| `sparq-update-2026-10-06-wo020-inc4.zip` (workspace root, one level above the repo; copy committed under `handoff/`) | **FULL-TREE pack, 471 entries** (defect #94's remedy: overlays any tree at or after the r8 pack / git `96fe57d`). Exclusions by the standing rule: `.git/`, `target/`, `Cargo.lock`, `logs/`, `*.wav`, `handoff/`, and **`SYNC-STAMP.txt` — the stamp does not ride and did not move from the sandbox** (MUST-NOT-MOVE honoured; the device re-stamps `--sync sparq-wo020-inc4-2026-10-06`, run sheet §1 step 2). sha256 + size: `handoff/sha256sums-wo020.txt` + the delivery message. |
+| `WO020-INC4-RUN-SHEET.md` (ships inside the pack) | the operator's steps: apply → re-stamp → `gates.bat` (the ONE expected red: `design conformance` on the pre-existing §18 mockup set, 14 groups / 298 occurrences — on main before this pack) → the WO-020 device column (streams 23, guest tests + the budget block **exact-match** — deterministic replay, `mod validate` PARTIAL by design, the at-rest render via the `SPARQ_ATREST` env door, the shell visual row, the audit) → send-back list → what INC5 is. Both honest refusals are stated up front: validate's stages 3/4/6 and **PLAY #58** (until INC5's loader). |
+| `handoff/make_pack_wo020.py` | the packer, checked in (the `make_pack.py` precedent): a **self-verifying pre-pack gate** — every entry's zipped bytes re-read and hashed against the working tree, the tree required clean vs HEAD, entry/namelist counts asserted against the numbers printed in the run sheet + SYNC.md (471 / 95 / 85 — the refusal it fired when the first artefact commit moved the namelist under the documents is the gate working, recorded in the delivery message), the MUST-NOT-MOVE surfaces (WIT, `modules/`, the stamp, `reference/fixtures`, the goldens) diffed vs base, and the exclusion rules asserted absent. It refuses to write a pack whose documents would lie about it — LATER.md's pre-pack-gate ideal, discharged for this delivery. |
+| `handoff/sparq-wo020-delivery.bundle` (+ `.sha256`) | the closing bundle `96fe57d..HEAD` at the delivery seal — one fetch restores the whole WO-020 branch (INC1–INC4 + the delivery documents) into any clone of the base; supersedes the per-increment bundles for recovery (they stay committed as the increment record). |
+| `SYNC.md` | new top entry (this pack: provenance, gates, the 90-path namelist vs `96fe57d`, THE ASK); rev 4 demoted to "Previous bundle" per the house pattern. |
+
+**Windows friction found by the delivery prep (recorded, not papered over; `LATER.md` INC5 doors):**
+the two at-rest cache-dir defaults disagree on Windows — the harness's `atrest_path()` writes
+`%USERPROFILE%\.cache\sparq\at-rest\` while the app's `atrest_dir()` reads `%APPDATA%\sparq\at-rest\`
+(the app grew the `cfg!(windows)` branch, the harness did not). Both sides honour `SPARQ_ATREST`
+first, so the run sheet uses the env door; INC5 aligns the harness. Same section: the guest
+workspace's `Cargo.lock` is untracked by the house `.gitignore`, so a device-side component REBUILD
+resolves `wit-bindgen` unpinned — the shipped component is byte-pinned in the pack regardless.
+
+**Branch state at the delivery seal:** `wo020-observatory`, base main `96fe57d` (= `origin/main`);
+16 increment commits (`cef2385`..`44d623b`) + the delivery commits (the documents at `097a7ff`,
+then the artefacts); working tree clean; nothing pushed (no credentials —
+the bundles + this pack are the delivery, ROUND8's discipline).
+
+---
+
+## INC3 — the guest: source project, five-file package, harness, component — CLOSED
+
+The plan's D13 split, built: one pure core linked by BOTH the wasm glue and the native harness, so
+the shipped logic and the proven logic are the same object. The component build attempt (risk §12.2)
+SUCCEEDED in the ~1 GB sandbox, so the package ships its real wasm and `sparq mod validate` runs its
+static half over the assembled directory.
+
+| path | what |
+|---|---|
+| `tools/make_coastline.py` + `instruments-src/observatory/assets/coastline-110m.bin` | D12: Natural Earth 110m land (public domain, cached `tools/data/`) → Visvalingam-Whyatt (one shared area threshold, binary-searched to the point target, index tie-break — deterministic) → **128 rings / 3 500 points / 14 524 B** (budgets ≤ ~3 500 pts / ≤ 160 KB). Format documented in the tool: LE, `u32` magic/version/ring-count, per ring `u32` count + `i16` centidegree lon/lat pairs, rings implicitly closed. `--check` is the staleness gate. Embedded via `include_bytes!` (the wasm data section, guide §3 small-asset rule). |
+| `instruments-src/observatory/Cargo.toml` | its OWN workspace (core/wasm/harness) on the `tools/sparq-module-guest` precedent — the wasm face needs wit-bindgen and the root's default build stays zero-dep. **`exclude = ["../../tools/sparq-module-guest"]` is load-bearing**: without it, path-dep auto-membership makes `cargo fmt --all` in this workspace REFORMAT the frozen SDK (measured, twice). House lints mirrored; release profile `strip = "debuginfo"` (component 2.9 MB → 206 KB, name section kept for device trap messages). |
+| `instruments-src/observatory/gen_manifest.py` | `package/sparqmod.toml` + `core/src/streams_table.rs`, both from `streams.toml` (never hand-typed): 16 cell enums × (OFF + 23 registry ids in file order), `selected_cell`, `layout`, five bools (**float defaults — the §10 `true` gap closed**), three floats (**history in SECONDS 600…604 800 default 10 800 exp — the §10 `min` gap closed**, UNITS is closed), the §5.2 toolbar as 27 generated widgets (the sixteen STREAM `enum_select`s carry `visible_if = { param = "selected_cell", equals = <option INDEX> }`), display `wall` (min_size 2176×1120, colormap.thermal) + 16 `stream = "param:cell_NN"` sources, port-less (D5), `network = "none"`, `gpu_class = "medium"`. The streams table is the guest-side registry mirror (no fs/network in T2). `--check` gates both artefacts. |
+| `observatory-core` (pure, zero deps) | `ir.rs` the display-list IR, field-for-field display.wit v1 (Lod ordered detail-ascending so `>= Reduced` reads as detail); `record.rs` the third mirror of the frozen data-record (D13 — the harness and the glue own the two mappings, both drift-tested); `layout.rs` §5.1 maths as tested functions; `params.rs` the 26-param decode (floats = raw domain values, the native precedent; enums = option index; bools 0/1; clamping, NaN-index fallback) with **const-asserts proving 26 ≤ 32**; `state.rs` the deterministic blob (`OBS1` v1, magic+version+26×f32 LE = 109 B; **params-only — the scroll phase is display-instance animation and save_state runs on the audio instance, instrument-host §4**); `coastline.rs` the asset reader (refuses bad magic/version/truncation/trailing bytes in words); `view.rs` window→view (clock-free: x-windows end at the newest record's own `t_utc`); `render/*` the seven §5.5 renderers + §5.3 chrome + §5.5 ticker + §5.7 LOD ladder; `wall.rs` draw + budget counter. |
+| `observatory-wasm` | the SDK glue: `process` = the port-less no-op returning `Ok` + the exact empty negotiated shapes while mirroring `block-input.params`; `draw` = 16 × `sources.snapshot("wall","cell-NN")` → core records → `Wall::draw` → IR→WIT conversion (total, tested); `configure`/`save_state` = the params blob; KEY NEEDED derived from the served window + the stream's `key_env` (D14). 10 native tests (the export macro is wasm-gated, so the glue is host-testable). |
+| the component | **built in the sandbox**: `rustup target add wasm32-unknown-unknown` + `cargo build --release --target wasm32-unknown-unknown -p observatory-wasm` + `wasm-tools component new` (v1.261.0 prebuilt x86_64-linux, GitHub release — `cargo install wasm-tools` is too heavy for 1 GB) → `wasm-tools validate` CLEAN, **206 081 B**, world imports `types/sources/audio/display`, exports `sparq:instrument/guest@1.1.0`. The `wasm32-wasip1` attempt was made first and REJECTED with evidence: wasip1 std startup imports `wasi_snapshot_preview1::environ_get`, which the host deliberately does not provide (capability by absence, WIT README decision E) — `component new` refuses it. The corrected recipe (WIT README) is unknown-unknown. |
+| `observatory-harness` | `to_core` (broker windows → core records, D14 key-words), `tokens` (the checked-in bundle as resolver — unknown id skips with a diagnostic, hairline opacity read from `color.hairline.regular`), `ir_json` (the D13 interchange; BTreeMap-sorted keys + deterministic floats ⇒ stable hashes; NaN → JSON null = the no-cell sentinel), `svg` (the minimal painter — INC4's `displaylist.rs` stand-in over the SAME IR; heat grids downsampled to ≤ 8192 cells FOR THE SVG ONLY, the IR keeps full resolution). Renders the §5.4 default wall at the three breakpoints' LODs; artefacts gitignored, regenerable. 22 unit tests + `tests/golden.rs` (6): **golden IR sha256 `bdf59cdb232f947091451017f50712a444687c8b1f0a62b5a630763775e974fa`** (re-pinned INC4 when the interchange gained `display_w`/`display_h` — a format change, reason recorded at the pin) (hand-rolled sha256 with published vectors), streams_table↔registry field-for-field, Metrics↔bundle, manifest-defaults↔core-defaults, all 26 emitted token ids resolve. |
+| `tools/observatory_package.py` + `instruments/observatory/` | the assembler copies, never invents: refuses a stale generated manifest (`gen_manifest --check`), a missing hand-authored file, or a missing component (a half-package fails stage 2 fatally). Assembled **4 files ≤ 5 cap**: `sparqmod.toml`, `observatory.wasm`, `example.sparqpatch` (§5.4: the wall beside `mod/clk→mod/seq→syn/sine→util/vca→out/main`, silent-but-live), `README.md` (keys §11.4, attribution §11.3 incl. the Open-Meteo non-commercial flag, budgets). `preview.svg` absent BY DESIGN (stage 6 generates it; `package.rs` makes absence advisory). |
+| `crates/sparq-audio/tests/portless_instrument.rs` + `bridge.rs` unit tests | the D5 proof as TESTS (+9): the shipped manifest validates port-less; registration accepts it; the executor builds a port-less-ONLY graph; the wall coexists with the audio path and the set still plays; `bridge::build` with the wall in the canvas graph; `browser_catalog` lists it (instrument layer, 26 params); `node_bands`/`node_size`/full `layout::compute` never refuse a zero-port spec. Both read the CHECKED-IN package manifest (include_str!/path), so a port-growing ship fails by construction. |
+| `design/tokens/layout.toml` + regenerated | additive: `[marker] radius_s/m/l = 3/5/8` — the `points-item.size` token class §5.5's "size class by magnitude" requires (a size token id with no bundle entry is an unresolvable primitive). `token_gen --check` deterministic; `token_bundle.rs` pin test green; no new `token_audit` violation. |
+| `tools/streams_record.py` (hygiene, first commit of the session) | the CI `check_text_io` gate was **RED on main** (INC1 left two bare pathlib `write_text` calls + no UTF-8 stream reconfigure). Fixed with the house helper pair; gate green; `--list` unchanged. |
+
+**INC3 gates (all MEASURED this session):** `sparq mod validate instruments/observatory/` → stage 1
+**PASS**, stage 2 **PASS** (4 files, roles recognised, component present), stages 3/4/6 **REFUSED IN
+WORDS** (the runtime half), stage 5 static half PASS, stage 7 unsigned→badged; **GATE: PARTIAL,
+exit 1 by design** ("a partial gate is not a hand-in"). `sparq mod list` → `dat/observatory v0.1.0
+… loadable` + the preview.svg advisory. Root `cargo test --workspace` **991/0/1-ignored** (+9 over
+INC2). instruments-src workspace **124 lib/unit + 6 golden/drift** tests. clippy `--all-targets
+-D warnings` CLEAN in BOTH workspaces. fmt CLEAN (root `--all`; instruments-src PER PACKAGE — `--all`
+there adopts the SDK). Python gates: `token_gen --check`, `unsafe_audit`, `module_docs --check`,
+`check_text_io`, `sync_check --self-test`, `make_coastline --check`, `gen_manifest --check` all PASS;
+`token_audit` still fails the pre-existing §18 mockup SVGs (no INC3 file flagged; that gate's owner
+is the mockup work). WO-005 golden hash `ba577186c988db21` UNCHANGED (printed and compared). WIT
+pins, the 24 module manifests, `SYNC-STAMP.txt` UNTOUCHED. Harness SVGs reviewed in-session at the
+three LODs against the display-sheet idiom (aurora oval + colourbar, coastlines, quake/EONET/GDACS
+dots, ISS footprint ring + crosshair, Kp bars + storm line, phosphor-green traces, AQI gauge sweep,
+WWV raw text, the scrolling ticker; Reduced drops graticules/labels, Minimal keeps renderers under
+the 500-primitive rule + the ticker).
+
+**Found by building it (recorded, not papered over):**
+1. **§5.1 table erratum:** the 4×4 cell height prints 270; the plan's own gap (`space.4` = 16) gives
+   `round((1120 − 3·16)/4)` = **268**. The formula is the source of truth (layout.rs test asserts
+   268 with a comment; every other table value reproduces exactly).
+2. **`cargo fmt --all` adopts path-deps' workspaces** — in instruments-src it reformatted the frozen
+   SDK; the workspace `exclude` fixes it, and the house rule here is per-package fmt.
+3. **`wasm32-wasip1` cannot componentise** under the no-WASI host (environ_get import); the contract's
+   own corrected recipe (unknown-unknown) is the path.
+4. **Draw-order bug caught by LOOKING at the render:** the cell chrome painted the inset ground
+   AFTER the body, burying every renderer; split into `cell_ground` (under) → body → chrome.
+5. **Frozen-surface frictions → LATER.md (ADR-010 review-trigger material):** `trace-item` has no box
+   (per-cell series ride polylines; phosphor motion tokens unused on walls); `rect-item` has no
+   colormap channel (Kp bars encode level as height + the storm line); `glyph-run` has no anchor or
+   measured advance (the guest estimates 0.6 × size for right-align/truncation); one wall-wide
+   `history` param vs daily feeds (POWER shows ~1 point at the 3 h default); gauge threshold bands
+   belong in `streams.toml` rows.
+6. **Canvas anatomy `rows = max(1)`** draws one cosmetic port row on a port-less card — not a refusal
+   (D5's bar is "nothing refuses"); the D6 zero-port-band instrument card is INC4's sizing work.
+7. **Summary-cadence feeds are single-record windows** in fixtures (solar-wind, bz are `summary`
+   endpoints): their timeseries cells draw a dot, not a trace, until the broker accumulates live
+   history (INC5). Honest first-draw behaviour, not a defect — recorded so the device run-sheet
+   expects it.
+
+**Commit/bundle discipline honoured:** four slices (`cef2385` hygiene, `48a56c2` core+generator,
+`0bd7f43` glue+harness+gates, `7c2f4a7` package+D5) + the seal commit carrying this card, the
+CHECKLIST entry and the LATER rows. Bundle: `handoff/sparq-wo020-inc3.bundle` (+ sha256).
 
 ---
 
@@ -95,13 +194,15 @@ socket or wasmtime (plan D2, §9 INC1). The default build stays **zero third-par
 
 ## What is NOT done (the rest of WO-020)
 
-* **INC3** — the guest source project (`instruments-src/observatory/`: core/wasm/harness), the seven
-  renderers, `make_coastline.py`, `gen_manifest.py` (which must emit VALID units/defaults — see the
-  two §10 gaps above), the five-file package, the wasm build attempt. The full 16-cell Observatory
-  manifest (only a representative subset is proven here) is generated in INC3.
-* **INC4** — host painters (`displaylist.rs` + SVG/egui), the `ReplayProvider` wiring (replay.rs is
-  ready for it), the dropdown picker, camera FOCUS, canvas card sizing (`node_width_instrument_max`
-  is now in the token bundle for it).
+* **INC3** — CLOSED this session (see above).
+* **INC4** — CLOSED this session (see the INC4 closeout in CHECKLIST.md). The host half in one
+  sentence: `sparq-ui::displaylist` (zero-dep JSON subset → parsed IR → token-resolving `Painter` →
+  SVG back end) plus the egui back end in `sparq-app` (same resolved list, dashes as segments,
+  curves chorded), the at-rest store (SPARQ_ATREST / cache dir; WORDS when none), the picker
+  (44 px rows, undoable select), FOCUS (menu row / header double-tap / toolbar), D6 sizing
+  (2208×1288 measured; coverage audit row 97.5 % at 2560×1600), browser sections, the §5.2 status
+  label from the ReplayProvider, `sparq instrument render` with the §5.8 budget vs the declared
+  gpu_class.
 * **INC5** — device-only: wasmtime loader, `BrokerProvider` (`streams-net` + `fetch.rs`), the full
   validate chain, live acceptance (run-sheet §15.2 / `scripts/test007.bat`).
 * **INC6** — deferred/gated (sonification, SGP4 tracks, GIBS imagery).
@@ -119,18 +220,38 @@ PY
 /tmp/rustup-init -y --profile minimal --default-toolchain stable --component rustfmt --component clippy --no-modify-path
 # 2. A C linker (rustc needs `cc`; the sandbox has none). Root + apt works:
 apt-get update -qq && apt-get install -y --no-install-recommends gcc libc6-dev
-# 3. Gates:
+# 3. Gates (root workspace):
 export PATH="$HOME/.cargo/bin:$PATH" CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup"
 cd /home/user/sparq
-cargo test --workspace                                   # 971 / 0 / 1
+cargo test --workspace                                   # 991 / 0 / 1  (INC3 seal)
 cargo test -p sparq-streams --features streams           # 75 / 0
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build -p sparq-app --features streams && target/debug/sparq streams list
-# 4. Re-record fixtures only if the network is up and drift is suspected (they are checked in):
+target/debug/sparq mod validate instruments/observatory/  # PARTIAL exit 1 BY DESIGN (static half)
+# 4. The Observatory workspace (its own gates; fmt PER PACKAGE — --all adopts the frozen SDK):
+cd instruments-src/observatory
+cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt -p observatory-core -p observatory-wasm -p observatory-harness --check
+cargo run -q -p observatory-harness -- --report           # §5.8 budget vs medium ceilings
+python3 ../../tools/make_coastline.py --check && python3 gen_manifest.py --check
+# 5. The component (sandbox-proven recipe; wasm-tools PREBUILT — cargo install is too heavy for 1 GB):
+rustup target add wasm32-unknown-unknown
+cargo build --release --target wasm32-unknown-unknown -p observatory-wasm
+python3 tools/fetch_wasm_tools.py   # prints the exec path (pins wasm-tools 1.261.0)
+/tmp/wasm-tools component new target/wasm32-unknown-unknown/release/observatory_wasm.wasm -o /tmp/observatory.wasm
+cd /home/user/sparq && python3 tools/observatory_package.py --component /tmp/observatory.wasm
+# 6. Re-record fixtures only if the network is up and drift is suspected (they are checked in):
 python3 tools/streams_record.py --all --out reference/fixtures/observatory/
 ```
 
 ## House notes
+
+* **Incident (this session, no trace left in the tree):** a broken shell heredoc in the session's own
+  tooling executed the resume recipe's re-record line mid-edit, re-recording all 23 fixtures live
+  (~13:51 UTC). Caught by `git status` before any commit and by the golden-IR pin afterwards; the
+  fixtures, `_meta.json` and the probe log were reverted to HEAD (`git checkout -- reference/fixtures`),
+  the golden re-verified green. Lesson recorded for future sessions: the re-record step is DESTRUCTIVE
+  to the goldens — run it only deliberately — and check `git status` after any command accident.
 
 * `token_audit.py` FAILS on the pre-existing §18 `design/mockups/observatory-*.svg` +
   `display-sheet.svg` (resolved hex in generated SVGs). This predates INC1 — the crate adds no

@@ -1,0 +1,92 @@
+# sparq example patch — The Observatory (file 3 of the 5-file package, WO-020 §5.4)
+#
+# The instrument doing its job beside a minimal backbone ambient chain: the Observatory wall is
+# SILENT-BUT-LIVE (port-less, plan D5 — it declares no audio/cv/event ports, so it contributes no
+# edges) while the set plays through clk → seq → sine → vca → main. This proves canvas coexistence
+# and FIT behaviour with mixed card sizes (a 2208×1288 wall-class card next to 240px backbone cards).
+#
+# Text encoding follows the text-diffable graph part of docs/formats/project.md: deterministic
+# order, one node/edge per logical line, stable ids, no timestamps.
+
+[meta]
+format = "sparqpatch"
+version = 0
+title = "the observatory — a live data wall beside a minimal ambient set"
+modules = [
+  "dat/observatory@0.1.0",
+  "sparq/mod/clk@0.2.0",
+  "sparq/mod/seq@0.2.0",
+  "sparq/syn/sine@0.1.0",
+  "sparq/util/vca@0.2.0",
+  "sparq/out/main@0.1.0",
+]
+
+# --- the instrument: the whole wall, defaults = the §5.4 state (4×4, ticker+grid on) -------------
+[[nodes]]
+id = "obs"
+module = "dat/observatory@0.1.0"
+position = [16, 0]                    # grid units; the wall-class card fills the canvas at zoom 1.0
+[nodes.params]
+layout = 4                            # 4×4 — the full 16-cell wall (option index 4)
+ticker = 1.0
+grid = 1.0
+
+# --- the ambient chain: a sequenced sine drone gated by the seq's step cv -----------------------
+[[nodes]]
+id = "clk"
+module = "sparq/mod/clk@0.2.0"
+position = [0, 0]
+[nodes.params]
+bpm = 96.0
+
+[[nodes]]
+id = "seq"
+module = "sparq/mod/seq@0.2.0"
+position = [3, 0]
+[nodes.params]
+steps = 8.0
+pattern = 170.0
+
+[[nodes]]
+id = "voice"
+module = "sparq/syn/sine@0.1.0"
+position = [6, 0]
+[nodes.params]
+freq = 220.0
+amp = 0.4
+
+[[nodes]]
+id = "gate"
+module = "sparq/util/vca@0.2.0"
+position = [9, 0]
+[nodes.params]
+level = 0.8
+
+[[nodes]]
+id = "out"
+module = "sparq/out/main@0.1.0"
+position = [12, 0]
+
+# --- edges: the chain only; the Observatory is port-less and contributes none (D5) --------------
+[[edges]]
+from = "clk.16th"
+to = "seq.clk"
+kind = "event"
+
+[[edges]]
+from = "seq.step"
+to = "gate.cv"
+kind = "cv"
+
+[[edges]]
+from = "voice.out"
+to = "gate.in"
+kind = "audio"
+
+[[edges]]
+from = "gate.out"
+to = "out.in"
+kind = "audio"
+
+[outputs]
+main = "out"                           # master designation (the bridge renders it to WAV)

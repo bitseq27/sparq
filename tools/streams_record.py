@@ -72,6 +72,32 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# Windows consoles and redirected logs default to the ANSI code page: printing '·'/'—'/'→' on a
+# cp1252 stream raises UnicodeEncodeError mid-report (defect #37). The house rule (tools/README.md
+# -> 'Text I/O portability', enforced by tools/check_text_io.py).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+# Every text read/write goes through these helpers so the tool behaves identically on Windows,
+# where the default encoding is the ANSI code page and text writes translate "\n" to "\r\n"
+# (tools/README.md -> "Text I/O portability"; the `tools-text-io` gate enforces it).
+ENCODING = "utf-8"
+
+
+def read_text(path) -> str:
+    return Path(path).read_text(encoding=ENCODING)
+
+
+def write_text(path, content: str) -> None:
+    pp = Path(path)
+    pp.parent.mkdir(parents=True, exist_ok=True)
+    with pp.open("w", encoding=ENCODING, newline="\n") as fh:
+        fh.write(content)
+
+
 # The crate's UA, mirrored so the recorder and the live transport identify themselves identically
 # (§11.2). NWS *requires* a descriptive UA; the others ask for attribution.
 USER_AGENT = "sparq-observatory/0.0.0-phase0 (+https://github.com/bitseq27/sparq; WO-020 recorder)"
@@ -260,7 +286,7 @@ def write_probe_log(rows: list[dict], envelopes: dict[str, dict], path: Path, no
         "normalizer tests assert against them, so no downstream test touches the network (plan D11).",
         "",
     ]
-    path.write_text("\n".join(lines), encoding="utf-8")
+    write_text(path, "\n".join(lines))
 
 
 def main(argv: list[str]) -> int:
@@ -308,7 +334,7 @@ def main(argv: list[str]) -> int:
         body = env.pop("body", "")
         ext = ext_for(env.get("content_type", ""), body)
         filename = f"{sid}{ext}"
-        (out / filename).write_text(body, encoding="utf-8")
+        write_text(out / filename, body)
         env["file"] = filename
         metas[sid] = env
         flag = "SYNTHETIC" if env.get("synthetic") else ("OK" if env["status"] == 200 else "FAIL")
@@ -319,7 +345,7 @@ def main(argv: list[str]) -> int:
         if i + 1 < len(rows):
             time.sleep(args.delay)
 
-    (out / "_meta.json").write_text(json.dumps(metas, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_text(out / "_meta.json", json.dumps(metas, ensure_ascii=False, indent=2))
 
     if not args.no_probe_log:
         log_path = out / f"PROBE-LOG-{now.strftime('%Y-%m-%d')}.md"

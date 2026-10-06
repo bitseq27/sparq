@@ -256,6 +256,15 @@ pub fn param_split(spec: &NodeSpec) -> (usize, usize) {
 /// well is the BIG one (operator ruling 2026-10-01: a display you can measure needs room).
 #[must_use]
 pub fn node_bands(spec: &NodeSpec) -> (f32, Option<f32>, f32) {
+    // WO-020 INC4 §8.2: an instrument's mid band is its DISPLAY (the declared min_size), and its
+    // param band is the manifest's panel-widget rows (the toolbar), not the backbone's inline
+    // param rows — the wall's 26 params live in the inspector + the dropdown picker (§8.4).
+    if spec.layer == sparq_module_api::manifest::Layer::Instrument {
+        if let Some(d) = spec.display {
+            let param_h = instrument_panel_band(d.panel_rows);
+            return (param_h, Some(d.min_h), param_h + d.min_h);
+        }
+    }
     let (shown, overflow) = param_split(spec);
     let row = LAYOUT_CANVAS_NODE_PARAM_ROW as f32;
     let mut param_h = shown as f32 * row;
@@ -277,6 +286,41 @@ pub fn info_band_height(spec: &NodeSpec) -> Option<f32> {
     (spec.module_id == crate::canvas::OUT_MAIN_ID).then_some(LAYOUT_CANVAS_NODE_INFO_HEIGHT as f32)
 }
 
+/// Whether a node's card is an instrument's (D6 sizing, display band, no inline param rows).
+fn spec_is_instrument(spec: &NodeSpec) -> bool {
+    spec.layer == sparq_module_api::manifest::Layer::Instrument && spec.display.is_some()
+}
+
+/// The instrument panel band's height (D6): `rows × the 44 px touch floor + the 16 px gaps`
+/// between them; zero rows cost nothing.
+#[must_use]
+pub fn instrument_panel_band(rows: u32) -> f32 {
+    if rows == 0 {
+        return 0.0;
+    }
+    let row = crate::tokens::LAYOUT_TOUCH_TARGET_S as f32;
+    let gap = crate::tokens::LAYOUT_SPACE_4 as f32;
+    rows as f32 * row + (rows - 1) as f32 * gap
+}
+
+/// The rect an instrument's display band occupies inside its card (D6/§8.2): the card minus the
+/// gutters, the header, and the panel band — i.e. exactly the declared `min_size` area the guest
+/// lays out against. `None` for non-instrument nodes (their body is the well band, not a display).
+#[must_use]
+pub fn instrument_display_band(card: Rect, spec: &NodeSpec) -> Option<Rect> {
+    let d = spec.display?;
+    if spec.layer != sparq_module_api::manifest::Layer::Instrument {
+        return None;
+    }
+    let gutter = crate::tokens::LAYOUT_SPACE_GUTTER as f32;
+    let header = crate::tokens::LAYOUT_CANVAS_NODE_HEADER_HEIGHT as f32;
+    let y = card.min.y + gutter + header + instrument_panel_band(d.panel_rows);
+    Some(Rect::from_min_size(
+        Vec2::new(card.min.x + gutter, y),
+        Vec2::new(d.min_w.min(card.width() - 2.0 * gutter), d.min_h.min((card.max.y - gutter) - y)),
+    ))
+}
+
 /// The `util/mult` card's width factor (operator round 4, D6): the junction bus is a strip of
 /// dots, not a two-sided card — a quarter of the default width, the narrowest thing on the
 /// canvas, because it is the least thing: a bus, not a module.
@@ -287,6 +331,21 @@ pub const MULT_WIDTH_FACTOR: f32 = 0.25;
 /// shorter side clears the class-L minimum — the audit property the original size was chosen for.
 #[must_use]
 pub fn node_size(spec: &NodeSpec) -> Vec2 {
+    // WO-020 plan D6: an instrument's card is its DISPLAY plus chrome — the wall-class ceiling
+    // (`node_width_instrument_max`) governs, not the backbone's 480. card = min_size + gutter each
+    // side + header + panel band (rows × the 44 touch floor + the 16 gaps) + gutter top/bottom; the
+    // port band is absent because a port-less instrument has no ports (D5). The formula reproduces
+    // the plan's numbers: 2176×1120 + chrome = 2208×1288.
+    if spec.layer == sparq_module_api::manifest::Layer::Instrument {
+        if let Some(d) = spec.display {
+            let gutter = crate::tokens::LAYOUT_SPACE_GUTTER as f32;
+            let header = crate::tokens::LAYOUT_CANVAS_NODE_HEADER_HEIGHT as f32;
+            let w = (d.min_w + 2.0 * gutter)
+                .min(crate::tokens::LAYOUT_CANVAS_NODE_WIDTH_INSTRUMENT_MAX as f32);
+            let h = d.min_h + header + instrument_panel_band(d.panel_rows) + 2.0 * gutter;
+            return Vec2::new(w, h);
+        }
+    }
     let inputs = spec.inputs().count();
     let outputs = spec.outputs().count();
     let rows = inputs.max(outputs).max(1);
@@ -385,7 +444,10 @@ fn layout_node(
 
     // Inline parameter rows (increment 6): manifest order, capped; the track spans the card
     // minus token padding, sitting in the row's lower half (label/value line above it).
-    let (shown, overflow) = param_split(&n.spec);
+    // Instrument cards show NONE: their panel band is the manifest toolbar's reservation and
+    // their params live in the inspector + picker (§8.4) until WO-014 types the panel.
+    let is_instrument = spec_is_instrument(&n.spec);
+    let (shown, overflow) = if is_instrument { (0, 0) } else { param_split(&n.spec) };
     let prow = LAYOUT_CANVAS_NODE_PARAM_ROW as f32;
     let pad = LAYOUT_SPACE_2 as f32;
     let mut param_rows = Vec::with_capacity(shown);
@@ -415,11 +477,17 @@ fn layout_node(
         let r = Rect::new(Vec2::new(n.pos.x, y0), Vec2::new(n.pos.x + size.x, y0 + prow / 2.0));
         (overflow, Rect::new(camera.to_screen(r.min, view), camera.to_screen(r.max, view)))
     });
-    let well_band = well_h.map(|wh| {
-        let y0 = n.pos.y + header + param_h;
-        let r = Rect::new(Vec2::new(n.pos.x, y0), Vec2::new(n.pos.x + size.x, y0 + wh));
-        Rect::new(camera.to_screen(r.min, view), camera.to_screen(r.max, view))
-    });
+    let well_band = if is_instrument {
+        // The display band: exactly the declared min_size area inside the gutters (D6).
+        instrument_display_band(Rect::from_min_size(n.pos, size), &n.spec)
+            .map(|r| Rect::new(camera.to_screen(r.min, view), camera.to_screen(r.max, view)))
+    } else {
+        well_h.map(|wh| {
+            let y0 = n.pos.y + header + param_h;
+            let r = Rect::new(Vec2::new(n.pos.x, y0), Vec2::new(n.pos.x + size.x, y0 + wh));
+            Rect::new(camera.to_screen(r.min, view), camera.to_screen(r.max, view))
+        })
+    };
     // The out/main driver-info band (operator ruling 2026-10-01): under the well, above the
     // port band — the permanent node's window onto the negotiated device truth.
     let info_band = info_band_height(&n.spec).map(|ih| {
@@ -913,6 +981,7 @@ mod tests {
             min: 0.0,
             max: 2.0,
             default: 1.0,
+            options: Vec::new(),
         }])
     }
     fn view() -> Rect {
@@ -1195,6 +1264,7 @@ mod tests {
             min: 0.0,
             max: 14.0,
             default: 0.0,
+            options: Vec::new(),
         }];
         if with_mask {
             params.push(ParamDesc {
@@ -1205,6 +1275,7 @@ mod tests {
                 min: 0.0,
                 max: 4095.0,
                 default: 0.0,
+                options: Vec::new(),
             });
         }
         NodeSpec::new(
@@ -1391,5 +1462,89 @@ mod tests {
         let nq3 = l3.nodes.iter().find(|n| n.id == nid(&q3)).unwrap();
         assert!(nq3.key_cells.is_empty(), "no mask param, no cells");
         assert_eq!(nq3.key_param, None);
+    }
+}
+
+#[cfg(test)]
+mod instrument_sizing_tests {
+    //! WO-020 INC4 §8.2/D6: the instrument card is its display plus chrome — the numbers the plan
+    //! declares, reproduced by formula (2208 × 1288 at the Observatory's min_size).
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    use super::*;
+    use crate::canvas::model::InstrumentDisplay;
+
+    fn obs_spec() -> NodeSpec {
+        NodeSpec::new("dat/observatory", "The Observatory", vec![])
+            .with_display(InstrumentDisplay { min_w: 2176.0, min_h: 1120.0, panel_rows: 2 })
+    }
+
+    #[test]
+    fn the_d6_card_numbers_are_reproduced() {
+        let size = node_size(&obs_spec());
+        assert_eq!(size.x, 2208.0, "2176 + 2×16 gutter (D6)");
+        assert_eq!(size.y, 1288.0, "1120 + 32 header + 104 panel band + 32 gutter (D6)");
+    }
+
+    #[test]
+    fn the_card_ceiling_governs_not_the_backbone_grid() {
+        // A hypothetical wider display clamps at node_width_instrument_max (2400), never at the
+        // backbone's 480 — the wall class is a different animal (layout.toml's own words).
+        let wide = NodeSpec::new("dat/x", "X", vec![]).with_display(InstrumentDisplay {
+            min_w: 4000.0,
+            min_h: 100.0,
+            panel_rows: 0,
+        });
+        assert_eq!(node_size(&wide).x, 2400.0);
+        // And a backbone spec is untouched by the instrument path.
+        let back = NodeSpec::new("sparq/util/gain", "Gain", vec![]);
+        assert!(node_size(&back).x < 500.0, "backbone cards keep the token width");
+    }
+
+    #[test]
+    fn the_panel_band_is_rows_times_the_touch_floor_plus_gaps() {
+        assert_eq!(instrument_panel_band(0), 0.0);
+        assert_eq!(instrument_panel_band(1), 44.0);
+        assert_eq!(instrument_panel_band(2), 104.0, "2×44 + 16 (the §5.2 two-row toolbar)");
+    }
+
+    #[test]
+    fn the_display_band_is_the_declared_min_size_inside_the_card() {
+        let card = Rect::from_min_size(Vec2::new(100.0, 50.0), node_size(&obs_spec()));
+        let band =
+            instrument_display_band(card, &obs_spec()).expect("an instrument card has a band");
+        assert_eq!(band.width(), 2176.0, "the band is exactly the display width");
+        assert_eq!(band.height(), 1120.0, "…and height");
+        assert_eq!(band.min.x, 116.0, "one gutter in from the card edge");
+        // A backbone node has no band.
+        assert!(
+            instrument_display_band(card, &NodeSpec::new("sparq/util/gain", "G", vec![])).is_none()
+        );
+    }
+
+    #[test]
+    fn the_browser_groups_instruments_first_under_their_own_header() {
+        use crate::canvas::browser::{sections, BrowserItem};
+        let inst = BrowserItem::new(obs_spec());
+        let back = BrowserItem::new(NodeSpec::new("sparq/util/gain", "Gain", vec![]));
+        let [a, b] = sections(vec![back.clone(), inst.clone()]);
+        assert_eq!(a.0, "INSTRUMENTS");
+        assert_eq!(a.1, vec![inst], "the instrument section carries the instrument");
+        assert_eq!(b.0, "MODULES");
+        assert_eq!(b.1, vec![back]);
+    }
+
+    #[test]
+    fn a_spec_parses_from_raw_manifest_text_with_its_display_face() {
+        // The discovery door: raw bytes in, spec with the D6 face out. The subject is the
+        // CHECKED-IN package manifest — the same file the validator and the D5 proofs read, so
+        // the sizing test cannot drift from what ships.
+        let toml = include_str!("../../../../instruments/observatory/sparqmod.toml");
+        let spec = NodeSpec::from_manifest_text(toml).expect("the shipped manifest parses");
+        assert_eq!(spec.layer, sparq_module_api::manifest::Layer::Instrument);
+        let d = spec.display.expect("the display face is parsed");
+        assert_eq!((d.min_w, d.min_h, d.panel_rows), (2176.0, 1120.0, 2), "§5.1/§5.2 numbers");
+        assert_eq!(node_size(&spec), Vec2::new(2208.0, 1288.0), "the D6 card");
+        // A bad manifest never spawns.
+        assert!(NodeSpec::from_manifest_text("[identity]\n").is_none());
     }
 }

@@ -88,6 +88,9 @@ pub struct ParamDesc {
     pub max: f64,
     /// The value a fresh node starts at, inside `[min, max]` for editable kinds.
     pub default: f64,
+    /// The `enum` kind's options `(value, label)` in order — the dropdown picker's rows (WO-020
+    /// INC4 §8.4). Empty for every other kind.
+    pub options: Vec<(String, String)>,
 }
 
 impl ParamDesc {
@@ -95,6 +98,15 @@ impl ParamDesc {
     #[must_use]
     pub fn editable(&self) -> bool {
         matches!(self.kind, ParamKind::Float | ParamKind::Int | ParamKind::Bool)
+    }
+
+    /// Whether ANY editor door may set this parameter (WO-020 INC4 §8.4): the slider kinds, PLUS
+    /// `enum` — whose editor is the dropdown picker, not a track. `text`/`blob` stay refuse-only
+    /// in v1 (no editor exists); [`Graph::op_set_param`] gates on this, so a picker selection is
+    /// an ordinary undoable op while a drag on an enum track still is not.
+    #[must_use]
+    pub fn settable(&self) -> bool {
+        self.editable() || matches!(self.kind, ParamKind::Enum)
     }
 }
 
@@ -121,6 +133,7 @@ pub fn param_descs(m: &ValidatedManifest) -> Vec<ParamDesc> {
                     min: p.min.unwrap_or(0.0),
                     max: p.max.unwrap_or(1.0),
                     default: p.default.unwrap_or(0.0),
+                    options: Vec::new(),
                 },
                 ParamKind::Bool => ParamDesc {
                     id,
@@ -130,8 +143,23 @@ pub fn param_descs(m: &ValidatedManifest) -> Vec<ParamDesc> {
                     min: 0.0,
                     max: 1.0,
                     default: if p.default.unwrap_or(0.0) != 0.0 { 1.0 } else { 0.0 },
+                    options: Vec::new(),
                 },
-                _ => ParamDesc { id, name, kind, unit: None, min: 0.0, max: 0.0, default: 0.0 },
+                _ => ParamDesc {
+                    id,
+                    name,
+                    kind,
+                    unit: None,
+                    min: 0.0,
+                    max: 0.0,
+                    default: p.default.unwrap_or(0.0),
+                    // The enum's rows (value, label) in order — the picker's data (§8.4).
+                    options: if matches!(kind, ParamKind::Enum) {
+                        p.options.iter().map(|o| (o.value.clone(), o.label.clone())).collect()
+                    } else {
+                        Vec::new()
+                    },
+                },
             }
         })
         .collect()
@@ -156,6 +184,27 @@ pub struct NodeSpec {
     /// The module's validated parameters, in manifest order — what the inspector renders and
     /// what [`Node::param_values`] indexes into.
     pub params: Vec<ParamDesc>,
+    /// The library layer (ADR-010). Instruments size their card from the declared display, not
+    /// from the backbone grid (WO-020 plan D6) — the canvas reads this, never a module-id literal.
+    pub layer: sparq_module_api::manifest::Layer,
+    /// The declared instrument display face (D6), when the manifest declares one. `None` for
+    /// backbone modules and for instruments whose manifest carries no `ui.displays`.
+    pub display: Option<InstrumentDisplay>,
+}
+
+/// The instrument-layer display face a card is sized from (WO-020 INC4, plan D6): the declared
+/// `ui.displays[0].min_size` plus the panel band's row count. The card is the display plus chrome
+/// (gutter each side, header, panel band, NO port band — a port-less instrument has none); the
+/// numbers are token-derived in [`super::layout::node_size`], never remembered here.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InstrumentDisplay {
+    /// The display's declared minimum width, logical px.
+    pub min_w: f32,
+    /// The display's declared minimum height, logical px.
+    pub min_h: f32,
+    /// The panel widget band's row count (distinct `y` values in `ui.panel.widgets`; 0 when the
+    /// manifest declares no panel — the band then costs nothing).
+    pub panel_rows: u32,
 }
 
 impl NodeSpec {
@@ -171,7 +220,18 @@ impl NodeSpec {
             display_name: display_name.into(),
             ports,
             params: Vec::new(),
+            layer: sparq_module_api::manifest::Layer::default(),
+            display: None,
         }
+    }
+
+    /// Sets the instrument display face (the discovery door, where the raw manifest text is at
+    /// hand — see [`Self::from_manifest_text`]).
+    #[must_use]
+    pub fn with_display(mut self, display: InstrumentDisplay) -> Self {
+        self.display = Some(display);
+        self.layer = sparq_module_api::manifest::Layer::Instrument;
+        self
     }
 
     /// Builder: attach the parameter descriptors.
@@ -187,7 +247,50 @@ impl NodeSpec {
     pub fn from_manifest(m: &ValidatedManifest) -> Self {
         let id = m.id().to_string();
         let display_name = m.manifest().identity.display_name.clone().unwrap_or_else(|| id.clone());
-        Self { module_id: id, display_name, ports: m.ports().to_vec(), params: param_descs(m) }
+        Self {
+            module_id: id,
+            display_name,
+            ports: m.ports().to_vec(),
+            params: param_descs(m),
+            layer: m.layer(),
+            display: None,
+        }
+    }
+
+    /// Builds a spec from the RAW manifest text: [`Self::from_manifest`] plus the instrument
+    /// display face (D6), which the contract's typed model does not carry yet (`ui.displays` is
+    /// key-checked by the decoder, not modelled — INC2's stream rules walk the same raw table).
+    /// The discovery door uses this: it has the bytes, and the card sizing needs `min_size`.
+    ///
+    /// Returns `None` when the text does not decode+validate (a bad manifest never spawns).
+    #[must_use]
+    pub fn from_manifest_text(text: &str) -> Option<Self> {
+        use sparq_module_api::toml::Value;
+        let m = sparq_module_api::decode(text).ok()?;
+        let mut spec = Self::from_manifest(&m);
+        let root = sparq_module_api::toml::parse(text).ok()?;
+        let ui = root.get("ui").and_then(Value::as_table)?;
+        let display = ui.tables("displays").unwrap_or_default().into_iter().next()?;
+        let min = display.get("min_size").and_then(Value::as_array)?;
+        if min.len() != 2 {
+            return Some(spec);
+        }
+        let w = min[0].as_f64()? as f32;
+        let h = min[1].as_f64()? as f32;
+        let rows = ui
+            .get("panel")
+            .and_then(Value::as_table)
+            .and_then(|p| p.tables("widgets"))
+            .map(|ws| {
+                let mut ys: Vec<i64> =
+                    ws.iter().filter_map(|w| w.get("y").and_then(Value::as_i64)).collect();
+                ys.sort_unstable();
+                ys.dedup();
+                ys.len() as u32
+            })
+            .unwrap_or(0);
+        spec.display = Some(InstrumentDisplay { min_w: w, min_h: h, panel_rows: rows });
+        Some(spec)
     }
 
     /// Indices of the input ports, in manifest order.
@@ -752,7 +855,7 @@ impl Graph {
     pub fn op_set_param(&mut self, id: NodeId, index: usize, to: f32) -> Option<Op> {
         let node = self.node(id)?;
         let desc = node.spec.params.get(index)?;
-        if !desc.editable() {
+        if !desc.settable() {
             return None;
         }
         let from = node.param_value(index)?;
@@ -1115,6 +1218,7 @@ mod tests {
             min,
             max,
             default,
+            options: Vec::new(),
         }
     }
 

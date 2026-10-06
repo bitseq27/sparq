@@ -262,3 +262,173 @@ mod tests {
         assert!(e.contains("`--root` needs a directory"), "{e}");
     }
 }
+
+// --------------------------------------------------------------------- `sparq instrument render`
+
+/// `sparq instrument render` — the headless painter's door (WO-020 INC4 §8.1): an interchange file
+/// (or a package's at-rest render) → resolved display list → SVG, with the §5.8 budget reported
+/// against the manifest's declared `gpu_class`. No runtime, no window: the same command works on a
+/// CI runner and on the stage device.
+#[derive(Clone, Debug, PartialEq)]
+pub enum InstrumentCommand {
+    /// Render one display list to SVG.
+    Render {
+        /// The interchange JSON file (`--list`), or a package dir whose at-rest render is used.
+        list: Option<String>,
+        /// The package directory (at-rest + declared gpu_class), when not rendering a raw list.
+        dir: Option<String>,
+        /// The SVG output path.
+        svg_out: String,
+        /// Display width override (else the interchange's `display_w`).
+        width: Option<f32>,
+        /// Display height override.
+        height: Option<f32>,
+    },
+}
+
+/// Parses `sparq instrument …`. The subcommand vocabulary is closed (`render`).
+///
+/// # Errors
+/// A message naming the unrecognised shape, in the house CLI style.
+pub fn parse_instrument(args: &[String]) -> Result<InstrumentCommand> {
+    let Some(sub) = args.first() else {
+        return Err(
+            "`sparq instrument` needs a subcommand: `render --list FILE|--dir PKG --svg-out OUT`"
+                .to_string(),
+        );
+    };
+    match sub.as_str() {
+        "render" => {
+            let mut list = None;
+            let mut dir = None;
+            let mut svg_out: Option<String> = None;
+            let mut width = None;
+            let mut height = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--list" => {
+                        i += 1;
+                        list = Some(args.get(i).cloned().ok_or("--list needs a file")?);
+                    },
+                    "--dir" => {
+                        i += 1;
+                        dir = Some(args.get(i).cloned().ok_or("--dir needs a package directory")?);
+                    },
+                    "--svg-out" => {
+                        i += 1;
+                        svg_out = Some(args.get(i).cloned().ok_or("--svg-out needs a path")?);
+                    },
+                    "--width" => {
+                        i += 1;
+                        width = Some(
+                            args.get(i)
+                                .and_then(|v| v.parse().ok())
+                                .ok_or("--width needs a number")?,
+                        );
+                    },
+                    "--height" => {
+                        i += 1;
+                        height = Some(
+                            args.get(i)
+                                .and_then(|v| v.parse().ok())
+                                .ok_or("--height needs a number")?,
+                        );
+                    },
+                    other => {
+                        return Err(format!("unknown `sparq instrument render` flag `{other}`"))
+                    },
+                }
+                i += 1;
+            }
+            let svg_out = svg_out.ok_or("`sparq instrument render` needs --svg-out OUT")?;
+            if list.is_none() && dir.is_none() {
+                return Err(
+                    "choose the input: --list FILE (interchange JSON) or --dir PKG (at-rest)"
+                        .to_string(),
+                );
+            }
+            Ok(InstrumentCommand::Render { list, dir, svg_out, width, height })
+        },
+        other => Err(format!("unknown subcommand `{other}`; try `render`")),
+    }
+}
+
+/// Runs `sparq instrument render`.
+///
+/// # Errors
+/// A message naming the I/O or parse defect, in words.
+pub fn run_instrument(cmd: InstrumentCommand) -> Result<ExitCode> {
+    let InstrumentCommand::Render { list, dir, svg_out, width, height } = cmd;
+    let (text, gpu_class, w0, h0) = match (&list, &dir) {
+        (Some(file), _) => {
+            let text =
+                std::fs::read_to_string(file).map_err(|e| format!("cannot read {file}: {e}"))?;
+            (text, "medium".to_string(), None, None)
+        },
+        (None, Some(d)) => {
+            let pkg = sparq_host_wasm::package::open(std::path::Path::new(d));
+            let mtext =
+                pkg.manifest_text.ok_or_else(|| format!("{d}: no readable sparqmod.toml"))?;
+            // gpu_class is validated from the raw table (the contract model does not carry it
+            // yet — validate.rs reads it the same way), so read it the same way here.
+            let gpu = sparq_module_api::toml::parse(&mtext)
+                .ok()
+                .and_then(|t| t.get("resources").and_then(|v| v.as_table()).cloned())
+                .and_then(|r| r.get("gpu_class").and_then(|v| v.as_str()).map(str::to_string))
+                .unwrap_or_else(|| "none".to_string());
+            let id =
+                sparq_module_api::decode(&mtext).map(|m| m.id().to_string()).unwrap_or_default();
+            let (at, words) = crate::ui::atrest::AtRestStore::load(&id);
+            let at = at.ok_or_else(|| {
+                format!(
+                    "{d}: no at-rest render for `{id}`{}",
+                    words.map(|w| format!(" ({w})")).unwrap_or_else(|| {
+                        " — run the instrument's harness, or `sparq mod validate` on a device, \
+                         or point --list at an interchange JSON"
+                            .to_string()
+                    })
+                )
+            })?;
+            // Re-serialise is wasteful; instead return the parsed pieces via a second channel:
+            // rebuild the JSON text from the store is not available, so re-read the file path.
+            let path = crate::ui::atrest::atrest_path_used(&id);
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| format!("cannot re-read {}: {e}", path.display()))?;
+            (text, gpu, Some(at.w), Some(at.h))
+        },
+        (None, None) => unreachable!("parse requires one of --list/--dir"),
+    };
+    let json = sparq_ui::json::parse(&text).map_err(|e| format!("interchange JSON: {e}"))?;
+    let w =
+        width.or(w0).or_else(|| json.get("display_w").and_then(|v| v.as_f32())).unwrap_or(2176.0);
+    let h =
+        height.or(h0).or_else(|| json.get("display_h").and_then(|v| v.as_f32())).unwrap_or(1120.0);
+    let items =
+        sparq_ui::displaylist::parse_surface(&json).map_err(|e| format!("display list: {e}"))?;
+    let mut painter = sparq_ui::displaylist::Painter::new();
+    let painted = painter.resolve(&items);
+    let diag = painter.diagnostics();
+    let budget = sparq_ui::displaylist::count_budget(&items);
+    let bg = sparq_ui::displaylist::Rgba::from_hex(
+        sparq_ui::tokens::color_hex("color.ground.panel").unwrap_or("#151210"),
+        1.0,
+    );
+    let svg = sparq_ui::displaylist::svg(&painted, w, h, bg);
+    std::fs::write(&svg_out, svg).map_err(|e| format!("cannot write {svg_out}: {e}"))?;
+    println!("sparq instrument render: {svg_out} ({w:.0}×{h:.0}, {} primitives)", painted.len());
+    println!(
+        "  budget: {} vertices / {} instances / {} heat cells (declared gpu_class `{gpu_class}`)",
+        budget.vertices, budget.instances, budget.heat_cells
+    );
+    if let Some(c) = sparq_ui::displaylist::ceilings_for(&gpu_class) {
+        println!(
+            "  fits declared class: {}",
+            if budget.fits(c) { "YES" } else { "NO — over budget" }
+        );
+    }
+    for d in &diag {
+        println!("  diagnostic: {d}");
+    }
+    Ok(ExitCode::SUCCESS)
+}

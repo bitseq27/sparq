@@ -2220,6 +2220,9 @@
       "layout.corner.panel": 4,
       "layout.elevation.overlay_opacity": 0.95,
       "layout.elevation.shadow": "forbidden",
+      "layout.marker.radius_l": 8,
+      "layout.marker.radius_m": 5,
+      "layout.marker.radius_s": 3,
       "layout.shell.dock_card_h": 56,
       "layout.shell.dock_card_w": 112,
       "layout.shell.dock_height": 260,
@@ -2399,7 +2402,7 @@
     },
     "version": "0.1.0"
   },
-  "payload_sha256": "ff7a35dd1232a1e0043b1d6742e0ec25b672228cec4c62dda6a659a13b456f50",
+  "payload_sha256": "6c383b583013ff774a2115c7461d6a70dcf5cc73a2cfcf371aed657d8ee0858a",
   "version": {
     "major": 0,
     "minor": 1,

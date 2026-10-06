@@ -1,0 +1,31 @@
+[package]
+name = "observatory-harness"
+description = "The Observatory's native harness — fixtures -> core -> display-list JSON + SVG (WO-020 plan D13)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "observatory_harness"
+path = "src/lib.rs"
+
+[[bin]]
+name = "observatory-harness"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+observatory-core = { path = "../core" }
+# The broker's hermetic half (registry, normalizers, replay) — the harness reads the recorded
+# fixtures and turns them into frozen data-records WITHOUT a socket (plan D11). Cross-workspace
+# path-dep into the root workspace; the `streams` feature brings the serde_json normalizers.
+sparq-streams = { path = "../../../crates/sparq-streams", features = ["streams"] }
+# The house TOML subset parser + manifest model, for the manifest<->core drift gate in tests.
+sparq-module-api = { path = "../../../crates/sparq-module-api" }
+# The IR-to-JSON interchange (D13) + reading the token bundle for the SVG painter. serde_json is
+# already the broker's one dependency, so the harness adds no new third-party surface.
+serde_json = "1"

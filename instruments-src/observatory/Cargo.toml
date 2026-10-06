@@ -1,0 +1,61 @@
+# The Observatory — source project workspace (WO-020 plan D13).
+#
+# Three crates, the plan's split: `observatory-core` (pure Rust — cell layout, the seven
+# renderers, the display-list IR shaped exactly like the WIT records, param/state structs,
+# window→view transforms; NO wit-bindgen, no deps), `observatory-wasm` (the SDK glue: the
+# `sparq_instrument!` face, core IR ↔ contract types), `observatory-harness` (native binary:
+# fixtures → core → display-list JSON interchange + SVG; the sandbox's proof path, D13).
+#
+# Its own `[workspace]` on the tools/sparq-module-guest precedent: the wasm face needs
+# wit-bindgen (third-party), and the root workspace's default build stays zero-dependency.
+# Gates for this workspace run from THIS directory (see README.md); the root workspace's
+# `cargo test --workspace` never sees these crates — by design.
+
+[workspace]
+resolver = "2"
+members = ["core", "wasm", "harness"]
+# The wasm glue path-depends on the guest SDK, which is its OWN workspace (root Cargo.toml excludes
+# it for the same reason). Excluding it here keeps it out of this workspace's member set, so
+# `cargo fmt --all` / `cargo build` do not adopt (and reformat) the frozen contract SDK.
+exclude = ["../../tools/sparq-module-guest"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+authors = ["sparq first-party (WO-020)"]
+repository = "https://github.com/bitseq27/sparq"
+
+# The house lint face (root Cargo.toml's workspace lints, mirrored — this workspace is
+# excluded from the root, so the lints are restated here rather than inherited).
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "warn"
+todo = "deny"
+dbg_macro = "deny"
+print_stdout = "warn"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+similar_names = "allow"
+many_single_char_names = "allow"
+module_name_repetitions = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+# Drop DWARF but keep the name section: the shipped component stays small (~200 KB not ~2.9 MB)
+# while wasmtime trap messages on the device still carry wasm function names. The native app keeps
+# debug=1 for stage-crash traces (root profile); a guest component's traps are name-resolved, not
+# line-resolved, so debuginfo is dead weight here.
+strip = "debuginfo"

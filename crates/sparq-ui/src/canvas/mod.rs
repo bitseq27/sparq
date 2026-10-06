@@ -45,6 +45,7 @@ pub mod interact;
 pub mod layout;
 pub mod levels;
 pub mod model;
+pub mod picker;
 pub mod response;
 pub mod scope;
 
@@ -101,4 +102,5 @@ pub use levels::{wire_level, NodeLevels};
 pub use model::{
     Graph, Node, NodeFlags, NodeId, NodeSpec, Op, PortRef, UndoStack, Wire, WireId, WireTrim,
 };
+pub use picker::{PickerState, PickerTarget};
 pub use response::{Axes as ResponseAxes, Curves as ResponseCurves, ResponseFrame};

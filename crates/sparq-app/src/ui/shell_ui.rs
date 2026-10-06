@@ -61,6 +61,9 @@ pub enum Action {
     FocusLibrarySearch,
     /// Toolbar (increment 6): zoom to fit / camera home / arrange / zoom steps / wire style.
     ZoomFit,
+    /// FOCUS: fit the camera to the selected node (WO-020 §8.5) — the toolbar door; the menu row
+    /// and the header double-tap are the other two.
+    Focus,
     CameraHome,
     Arrange,
     ZoomIn,
@@ -148,6 +151,17 @@ pub struct ShellUi {
     /// The small-viewport reflow was already said this episode — every frame saying it would
     /// flood the log; the transition is the event (the shell's one-voice rule).
     said_small_viewport: bool,
+    /// The at-rest display-list store (WO-020 INC4 §8.2): instrument cards paint their last
+    /// rendered display list while no instance runs; WORDS when none exists.
+    pub atrest: crate::ui::atrest::AtRestStore,
+    /// The hermetic stream provider (feature `streams`): fixture windows for the §5.2 status
+    /// label. The device swaps in the BrokerProvider (INC5) behind the same trait.
+    #[cfg(feature = "streams")]
+    pub replay: Option<sparq_host_wasm::sources::ReplayProvider>,
+    /// Per-instrument parsed source bindings (the §5.2 label resolves `param:` indirections
+    /// against the node's live params).
+    #[cfg(feature = "streams")]
+    bindings: std::collections::HashMap<String, sparq_host_wasm::sources::ManifestSources>,
     /// The patch graph being edited (WO-013). The demo set is built from the registry — the same
     /// manifests discovery reads; the browser lands with the next increment.
     pub graph: Graph,
@@ -269,8 +283,70 @@ impl ShellUi {
         // The browser's catalogue is the registry, viewed (increment 3): built once at startup,
         // from the validated manifests — the browser cannot offer what is not installed (#58).
         let mut canvas = CanvasState::new();
-        canvas.set_catalog(crate::bridge::browser_catalog(&modules));
+        // WO-020 INC4 §8.2: the browser's catalogue is the registry PLUS the discovered instrument
+        // packages (the five-file door), grouped by layer — an instrument the shell cannot show is
+        // an instrument nobody can patch in. Spawning one is legal canvas-wise; the executor
+        // refuses it in words at render until INC5's loader registers wasm modules (#58 stands).
+        let mut catalog = crate::bridge::browser_catalog(&modules);
+        let mut atrest = crate::ui::atrest::AtRestStore::new();
+        for pkg in sparq_host_wasm::package::discover(std::path::Path::new("instruments")) {
+            let Some(text) = pkg.manifest_text.as_deref() else { continue };
+            let Some(spec) = sparq_ui::canvas::model::NodeSpec::from_manifest_text(text) else {
+                continue;
+            };
+            let (summary, category) = match sparq_module_api::decode(text) {
+                Ok(m) => (
+                    m.manifest().identity.summary.clone().unwrap_or_default(),
+                    m.manifest().classification.category.clone().unwrap_or_default(),
+                ),
+                Err(_) => (String::new(), String::new()),
+            };
+            let id = spec.module_id.clone();
+            catalog.push(sparq_ui::canvas::browser::BrowserItem {
+                spec,
+                summary,
+                category,
+                layer: sparq_module_api::manifest::Layer::Instrument,
+            });
+            let (surface, words) = crate::ui::atrest::AtRestStore::load(&id);
+            if let Some(w) = words {
+                log.push(format!("at-rest {id}: {w}"));
+            }
+            if let Some(surface) = surface {
+                atrest.insert(&id, surface);
+            }
+        }
+        canvas.set_catalog(sparq_ui::canvas::browser::with_sections(catalog));
+        #[cfg(feature = "streams")]
+        let (replay, bindings) = {
+            let dir = std::path::Path::new("reference/fixtures/observatory");
+            let prov = sparq_host_wasm::sources::ReplayProvider::load(dir).ok();
+            if prov.is_none() {
+                log.push(
+                    "streams: no fixture set at reference/fixtures/observatory — the status label                      stays silent until fixtures are recorded or the broker lands (INC5)"
+                        .to_string(),
+                );
+            }
+            let mut b = std::collections::HashMap::new();
+            for pkg in sparq_host_wasm::package::discover(std::path::Path::new("instruments")) {
+                if let Some(text) = pkg.manifest_text.as_deref() {
+                    if let Ok(ms) = sparq_host_wasm::sources::ManifestSources::parse(text) {
+                        if let Some(id) =
+                            sparq_module_api::decode(text).ok().map(|m| m.id().to_string())
+                        {
+                            b.insert(id, ms);
+                        }
+                    }
+                }
+            }
+            (prov, b)
+        };
         Self {
+            atrest,
+            #[cfg(feature = "streams")]
+            replay,
+            #[cfg(feature = "streams")]
+            bindings,
             state: ShellState::default(),
             theme: ThemeChoice::PhosphorDark,
             recognizer: GestureRecognizer::from_tokens(),
@@ -1079,6 +1155,22 @@ impl ShellUi {
                     self.push_log("canvas: zoom to fit".to_string());
                 }
             },
+            Action::Focus => {
+                if let Some(v) = self.last_layout.as_ref().map(|l| l.canvas) {
+                    let sel = self.canvas.selection.nodes.iter().next().copied();
+                    match sel {
+                        Some(id) => {
+                            for e in self.canvas.focus_node(&self.graph, id, v) {
+                                self.push_log(e.message());
+                            }
+                        },
+                        None => self.push_log(
+                            "canvas refused: FOCUS needs a selected node — tap one first"
+                                .to_string(),
+                        ),
+                    }
+                }
+            },
             Action::CameraHome => {
                 self.canvas.camera_home();
                 self.push_log("canvas: camera home".to_string());
@@ -1583,6 +1675,20 @@ impl ShellUi {
             // The Main Out card's driver readout (operator ruling 2026-10-01): the session's
             // negotiated truth, owned here so the borrow of `live` ends before the toolbar.
             let main_info = self.live.as_ref().map(|s| s.driver_lines());
+            // WO-020 §5.2: the instrument toolbar's status label is HOST words — refreshed per
+            // frame from the provider's windows (fixture-fed here; the broker on device, INC5).
+            #[cfg(feature = "streams")]
+            if let Some(prov) = self.replay.as_ref() {
+                use sparq_host_wasm::sources::status_label;
+                use sparq_module_api::params::ParamSet;
+                for n in self.graph.nodes() {
+                    let Some(ms) = self.bindings.get(&n.spec.module_id) else { continue };
+                    let vals: Vec<f32> = n.param_values.clone();
+                    let ps = ParamSet::new(0, &vals).unwrap_or_else(ParamSet::zeroed);
+                    let words = status_label(ms, "wall", &ps, prov, prov.now());
+                    self.atrest.set_status(&n.spec.module_id, words);
+                }
+            }
             canvas_ui::draw(
                 p,
                 pal,
@@ -1597,6 +1703,7 @@ impl ShellUi {
                 &self.level_hists,
                 main_info.as_ref(),
                 self.hover,
+                &self.atrest,
                 &mut self.audit_elements,
             );
             // The wire-encoding legend (increment 3, the mockup's floating box): top-right of
@@ -2409,6 +2516,7 @@ impl ShellUi {
             }};
         }
         tbtn!("toolbar/fit", "FIT", Action::ZoomFit);
+        tbtn!("toolbar/focus", "FOCUS", Action::Focus);
         tbtn!("toolbar/reset", "RESET", Action::CameraHome);
         tbtn!("toolbar/arrange", "ARRANGE", Action::Arrange);
         tbtn!("toolbar/zoom-out", "-", Action::ZoomOut);

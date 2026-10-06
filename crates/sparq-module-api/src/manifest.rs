@@ -213,6 +213,17 @@ pub struct PortSpec {
     pub event_kinds: Vec<String>,
 }
 
+/// One `options[]` entry of an `enum` param (WO-020 INC4: the picker's rows). `value` is what the
+/// snapshot carries (as an option INDEX — the value string is the stable name a patch or a
+/// `param:` stream binding quotes); `label` is what the operator reads.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ParamOption {
+    /// The stable option value (`""` is the OFF sentinel for stream enums, plan D4).
+    pub value: String,
+    /// The human label (the dropdown row text).
+    pub label: String,
+}
+
 /// One `params[]` entry, as written.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ParamSpec {
@@ -234,6 +245,10 @@ pub struct ParamSpec {
     pub per_voice: Option<bool>,
     /// `continuous` | `discrete`. Discrete parameters are held constant during a morph.
     pub morph: Option<String>,
+    /// The `enum` kind's selectable options, in order (index = the snapshot's value). Empty for
+    /// every other kind. Modelled as of WO-020 INC4: the dropdown picker (plan §8.4) renders
+    /// LABELS, and a shell that cannot show an enum's options cannot edit one.
+    pub options: Vec<ParamOption>,
 }
 
 /// `state` — serialisation is mandatory for every module, without exception.

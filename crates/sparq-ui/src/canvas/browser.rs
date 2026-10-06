@@ -35,10 +35,17 @@ pub struct BrowserItem {
 }
 
 impl BrowserItem {
-    /// An item from a spec alone (tests, and catalogues without manifest prose).
+    /// An item from a spec alone (tests, and catalogues without manifest prose). The layer rides
+    /// the SPEC (WO-020 INC4: the browser groups by it) — an item that re-defaulted it would file
+    /// an instrument under the backbone.
     #[must_use]
     pub fn new(spec: NodeSpec) -> Self {
-        Self { spec, summary: String::new(), category: String::new(), layer: Layer::default() }
+        Self {
+            spec: spec.clone(),
+            summary: String::new(),
+            category: String::new(),
+            layer: spec.layer,
+        }
     }
 
     /// The row's primary text: the display name and the module id.
@@ -53,6 +60,57 @@ impl BrowserItem {
     fn haystacks(&self) -> [&str; 3] {
         [&self.spec.display_name, &self.spec.module_id, &self.category]
     }
+}
+
+/// The browser's group sections (WO-020 INC4 §8.2, the WO-018-note "browser visual grouping"):
+/// instruments group under their own header, the backbone under its own — rank order preserved
+/// WITHIN each section, and the section order is instruments-first (the layer a visitor came to
+/// see). The headers are rows in the sheet (touch floor honoured by the drawer); an empty section
+/// draws no header.
+#[must_use]
+pub fn sections(items: Vec<BrowserItem>) -> [(&'static str, Vec<BrowserItem>); 2] {
+    let (inst, back): (Vec<BrowserItem>, Vec<BrowserItem>) =
+        items.into_iter().partition(|i| i.layer == sparq_module_api::manifest::Layer::Instrument);
+    [("INSTRUMENTS", inst), ("MODULES", back)]
+}
+
+/// A group-header sentinel row (WO-020 INC4 §8.2): the empty module id marks it — the drawer
+/// paints it as a dim uppercase title, and a tap on it refuses in words (a header is not a
+/// module). Headers ride the ranked list so the sheet's paging, scroll and touch geometry stay
+/// exactly as the audit pinned them.
+#[must_use]
+pub fn header_item(title: &'static str) -> BrowserItem {
+    BrowserItem {
+        spec: NodeSpec::new("", title, vec![]),
+        summary: String::new(),
+        category: String::new(),
+        layer: Layer::Backbone,
+    }
+}
+
+/// Whether a catalogue row is a group header sentinel.
+#[must_use]
+pub fn is_header(item: &BrowserItem) -> bool {
+    item.spec.module_id.is_empty()
+}
+
+/// Groups a catalogue: instruments under their own header FIRST (the layer a visitor came to
+/// see), the backbone under its own — each in its given (rank) order. With a query the ranker
+/// drops headers (an empty haystack matches nothing), which is right: a search is a flat answer.
+#[must_use]
+pub fn with_sections(items: Vec<BrowserItem>) -> Vec<BrowserItem> {
+    let (inst, back): (Vec<BrowserItem>, Vec<BrowserItem>) =
+        items.into_iter().partition(|i| i.layer == Layer::Instrument);
+    let mut out = Vec::new();
+    if !inst.is_empty() {
+        out.push(header_item("INSTRUMENTS"));
+        out.extend(inst);
+    }
+    if !back.is_empty() {
+        out.push(header_item("MODULES"));
+        out.extend(back);
+    }
+    out
 }
 
 /// Score a `query` against one `text`: `Some(score)` when every query character appears in the

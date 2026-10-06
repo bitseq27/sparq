@@ -52,7 +52,7 @@ instrument-host = ["sparq-host-wasm/instrument-host"]
 # live transport (ureq + TLS + fetch.rs), the DEVICE increment (INC5): it is declared so the CLI's
 # refusals key on a stable feature name, but until fetch.rs lands the network verbs (probe/fetch/
 # tail/record) refuse in words either way. The default build compiles neither (zero-dep promise).
-streams = ["dep:sparq-streams", "sparq-streams/streams"]
+streams = ["dep:sparq-streams", "sparq-streams/streams", "sparq-host-wasm/streams"]
 streams-net = ["streams", "sparq-streams/streams-net"]
 
 # The renderer backend is a per-target choice, made here and nowhere else:

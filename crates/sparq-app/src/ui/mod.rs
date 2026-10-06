@@ -15,8 +15,13 @@
 
 #[cfg(feature = "ui")]
 pub mod adapter;
+/// The at-rest display-list store (WO-020 INC4 §8.2) — ungated: the `instrument render` CLI
+/// serves at-rest SVGs without the egui stack.
+pub mod atrest;
 #[cfg(feature = "ui")]
 pub mod canvas_ui;
+#[cfg(feature = "ui")]
+pub mod displaylist_egui;
 #[cfg(feature = "ui")]
 pub mod headless;
 #[cfg(feature = "ui")]

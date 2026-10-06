@@ -23,7 +23,14 @@ sparq-demo.wav
 # the guest SDK is its own workspace too (ADR-010 / WO-017) — same rule, same reason
 /tools/sparq-module-guest/target
 
+# the Observatory source project is its own workspace too (WO-020 plan D13) — same rule
+/instruments-src/observatory/target
+
 # canvas/executor render outputs (written by the shell and `sparq exec`)
 canvas-render.wav
 exec.wav
 .tc/
+
+# harness review artefacts (IR JSON + SVG + PNG) are generated, never checked in;
+# regenerate with: cargo run -p observatory-harness (instruments-src/observatory)
+/instruments-src/observatory/artefacts

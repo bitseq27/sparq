@@ -88,6 +88,7 @@ fn gain_like() -> NodeSpec {
         min: 0.0,
         max: 2.0,
         default: 1.0,
+        options: Vec::new(),
     }])
 }
 
@@ -146,6 +147,7 @@ fn control_wires_refuse_non_cv_sources_and_non_float_sinks_in_words() {
         min: 0.0,
         max: 1.0,
         default: 0.0,
+        options: Vec::new(),
     }]);
     let m = nid(&g.op_add_node(mute, Vec2::new(600.0, 0.0)));
     let lfo = nid(&g.op_add_node(lfo_like(), Vec2::new(0.0, -300.0)));

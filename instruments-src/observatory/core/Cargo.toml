@@ -1,0 +1,17 @@
+[package]
+name = "observatory-core"
+description = "The Observatory's pure core — cell layout, the seven renderers, the display-list IR (WO-020 plan D13)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# NONE — by construction (plan D13): the core is pure Rust, no wit-bindgen, no serde, no std
+# beyond alloc/collections. The wasm glue converts core IR ↔ contract types; the harness feeds
+# it fixture-derived records. Keeping this crate dependency-free is what lets the same code be
+# native-tested, wasm-compiled and golden-hashed without a runtime anywhere.

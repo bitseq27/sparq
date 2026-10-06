@@ -168,6 +168,9 @@ pub enum MenuAction {
     SelectAll,
     /// Zoom to fit the graph.
     ZoomFit,
+    /// FOCUS: fit the camera to ONE node (WO-020 §8.5) — the physical-screen twin of the guest's
+    /// FULL param. Generic canvas chrome; the node menu's first row.
+    Focus,
     /// Redo the last undone op.
     Redo,
     /// Make this node the master — the one the listener hears (bridge renders it).
@@ -274,6 +277,8 @@ pub enum CanvasEvent {
     Redo(String),
     /// The menu opened (`true`) or closed (`false`).
     Menu(bool),
+    /// The dropdown picker opened (`true`) or closed (`false`) (WO-020 §8.4).
+    Picker(bool),
     /// Zoom-to-fit ran.
     ZoomToFit,
     /// The level of detail changed.
@@ -305,6 +310,8 @@ impl CanvasEvent {
             Self::Redo(s) => format!("canvas redo: {s}"),
             Self::Menu(true) => "canvas: context menu".to_string(),
             Self::Menu(false) => "canvas: menu closed".to_string(),
+            Self::Picker(true) => "canvas: dropdown picker open".to_string(),
+            Self::Picker(false) => "canvas: picker closed".to_string(),
             Self::ZoomToFit => "canvas: zoom to fit".to_string(),
             Self::Lod(l) => format!("canvas: LOD {l:?}"),
             Self::MasterSet(id) => format!("canvas: master = node {id}"),
@@ -363,6 +370,10 @@ pub struct CanvasState {
     pub master: Option<crate::canvas::model::NodeId>,
     /// The open module browser, if any (increment 3). Modal over the canvas like the menu.
     pub browser: Option<BrowserState>,
+    /// The open dropdown picker, if any (WO-020 INC4 §8.4 — round-4 OWED item 11). Modal over the
+    /// canvas like the menu: while open it captures taps (a row selects, outside closes) and the
+    /// wheel (scrolls the option list).
+    pub picker: crate::canvas::picker::PickerState,
     /// The open rename text-entry sheet, if any (increment 5). The DEEPEST modal: it is opened
     /// FROM the menu, so while it is open it captures taps (an outside tap cancels) and the
     /// shell's key feed (type → buffer, Enter → commit, Escape → cancel). Like the browser, its
@@ -429,6 +440,7 @@ impl CanvasState {
             history: UndoStack::new(),
             master: None,
             browser: None,
+            picker: crate::canvas::picker::PickerState::default(),
             rename: None,
             catalog: Vec::new(),
             inspector: None,
@@ -1077,6 +1089,16 @@ impl CanvasState {
         match intent {
             GestureIntent::Pan { delta, center } => self.pan(delta, center),
             GestureIntent::Zoom { factor, center } => {
+                if self.picker.is_open() {
+                    if let Some(sheet) = self.picker.sheet_rect(view) {
+                        if sheet.contains(center) {
+                            // The sheet owns the wheel: vertical motion scrolls the option list
+                            // (the window adapter routes the wheel here over the canvas).
+                            self.picker.scroll_by((1.0 - factor) * 240.0, sheet);
+                            return Vec::new();
+                        }
+                    }
+                }
                 if self.over_inspector(center) {
                     // The panel owns the gesture: it has no zoom of its own, and the canvas
                     // BEHIND it must not move because fingers pinched over the panel. (This is
@@ -1094,7 +1116,7 @@ impl CanvasState {
             },
             GestureIntent::Undo => self.undo(graph),
             GestureIntent::Delete => self.delete_selection(graph),
-            GestureIntent::DoubleTap { .. } => self.zoom_to_fit(graph, view),
+            GestureIntent::DoubleTap { pos } => self.double_tap(graph, layout, pos, view),
             GestureIntent::Activate { pos } => self.activate(graph, pos, layout, view),
             GestureIntent::Context { pos } => self.open_menu(graph, pos, layout),
             GestureIntent::DragStart { pos } => self.drag_start(graph, pos, layout),
@@ -1177,6 +1199,62 @@ impl CanvasState {
         ev
     }
 
+    /// FOCUS (plan §8.5): fit the camera to ONE node — the physical-screen twin of the guest's
+    /// FULL param (FULL maximises the data inside the card, FOCUS maximises the card inside the
+    /// screen). Generic canvas chrome: bounds = the node's card, through the existing zoom_to_fit
+    /// machinery. A vanished node refuses in words, never a silent no-op.
+    pub fn focus_node(&mut self, graph: &Graph, node: NodeId, view: Rect) -> Vec<CanvasEvent> {
+        let Some(n) = graph.node(node) else {
+            return vec![CanvasEvent::Refused("nothing to focus — the node is gone".to_string())];
+        };
+        let rect = Rect::from_min_size(n.pos, layout::node_size(&n.spec));
+        self.camera.zoom_to_fit(Some(rect), view, LAYOUT_SPACE_PADDING_SECTION as f32);
+        let mut ev = vec![CanvasEvent::ZoomToFit];
+        ev.extend(self.lod_events());
+        ev
+    }
+
+    /// Double-tap: on a node HEADER = FOCUS that node (§8.5's third door); anywhere else keeps the
+    /// old zoom-to-fit-all (the gesture the shell has always had).
+    fn double_tap(
+        &mut self,
+        graph: &Graph,
+        layout: &CanvasLayout,
+        pos: Vec2,
+        view: Rect,
+    ) -> Vec<CanvasEvent> {
+        if let Some(nl) = layout.nodes.iter().find(|nl| nl.header_screen.contains(pos)) {
+            return self.focus_node(graph, nl.id, view);
+        }
+        self.zoom_to_fit(graph, view)
+    }
+
+    /// A tap while the picker is open (§8.4 modal discipline): a row selects its option through
+    /// the ordinary undoable param door and closes; inside-the-sheet-between-rows stays open;
+    /// anything outside closes. A viewport too small for one touch-floor row closes with words.
+    fn activate_picker(&mut self, graph: &mut Graph, pos: Vec2, view: Rect) -> Vec<CanvasEvent> {
+        let Some(sheet) = self.picker.sheet_rect(view) else {
+            self.picker.close();
+            return vec![
+                CanvasEvent::Picker(false),
+                CanvasEvent::Note(crate::canvas::picker::TOO_SMALL_WORDS.to_string()),
+            ];
+        };
+        if let Some(idx) = self.picker.row_at(sheet, pos) {
+            if let Some(t) = self.picker.target {
+                self.picker.close();
+                let mut ev = vec![CanvasEvent::Picker(false)];
+                ev.extend(self.apply_param(graph, t.node, t.param, idx as f32, false));
+                return ev;
+            }
+        }
+        if sheet.contains(pos) {
+            return Vec::new();
+        }
+        self.picker.close();
+        vec![CanvasEvent::Picker(false)]
+    }
+
     fn activate(
         &mut self,
         graph: &mut Graph,
@@ -1229,6 +1307,13 @@ impl CanvasState {
             return vec![CanvasEvent::Menu(false)];
         }
 
+        // An open picker captures the tap (WO-020 §8.4): a row selects its option through the
+        // ordinary undoable param door; a tap inside the sheet but between rows stays open;
+        // anything outside closes it.
+        if self.picker.is_open() {
+            return self.activate_picker(graph, pos, view);
+        }
+
         // The response plot under the finger places the probe marker where you tapped
         // (tap-to-place — the slider's tap-to-set courtesy, on a reading instead of a param).
         if let Some(ev) = self.activate_response_plot(pos) {
@@ -1267,6 +1352,21 @@ impl CanvasState {
                 self.selection.nodes.insert(node);
                 let desc = graph.node(node).and_then(|n| n.spec.params.get(index).cloned());
                 match desc {
+                    // A enum row is a DROPDOWN, not a slider (§8.4): the tap opens the picker at
+                    // the row; a 24-option enum under a finger-drag would be a mis-tap machine.
+                    Some(d) if d.kind == sparq_module_api::manifest::ParamKind::Enum => {
+                        let cur =
+                            graph.node(node).and_then(|n| n.param_value(index)).unwrap_or(0.0);
+                        match self.picker.open(
+                            crate::canvas::picker::PickerTarget { node, param: index },
+                            d.options.clone(),
+                            pos,
+                            cur,
+                        ) {
+                            Ok(()) => vec![CanvasEvent::Picker(true)],
+                            Err(words) => vec![CanvasEvent::Refused(words)],
+                        }
+                    },
                     Some(d) => {
                         let v = if inspector::is_binary(&d) {
                             let cur =
@@ -1380,6 +1480,12 @@ impl CanvasState {
                 "nothing matches — clear the search or close the browser".to_string(),
             )];
         };
+        if crate::canvas::browser::is_header(item) {
+            self.browser = Some(b);
+            return vec![CanvasEvent::Refused(
+                "that row is a group header — the modules sit under it".to_string(),
+            )];
+        }
         let spec = item.spec.clone();
         self.spawn_node(graph, spec, b.spawn_world)
     }
@@ -1474,6 +1580,22 @@ impl CanvasState {
         let desc = graph.node(node_id)?.spec.params.get(index)?.clone();
         self.selection.clear();
         self.selection.nodes.insert(node_id);
+        if desc.kind == sparq_module_api::manifest::ParamKind::Enum {
+            // The inspector's enum row opens the same picker as the card row (§8.4: "for the
+            // inspector AND the panel widgets").
+            let cur = graph.node(node_id).and_then(|n| n.param_value(index)).unwrap_or(0.0);
+            return Some(
+                match self.picker.open(
+                    crate::canvas::picker::PickerTarget { node: node_id, param: index },
+                    desc.options.clone(),
+                    pos,
+                    cur,
+                ) {
+                    Ok(()) => vec![CanvasEvent::Picker(true)],
+                    Err(words) => vec![CanvasEvent::Refused(words)],
+                },
+            );
+        }
         if !editable {
             return Some(vec![CanvasEvent::Refused(format!(
                 "`{}` ({:?}) is not editable in v0 — options/text editing arrives with manifest v1",
@@ -1676,6 +1798,9 @@ impl CanvasState {
                 let flags = graph.node(id).map(|n| n.flags).unwrap_or_default();
                 vec![
                     MenuRow::row(MenuAction::Rename, "RENAME", true),
+                    // WO-020 §8.5: FOCUS = camera fit-to-node, the physical-screen twin of the
+                    // guest's FULL param. Generic chrome: every node wears the row.
+                    MenuRow::row(MenuAction::Focus, "FOCUS", true),
                     MenuRow::row(MenuAction::Duplicate, "DUPLICATE", true),
                     MenuRow::row(MenuAction::SetMaster, "SET MASTER", true),
                     MenuRow::row(
@@ -1735,6 +1860,7 @@ impl CanvasState {
         view: Rect,
     ) -> Vec<CanvasEvent> {
         match (target, action) {
+            (MenuTarget::Node(id), MenuAction::Focus) => self.focus_node(graph, id, view),
             (MenuTarget::Node(id), MenuAction::Rename) => self.rename_open(graph, id, anchor),
             (MenuTarget::Node(id), MenuAction::Duplicate) => self.duplicate(graph, id),
             (MenuTarget::Node(id), MenuAction::SetMaster) => {
@@ -3209,6 +3335,7 @@ mod tests {
             min: 0.0,
             max: 24_000.0,
             default: 440.0,
+            options: Vec::new(),
         }
     }
 
@@ -3600,7 +3727,7 @@ mod tests {
     }
 
     #[test]
-    fn the_inspector_refuses_a_non_editable_param_in_words() {
+    fn an_enum_with_no_options_refuses_in_words() {
         let mut g = Graph::new();
         let spec = sine().with_params(vec![ParamDesc {
             id: "mode".into(),
@@ -3610,6 +3737,7 @@ mod tests {
             min: 0.0,
             max: 0.0,
             default: 0.0,
+            options: Vec::new(),
         }]);
         let id = nid(&g.op_add_node(spec, Vec2::ZERO));
         let mut s = CanvasState::new();
@@ -3621,10 +3749,113 @@ mod tests {
         let tap = il.rows[0].track.center();
         let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: tap }, &layout, v, &ctx());
         assert!(
-            ev.iter().any(|e| matches!(e, CanvasEvent::Refused(r) if r.contains("not editable"))),
-            "{ev:?}"
+            ev.iter().any(
+                |e| matches!(e, CanvasEvent::Refused(r) if r.contains("no selectable options"))
+            ),
+            "an option-less enum refuses in words, got {ev:?}"
         );
-        assert!(!s.history.can_undo(), "a refusal is not an operation");
+        assert!(!s.picker.is_open());
+    }
+
+    #[test]
+    fn tapping_an_enum_row_opens_the_picker_and_a_row_select_sets_the_param() {
+        let mut g = Graph::new();
+        let spec = sine().with_params(vec![ParamDesc {
+            id: "cell_01".into(),
+            name: "Cell 01 stream".into(),
+            kind: ParamKind::Enum,
+            unit: None,
+            // An enum's domain is its option index range (0..=len-1) — the slider maths clamps
+            // to this, so a picker selection outside it would read as "no change".
+            min: 0.0,
+            max: 2.0,
+            default: 1.0,
+            options: vec![
+                ("".into(), "— OFF —".into()),
+                ("swpc.aurora".into(), "Aurora".into()),
+                ("geo.quakes-hour".into(), "Quakes".into()),
+            ],
+        }]);
+        let id = nid(&g.op_add_node(spec, Vec2::ZERO));
+        let mut s = CanvasState::new();
+        let panel = Rect::from_min_size(Vec2::new(800.0, 100.0), Vec2::new(400.0, 600.0));
+        let il = inspector::compute(g.node(id).unwrap(), panel);
+        s.set_inspector(Some(il.clone()));
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let tap = il.rows[0].track.center();
+        // 1. The tap opens the picker (a 3-option enum is a dropdown, not a slider).
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: tap }, &layout, v, &ctx());
+        assert!(ev.iter().any(|e| matches!(e, CanvasEvent::Picker(true))), "{ev:?}");
+        assert!(s.picker.is_open() && s.picker.rows.len() == 3);
+        // 2. A tap on row 2 selects option 2 through the undoable param door, and closes.
+        let sheet = s.picker.sheet_rect(v).unwrap();
+        let row2 = s.picker.row_rect(sheet, 2).unwrap();
+        let ev =
+            s.on_intent(&mut g, GestureIntent::Activate { pos: row2.center() }, &layout, v, &ctx());
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Applied(_))),
+            "the select is an undoable op: {ev:?}"
+        );
+        assert!(!s.picker.is_open(), "the picker closes on selection");
+        assert_eq!(
+            g.node(id).unwrap().param_value(0),
+            Some(2.0),
+            "the param rides the option index"
+        );
+    }
+
+    #[test]
+    fn a_tap_outside_the_open_picker_closes_it() {
+        let mut g = Graph::new();
+        let spec = sine().with_params(vec![ParamDesc {
+            id: "e".into(),
+            name: "E".into(),
+            kind: ParamKind::Enum,
+            unit: None,
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            options: vec![("a".into(), "A".into()), ("b".into(), "B".into())],
+        }]);
+        let id = nid(&g.op_add_node(spec, Vec2::ZERO));
+        let mut s = CanvasState::new();
+        let panel = Rect::from_min_size(Vec2::new(800.0, 100.0), Vec2::new(400.0, 600.0));
+        let il = inspector::compute(g.node(id).unwrap(), panel);
+        s.set_inspector(Some(il.clone()));
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let _ = s.on_intent(
+            &mut g,
+            GestureIntent::Activate { pos: il.rows[0].track.center() },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(s.picker.is_open());
+        let sheet = s.picker.sheet_rect(v).unwrap();
+        let outside = Vec2::new(sheet.max.x + 100.0, sheet.min.y + 2.0);
+        let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: outside }, &layout, v, &ctx());
+        assert!(!s.picker.is_open(), "outside closes");
+        assert!(ev.iter().any(|e| matches!(e, CanvasEvent::Picker(false))), "{ev:?}");
+    }
+
+    #[test]
+    fn double_tap_on_a_node_header_focuses_that_node() {
+        // §8.5: header double-tap = FOCUS (camera fit-to-node); empty-canvas double-tap still fits all.
+        let mut g = Graph::new();
+        let id = nid(&g.op_add_node(sine(), Vec2::new(2000.0, 2000.0)));
+        let mut s = CanvasState::new();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let header = layout.nodes.iter().find(|n| n.id == id).unwrap().header_screen.center();
+        let before = s.camera;
+        let _ = s.on_intent(&mut g, GestureIntent::DoubleTap { pos: header }, &layout, v, &ctx());
+        assert_ne!(s.camera, before, "FOCUS moves the camera onto the node");
+        // The node's centre is now near the view centre (fit-to-node).
+        let nl = compute(&g, &s.camera, v);
+        let centre = nl.nodes.iter().find(|n| n.id == id).unwrap().screen.center();
+        assert!(v.contains(centre), "the focused node is inside the view");
     }
 
     // ------------------------------------------------- rename entry + inspector scroll (inc 5)
@@ -3753,6 +3984,7 @@ mod tests {
                 min: 0.0,
                 max: 1.0,
                 default: 0.5,
+                options: Vec::new(),
             })
             .collect();
         let spec = NodeSpec::new("sparq/util/mixer", "Mixer", vec![]).with_params(params);
@@ -3943,6 +4175,7 @@ mod tests {
                 min: 10.0,
                 max: 20_000.0,
                 default: 1_000.0,
+                options: Vec::new(),
             },
             ParamDesc {
                 id: "resonance".into(),
@@ -3952,6 +4185,7 @@ mod tests {
                 min: 0.0,
                 max: 1.0,
                 default: 0.2,
+                options: Vec::new(),
             },
             ParamDesc {
                 id: "mode".into(),
@@ -3961,6 +4195,7 @@ mod tests {
                 min: 0.0,
                 max: 4.0,
                 default: 0.0,
+                options: Vec::new(),
             },
         ];
         let spec = NodeSpec::new(
@@ -4317,6 +4552,7 @@ mod tests {
             min: 0.0,
             max: 1.0,
             default: 0.0,
+            options: Vec::new(),
         };
         let spec = NodeSpec::new("sparq/util/mutey", "Mutey", vec![]).with_params(vec![mute]);
         let mut g = Graph::new();
@@ -4374,6 +4610,7 @@ mod tests {
                 min: 0.0,
                 max: 14.0,
                 default: 0.0,
+                options: Vec::new(),
             },
             ParamDesc {
                 id: "custom-mask".into(),
@@ -4383,6 +4620,7 @@ mod tests {
                 min: 0.0,
                 max: 4095.0,
                 default: 0.0,
+                options: Vec::new(),
             },
         ];
         let spec = NodeSpec::new(

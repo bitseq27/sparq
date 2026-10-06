@@ -32,6 +32,7 @@
 
 pub mod ceilings;
 pub mod package;
+pub mod sources;
 pub mod validate;
 
 pub use ceilings::{ceilings_for, GpuCeilings};

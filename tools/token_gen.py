@@ -299,7 +299,7 @@ def load() -> dict:
 
 
 # --------------------------------------------------------------------------- emitters
-def emit_rust(data: dict, flat: dict) -> str:
+def emit_rust(data: dict, flat: dict, luts: dict) -> str:
     # This file is `include!`d at the crate root of `sparq-ui::tokens`, so it may carry a
     # crate-level inner attribute but must NOT carry inner doc comments (those belong to the
     # including module). Human-facing explanation lives in tools/README.md and token-spec.md.
@@ -342,6 +342,79 @@ def emit_rust(data: dict, flat: dict) -> str:
             )
         else:
             lines.append(f"pub const {name.upper()}: {rust_type(v)} = {rust_value(v)};")
+    lines.append("")
+    # Baked colormap LUTs as compile-time constants (WO-020 INC4): the dependency-free
+    # display-list painter (sparq-ui/src/displaylist.rs) samples colormaps without reading
+    # colormaps.json at runtime. These are the SAME baked values colormaps.json carries (one
+    # bake, two faces), so the SVG/egui painters and the GPU upload cannot drift.
+    lines.append("// Baked 256-entry colormap LUTs (0x00RRGGBB), the compile-time face of colormaps.json.")
+    for name in sorted(luts):
+        const = "COLORMAP_" + name.upper() + "_LUT"
+        vals = [ "0x" + h.lstrip("#").upper() for h in luts[name] ]
+        lines.append(f"pub const {const}: &[u32; {len(vals)}] = &[")
+        for i in range(0, len(vals), 8):
+            lines.append("    " + ", ".join(vals[i:i+8]) + ",")
+        lines.append("];")
+    lines.append("")
+    # Generic id -> value lookups (WO-020 INC4): the dependency-free display-list painter resolves
+    # semantic token ids at paint time; these tables are the compile-time face of tokens.json (same
+    # data, sorted for binary search). A resolver that parsed JSON at runtime would put a parser in
+    # the zero-dep shell core; a resolver that hard-coded hex would copy the aesthetic (forbidden).
+    color_pairs = sorted(
+        (path, v) for path, v in flat.items()
+        if isinstance(v, str) and re.fullmatch(r"#[0-9A-Fa-f]{6}", v)
+    )
+    lines.append("/// Every colour token id and its hex, sorted by id (the binary-search face of tokens.json).")
+    lines.append("pub const TOKEN_COLORS: &[(&str, &str)] = &[")
+    for path, v in color_pairs:
+        lines.append(f'    ("{path}", "{v}"),')
+    lines.append("];")
+    lines.append("")
+    num_pairs = sorted(
+        (path, v) for path, v in flat.items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    )
+    lines.append("/// Every numeric token id and its value, sorted by id (spacing, scales, radii, strokes).")
+    lines.append("pub const TOKEN_NUMBERS: &[(&str, f64)] = &[")
+    for path, v in num_pairs:
+        lines.append(f'    ("{path}", {float(v)}),')
+    lines.append("];")
+    lines.append("")
+    lines.append("/// Resolve a colour token id to its hex. Unknown id -> None: the painter skips the")
+    lines.append("/// primitive with a diagnostic (display.wit's fail-soft rule), never a guessed colour.")
+    lines.append("#[must_use]")
+    lines.append("pub fn color_hex(id: &str) -> Option<&'static str> {")
+    lines.append("    TOKEN_COLORS.binary_search_by(|&(k, _)| k.cmp(id)).ok().map(|i| TOKEN_COLORS[i].1)")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// Resolve a numeric token id (sizes, radii, spacing, stroke widths).")
+    lines.append("#[must_use]")
+    lines.append("pub fn number(id: &str) -> Option<f64> {")
+    lines.append("    TOKEN_NUMBERS.binary_search_by(|&(k, _)| k.cmp(id)).ok().map(|i| TOKEN_NUMBERS[i].1)")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// Resolve a colormap token id to its baked 256-entry LUT. Ids normalise by stripping")
+    lines.append("/// `colormap.` and folding `-`/`.` to `_` (colormap.inferno-class == inferno_class,")
+    lines.append("/// colormap.phosphor.cb == phosphor_cb) — the two spellings the bundle and the")
+    lines.append("/// manifests use for the same map.")
+    lines.append("#[must_use]")
+    lines.append("pub fn colormap_lut(id: &str) -> Option<&'static [u32]> {")
+    lines.append("    let slug = id.strip_prefix(\"colormap.\").unwrap_or(id);")
+    lines.append("    let bytes = slug.as_bytes();")
+    lines.append("    let mut buf = [0u8; 64];")
+    lines.append("    if bytes.len() > buf.len() {")
+    lines.append("        return None;")
+    lines.append("    }")
+    lines.append("    for (i, &b) in bytes.iter().enumerate() {")
+    lines.append("        buf[i] = match b { b'-' | b'.' => b'_', c => c };")
+    lines.append("    }")
+    lines.append("    let norm = match std::str::from_utf8(&buf[..bytes.len()]) { Ok(s) => s, Err(_) => return None };")
+    lines.append("    match norm {")
+    for name in sorted(luts):
+        lines.append(f'        "{name}" => Some(COLORMAP_{name.upper()}_LUT),')
+    lines.append("        _ => None,")
+    lines.append("    }")
+    lines.append("}")
     lines.append("")
     return "\n".join(lines)
 
@@ -769,7 +842,7 @@ def main() -> int:
     }
 
     outputs = {
-        GEN / "tokens.rs": emit_rust(data, flat),
+        GEN / "tokens.rs": emit_rust(data, flat, luts),
         GEN / "tokens.json": tokens_json,
         GEN / "token-bundle.json": emit_bundle(data, tokens_json, bundle_sha),
         GEN / "tokens.css": emit_css(flat, luts),

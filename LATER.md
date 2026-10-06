@@ -28,6 +28,7 @@ Everything here is a **no** for now. The rule: if an idea isn't in a work order,
 
 ## Data / streams
 - [ ] Seismic, tide, transit, air-quality and astronomy feeds as standard adapters
+- [ ] **Gauge threshold bands as registry data** (WO-020 INC3): §5.5 wants thresholds from registry metadata ("AQI bands", "Kp ≥ 5 storm line"). The Kp storm line ships as a core constant; AQI bands are not registry rows yet — add a `thresholds` field to `streams.toml` rows and let the gauge renderer read them instead of fractional ticks
 - [ ] UWB indoor positioning for object trajectories in the room
 - [ ] Hand-tracking (pose) as a continuous controller surface
 - [ ] EEG / heart-rate variability as a slow "form" stream
@@ -67,6 +68,10 @@ Everything here is a **no** for now. The rule: if an idea isn't in a work order,
 - [ ] Signed "trusted native" instrument tier — a badged, review-gated exception for instruments the sandbox cannot carry. Needs evidence from real handed-in packages first, not speculation
 - [ ] Instrument registry/marketplace plumbing beyond `sparq mod validate` + the nightly conformance matrix: namespaces, attestations, download counts, `sparq mod add` for instruments *(Phase 5 registry work, plan §13.4)*
 - [ ] Display vocabulary v1.2+: GPU instancing, volumetrics, text in 3D scenes, guest-declared post-processing. Additive-minor when a reference instrument or hand-off falsifies v1 — not before
+- [ ] **`trace-item` carries no box** (WO-020 INC3, falsified by the first instrument): the frozen record maps `values` "across the item's box" but carries no box field — right for a full-display scope (`dsp/scope`), unusable for a POSITIONED per-cell trace, so the Observatory's timeseries cells ride `polyline` and the phosphor decay/glow motion tokens go unused on wall instruments. Additive-minor candidate: an optional box on `trace-item` (recorded in `observatory-core/src/render/timeseries.rs`)
+- [ ] **`rect-item` carries no colormap channel** (WO-020 INC3): value-coloured bars (§5.5's "Kp bars, `colormap.bipolar` by level") are unrepresentable — colormaps ride only points/heat-cells/mesh/heightfield. The Observatory encodes Kp level as bar HEIGHT + the storm-threshold line (data, not colour); a bars-as-1-row-heat-cells idiom works but quantises. Candidate: a `values`+`colormap` pair on `rect`, or a first-class bar primitive
+- [ ] **`glyph-run` carries no anchor and no measured advance** (WO-020 INC3): right-aligned descriptions and truncation force the guest to ESTIMATE character advance (0.6 × size, the mono assumption; recorded in `observatory-core/src/render/mod.rs`). Candidate: an optional `align` enum and/or host-published advance metrics in the token bundle — or accept guest estimation as permanent, documented
+- [ ] **Per-cell history span** (WO-020 INC3): one wall-wide `history` param mismatches daily-cadence feeds (NASA POWER shows ~1 point at the 3 h §5.4 default; tides/POWER want days). Per-cell or per-schema history is an additive param-design change (26/32 cap leaves six slots of headroom)
 - [ ] Runtime-queryable token bundle (guest asks for token ids dynamically instead of consuming the fixed v1 struct) — only if authors hit the fixed bundle's limits
 - [ ] Multi-instrument packs (`.sparqpack` of instruments + shared asset bundles) under one licence/provenance header
 - [ ] Cross-language SDK recipes beyond Rust (C, Zig, AssemblyScript via wit-bindgen; Python via componentize-py) — after the first external hand-off shows where the Rust-centric guide is thin
@@ -450,3 +455,37 @@ watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the det
 * **Push-mode exclusive — #92's named lever if attempt 4 comes back rate-independent.** Event-driven exclusive cannot legally bank more than one period (`hnsPeriodicity` ≡ `hnsBufferDuration` under `EVENTCALLBACK`; the pump's per-wake write is capped at one buffer — attempts 2–3 measured exactly that identity, windows-notes §4d/§4e). Push mode lifts the law: `Initialize` without `EVENTCALLBACK`, periodicity 0, buffer 2–4 periods, pump self-paces (~period/4) and writes against padding — the shape the audio engine itself runs on this endpoint (2112 fr over ~960 fr ticks, 2 h clean) and the default of mature WASAPI outputs on this driver class. Design before code, its own increment: the pump's self-pacing discipline (timer granularity; the callback-side no-clock rule is untouched — the pump is harness side), ADR-004's "event-driven" wording (an addendum, not a quiet change), late-wake semantics when the expected cadence is a policy number instead of a driver number, and the `BackendKind` display names.
 * **A period probe in caps.** `devices --caps` probes exclusive RATES but not exclusive PERIODS: a ~200 ms `Initialize` probe per ladder candidate would have surfaced #89 at step [03] instead of step [04] — at the cost of touching the device during enumeration and a slower caps command. Parked until a device needs it; the [04] evidence path is sufficient (and the digest keeps it cheap).
 * **Increment 2 backlog** (`docs/hal/windows-notes.md` §5): ASIO, full duplex, round-trip measurement, the STA retry for #75 — and no longer the clock-drift re-derivation (#76 shipped in inc 1.5: delivered-vs-wall, the `IAudioClock` binding deleted, both §4b fixtures pinned as tests).
+
+## WO-020 INC5 doors (parked by INC4's closeout, 2026-10-06)
+
+* **The wasm loader (PLAY's refusal).** A canvas may now CARRY an instrument node (the browser
+  offers discovered packages); the native registry cannot INSTANTIATE one until INC5's wasmtime
+  loader registers package wasm. Until then PLAY refuses in words (#58's sentence, quoted on the
+  convergence sheet) — the honest shape: the shell offers, the executor declines, nobody lies.
+* **`BrokerProvider` on device.** `ReplayProvider` (fixtures) feeds the §5.2 status label in the
+  sandbox; the device swaps in the broker behind the same `StreamProvider` trait (`streams-net`).
+* **Stage 6 writes the at-rest render.** `sparq mod validate` stage 6 (device) should publish the
+  last display list to the cache dir the at-rest store reads (`dat_observatory.ir.json`), so a
+  device that has ever run the instrument shows its last wall at rest. The harness's `--atrest`
+  is the sandbox's half of the same door.
+* **WO-014 typed panel = the instrument toolbar's widgets.** The D6 panel band is reserved chrome
+  today (the §5.2 label rides it in host words); the manifest's `widgets` table (visible_if
+  gating, group_by, the enum_select widget face) becomes host widgets when WO-014 types the
+  panel vocabulary. Until then an instrument's params live in the inspector + the picker.
+* **Release+ui OOMs the 1 GB sandbox** (`read-fonts` SIGKILL under the release profile). The ui
+  gates run from debug here; CI's ubuntu runner carries the release cell. Not a code defect — a
+  box limit, recorded so nobody chases it as one.
+* **The two at-rest cache-dir defaults disagree on Windows** (found by the delivery prep,
+  2026-10-06): the app's `ui/atrest.rs::atrest_dir()` has the `cfg!(windows)` branch
+  (`%APPDATA%\sparq\at-rest\`), the harness's `atrest_path()` does not
+  (`%USERPROFILE%\.cache\sparq\at-rest\`) — so `observatory-harness --atrest` publishes where
+  `sparq instrument render --dir` / the shell will never look on a device. Both sides honour
+  `SPARQ_ATREST` first; the run sheet uses that door. INC5: mirror the app's rule in the harness
+  (one shared helper would be better than two mirrors) and add a test that the two paths agree
+  per platform.
+* **The guest workspace's `Cargo.lock` is untracked** (the house `.gitignore` ignores every
+  `Cargo.lock`), so a device-side REBUILD of the component resolves `wit-bindgen` & co. unpinned —
+  a silent version drift against the sandbox-built artefact. The shipped
+  `instruments/observatory/observatory.wasm` is byte-pinned in the pack, so nothing breaks today;
+  INC5 (which owns the device rebuild recipe) should either track the guest lockfile as the one
+  documented exception or record the component's sha + toolchain versions beside the recipe.

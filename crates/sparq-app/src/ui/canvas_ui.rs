@@ -29,6 +29,7 @@ use sparq_ui::geom::{Rect, Vec2};
 use sparq_ui::tokens::*;
 
 use crate::ui::adapter::{c32, egui_rect, font_s, font_xs, sp_rect, Palette};
+use crate::ui::atrest::AtRestStore;
 
 /// The unfinished-flag body tint: the error token at a LIGHT alpha — a highlight over the
 /// panel fill, readable as "waiting", never as a filled state.
@@ -57,6 +58,7 @@ pub fn draw(
     hists: &LevelHistories,
     main_info: Option<&[String; 2]>,
     pointer: Option<Vec2>,
+    atrest: &AtRestStore,
     audit: &mut Vec<InteractiveElement>,
 ) {
     draw_grid(p, pal, canvas, view);
@@ -73,11 +75,14 @@ pub fn draw(
     let missing = graph.missing_required_inputs();
     draw_nodes(
         p, pal, graph, canvas, layout, master_id, traces, meters, curves, hists, &missing,
-        main_info, audit,
+        main_info, atrest, audit,
     );
     draw_marquee(p, pal, canvas);
     draw_menu(p, pal, canvas, view, audit);
     draw_browser(p, pal, canvas, view, audit);
+    // The dropdown picker is the deepest canvas modal after rename: drawn last, above browser
+    // and menu, because while open it captures every tap (WO-020 §8.4).
+    draw_picker(p, pal, canvas, view, audit);
     draw_rename(p, pal, canvas, view, audit);
 }
 
@@ -599,6 +604,7 @@ fn draw_nodes(
     hists: &LevelHistories,
     missing: &[(NodeId, usize)],
     main_info: Option<&[String; 2]>,
+    atrest: &AtRestStore,
     audit: &mut Vec<InteractiveElement>,
 ) {
     let z = canvas.camera.zoom;
@@ -611,11 +617,11 @@ fn draw_nodes(
             Lod::Dot => draw_node_dot(p, pal, node, nl, selected, is_master, flagged, z),
             Lod::Simplified => draw_node_box(
                 p, pal, graph, canvas, node, nl, selected, is_master, false, traces, meters,
-                curves, hists, flagged, main_info, z, audit,
+                curves, hists, flagged, main_info, z, atrest, audit,
             ),
             Lod::Full => draw_node_box(
                 p, pal, graph, canvas, node, nl, selected, is_master, true, traces, meters, curves,
-                hists, flagged, main_info, z, audit,
+                hists, flagged, main_info, z, atrest, audit,
             ),
         }
     }
@@ -865,6 +871,7 @@ fn draw_node_box(
     flagged: bool,
     main_info: Option<&[String; 2]>,
     z: f32,
+    atrest: &AtRestStore,
     audit: &mut Vec<InteractiveElement>,
 ) {
     // ONE zoom factor for every content object on the card (operator ruling 2026-10-01):
@@ -1149,6 +1156,9 @@ fn draw_node_box(
         Some(Well::Graph) => draw_level_graph(p, pal, node, nl, canvas, hists, z),
         Some(Well::Keyboard) => draw_keyboard_well(p, pal, node, nl, canvas, z),
         Some(Well::Steps) => draw_step_bars(p, pal, node, nl, canvas, z),
+        // WO-020 INC4 §8.2: the instrument display band — the guest's display list, painted by
+        // the host from the at-rest interchange while the loader is absent (D13's at-rest wall).
+        Some(Well::Display) => draw_instrument_display(p, pal, node, nl, atrest, z, full),
         None => {}, // no well: the body is the box, honest
     }
 
@@ -1581,6 +1591,19 @@ fn draw_browser(
     for (page_i, item) in b.visible().skip(b.scroll()).take(rows).enumerate() {
         let rr = b.row_rect(origin, page_i, view, max_w);
         let rank = b.scroll() + page_i;
+        // Group headers (WO-020 §8.2): a dim uppercase title row, never a selection band, never
+        // a spawn target (the tap refuses in words — interact::spawn_selected).
+        if browser::is_header(item) {
+            p.rect_filled(egui_rect(rr), LAYOUT_CORNER_NONE as u8, pal.ground_inset);
+            p.text(
+                pos(rr.min) + egui::vec2(LAYOUT_SPACE_3 as f32, rr.height() / 2.0),
+                Align2::LEFT_CENTER,
+                item.spec.display_name.clone(),
+                font_xs(),
+                pal.text_tertiary,
+            );
+            continue;
+        }
         let selected = rank == b.selected();
         if selected {
             p.rect_filled(
@@ -2108,5 +2131,168 @@ fn draw_step_bars(
                 glow,
             );
         }
+    }
+}
+
+// --------------------------------------------------------------------- instrument display band
+
+/// The instrument display band (WO-020 INC4 §8.2): the guest's display list, painted by the host.
+/// While the wasm loader is absent (the sandbox shell, a bypassed instance), the band shows the
+/// AT-REST render — the last display-list JSON the harness or the device's stage 6 wrote — scaled
+/// into the band, because "live where the rings carry it, at rest otherwise" reaches instruments
+/// too. No at-rest render: WORDS in the band centre, never a blank rect that reads as "zero".
+/// The §5.2 status label (the broker's state, host-side words) rides the panel band above.
+fn draw_instrument_display(
+    p: &Painter,
+    pal: &Palette,
+    node: &Node,
+    nl: &NodeLayout,
+    atrest: &AtRestStore,
+    z: f32,
+    full: bool,
+) {
+    let Some(band) = nl.well_band else { return };
+    if !full && z < 0.3 {
+        return; // Dot LOD: the node is a dot; a wall at dot scale is noise, not a reading
+    }
+    let r = egui_rect(band);
+    p.rect_filled(r, LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+    p.rect_stroke(
+        r,
+        LAYOUT_CORNER_MICRO as u8,
+        pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
+        StrokeKind::Outside,
+    );
+    // The panel band (between the header and the display) carries the host's status words (§5.2).
+    if let Some(words) = atrest.status(&node.spec.module_id) {
+        let panel = Rect::new(
+            Vec2::new(nl.screen.min.x, nl.header_screen.max.y),
+            Vec2::new(nl.screen.max.x, band.min.y),
+        );
+        if panel.height() > 2.0 {
+            p.text(
+                pos(Vec2::new(panel.max.x - LAYOUT_SPACE_3 as f32, panel.center().y)),
+                Align2::RIGHT_CENTER,
+                words.to_string(),
+                font_xs(),
+                pal.text_secondary,
+            );
+        }
+    }
+    let Some(ar) = atrest.get(&node.spec.module_id) else {
+        p.text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            "NO AT-REST RENDER — run the observatory harness, or validate on a device",
+            font_xs(),
+            pal.text_disabled,
+        );
+        return;
+    };
+    // Scale the display's logical px into the band (uniform, centred — the band IS the declared
+    // min_size at zoom 1 by D6, so at zoom 1 the scale is exactly z).
+    let scale = (band.width() / ar.w.max(1.0)).min(band.height() / ar.h.max(1.0));
+    let ox = band.min.x + (band.width() - ar.w * scale) / 2.0;
+    let oy = band.min.y + (band.height() - ar.h * scale) / 2.0;
+    let mut painter = sparq_ui::displaylist::Painter::new();
+    let painted = painter.resolve(&ar.items);
+    let diag = painter.diagnostics();
+    crate::ui::displaylist_egui::paint(p, &painted, scale, |x, y| {
+        Pos2::new(ox + x * scale, oy + y * scale)
+    });
+    if !diag.is_empty() {
+        // Fail-soft at runtime, visible at review: the skip list rides the band's bottom edge.
+        p.text(
+            pos(Vec2::new(band.min.x + LAYOUT_SPACE_2 as f32, band.max.y - LAYOUT_SPACE_2 as f32)),
+            Align2::LEFT_BOTTOM,
+            format!("{} unresolved token id(s) — see the log", diag.len()),
+            font_xs(),
+            pal.text_disabled,
+        );
+    }
+}
+
+// --------------------------------------------------------------------- the dropdown picker sheet
+
+/// The dropdown picker sheet (WO-020 INC4 §8.4): 44 px rows, the selected row in the class
+/// accent, scroll for long lists, and the audit's touch targets registered like every other
+/// command surface. Drawn above the browser and menu (it captures taps while open).
+fn draw_picker(
+    p: &Painter,
+    pal: &Palette,
+    canvas: &CanvasState,
+    view: Rect,
+    audit: &mut Vec<InteractiveElement>,
+) {
+    let pk = &canvas.picker;
+    if !pk.is_open() {
+        return;
+    }
+    let Some(sheet) = pk.sheet_rect(view) else {
+        // A viewport too small for one touch-floor row gets WORDS, not a mis-tappable sheet.
+        p.text(
+            pos(view.center()),
+            Align2::CENTER_CENTER,
+            sparq_ui::canvas::picker::TOO_SMALL_WORDS,
+            font_xs(),
+            pal.text_disabled,
+        );
+        return;
+    };
+    let eg = egui_rect(sheet);
+    p.rect_filled(eg, LAYOUT_CORNER_PANEL as u8, pal.ground_overlay);
+    p.rect_stroke(
+        eg,
+        LAYOUT_CORNER_PANEL as u8,
+        pal.hairline(pal.hairline_strong, LAYOUT_STROKE_HAIRLINE as f32),
+        StrokeKind::Middle,
+    );
+    for i in 0..pk.rows.len() {
+        let Some(rr) = pk.row_rect(sheet, i) else { continue }; // scrolled out: not drawn, not tappable
+        let (value, label) = &pk.rows[i];
+        let selected = (pk.current.round() as usize) == i;
+        if selected {
+            p.rect_filled(
+                egui_rect(rr),
+                LAYOUT_CORNER_NONE as u8,
+                pal.selected.gamma_multiply(0.18),
+            );
+            let bar = Rect::new(rr.min, Vec2::new(rr.min.x + LAYOUT_SPACE_1 as f32, rr.max.y));
+            p.rect_filled(egui_rect(bar), LAYOUT_CORNER_NONE as u8, pal.selected);
+        }
+        let pad = LAYOUT_SPACE_3 as f32;
+        p.text(
+            pos(rr.min) + egui::vec2(pad, rr.height() / 2.0),
+            Align2::LEFT_CENTER,
+            label.clone(),
+            font_s(),
+            if selected { pal.text_primary } else { pal.text_secondary },
+        );
+        // The stable value rides dim at the row's right — the id a patch or a binding quotes.
+        p.text(
+            pos(Vec2::new(rr.max.x - pad, rr.center().y)),
+            Align2::RIGHT_CENTER,
+            value.clone(),
+            font_xs(),
+            pal.text_tertiary,
+        );
+        audit.push(InteractiveElement {
+            id: format!("canvas/picker/row{i}"),
+            class: TouchClass::M,
+            rect: rr,
+            dense_allowed: false,
+        });
+    }
+    if pk.max_scroll(sheet) > 0.0 {
+        p.text(
+            pos(Vec2::new(
+                sheet.max.x - LAYOUT_SPACE_2 as f32,
+                sheet.min.y + LAYOUT_SPACE_1 as f32,
+            )),
+            Align2::RIGHT_TOP,
+            "SCROLL",
+            font_xs(),
+            pal.text_disabled,
+        );
     }
 }

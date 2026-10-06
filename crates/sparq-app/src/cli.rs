@@ -121,6 +121,7 @@ pub fn run(args: &[String]) -> Result<ExitCode> {
         "devices" => devices::run(parse_devices(rest)?),
         "modules" => modules::run(modules::parse(rest)?),
         "mod" => instruments::run(instruments::parse(rest)?),
+        "instrument" => instruments::run_instrument(instruments::parse_instrument(rest)?),
         "streams" => streams::run(streams::parse(rest)?),
         "exec" => exec::run(exec::parse(rest)?),
         "play" => play::run(parse_play(rest)?),

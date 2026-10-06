@@ -36,6 +36,17 @@ micro  = 2       # buttons, chips
 panel  = 4       # panels, dialogs, dock
 max    = 4       # nothing is rounder than this; circles only for knobs and ports
 
+# ---------------------------------------------------------------- marker radii (WO-020 §5.5)
+# The point-cloud size vocabulary: a display-list `points-item.size` is a TOKEN ID, and the
+# instrument renderers (map events, timeline scatter) pick one of these three by magnitude /
+# severity tier — "size class by magnitude" (plan §5.5), as data. Logical px radii; 3/5/8 keep
+# the hairline→emphasis stroke proportion at wall scale. Additive (WO-020 INC3): nothing
+# existing reads these yet; the Observatory's core is the first consumer.
+[marker]
+radius_s = 3     # low tier / background density (M < 3, severity low)
+radius_m = 5     # mid tier (M 3…5, severity moderate/high)
+radius_l = 8     # top tier (M > 5, severe) — the "look here" size, still under touch.port_radius*2
+
 [elevation]
 # There is no shadow system. Depth is expressed by:
 #   1. ground tint (canvas < ground < panel < panel_alt < overlay)

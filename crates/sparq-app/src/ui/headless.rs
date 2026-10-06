@@ -275,6 +275,9 @@ pub fn run_audit(_opts: &UiOptions) -> i32 {
     );
     run_response_smokes(&mut failures);
 
+    // ------------------------------------------------------------ WO-020 INC4 instrument smokes
+    run_instrument_smokes(&mut failures);
+
     // ------------------------------------------------------------ round-4 smokes
     println!(
         "round-4 smoke (operator round 4: the clip latch, the clock's phase pipeline, the event-solid encoding):"
@@ -294,6 +297,90 @@ pub fn run_audit(_opts: &UiOptions) -> i32 {
     } else {
         1
     }
+}
+
+/// WO-020 INC4's audit rows: the wall-class card coverage rule (D6/R3), the picker's touch floor,
+/// the LOD transition thresholds, and the instrument display band's geometry. Measured, like every
+/// audit row — a number here is a property the shell promises.
+fn run_instrument_smokes(failures: &mut Vec<String>) {
+    use sparq_ui::canvas::layout::{instrument_display_band, node_size};
+    use sparq_ui::canvas::model::NodeSpec;
+    use sparq_ui::tokens::*;
+
+    // The reference wall (2560×1600, design chrome open): canvas rect = the view minus rail,
+    // library, top bar, toolbar, dock — the same chrome the layout model places.
+    let vw = 2560.0f32;
+    let canvas_w = vw - LAYOUT_SHELL_RAIL_WIDTH as f32 - LAYOUT_SHELL_LIBRARY_WIDTH as f32;
+    let canvas_h = 1600.0
+        - LAYOUT_SHELL_TOP_BAR_HEIGHT as f32
+        - LAYOUT_SHELL_TOOLBAR_HEIGHT as f32
+        - LAYOUT_SHELL_DOCK_HEIGHT as f32;
+    let Ok(text) = std::fs::read_to_string("instruments/observatory/sparqmod.toml") else {
+        failures
+            .push("instrument audit: instruments/observatory/sparqmod.toml unreadable".to_string());
+        return;
+    };
+    let Some(spec) = NodeSpec::from_manifest_text(&text) else {
+        failures.push("instrument audit: the Observatory manifest does not decode".to_string());
+        return;
+    };
+    let card = node_size(&spec);
+    let cov = card.x / canvas_w;
+    println!(
+        "[{}] instrument card coverage — {:.0}×{:.0} card vs {:.0}×{:.0} canvas rect at zoom 1.0 = {:.1}% (rule: ≥ 95%)",
+        if cov >= 0.95 { "PASS" } else { "FAIL" },
+        card.x,
+        card.y,
+        canvas_w,
+        canvas_h,
+        cov * 100.0
+    );
+    if cov < 0.95 {
+        failures
+            .push(format!("instrument card covers {:.1}% of the canvas rect (< 95%)", cov * 100.0));
+    }
+    if card.y > canvas_h {
+        // FIT territory: the card is taller than the canvas rect, so zoom 1.0 cannot show it all —
+        // the plan's own numbers (1288 vs 1260) say FIT ≈ 0.98; record it, do not fail it.
+        println!(
+            "  note: the card is taller than the canvas rect ({} > {}) — FIT ≈ {:.2} at this viewport, per D6",
+            card.y, canvas_h, canvas_h / card.y
+        );
+    }
+    // The display band is exactly the declared min_size inside the gutters.
+    let band = instrument_display_band(
+        sparq_ui::geom::Rect::from_min_size(sparq_ui::geom::Vec2::ZERO, card),
+        &spec,
+    );
+    match band {
+        Some(b) if (b.width() - 2176.0).abs() < 0.5 && (b.height() - 1120.0).abs() < 0.5 => {
+            println!("[PASS] instrument display band — the declared min_size, gutter-inset");
+        },
+        other => failures.push(format!("instrument display band wrong: {other:?}")),
+    }
+    // The picker's rows are the touch floor, exactly (§8.4).
+    if (sparq_ui::canvas::picker::ROW_H - LAYOUT_TOUCH_TARGET_S as f32).abs() < 1e-6 {
+        println!("[PASS] picker rows at the 44 px touch floor");
+    } else {
+        failures.push("picker rows are not at the touch floor".to_string());
+    }
+    // LOD transitions at the canvas tokens' zoom thresholds (the guest degrades on these).
+    let mut cam = sparq_ui::canvas::Camera::new();
+    let lods = [
+        (1.0, sparq_ui::canvas::camera::Lod::Full),
+        (0.5, sparq_ui::canvas::camera::Lod::Simplified),
+        (0.3, sparq_ui::canvas::camera::Lod::Dot),
+    ];
+    for (zoom, want) in lods {
+        cam.zoom = zoom;
+        if cam.lod() != want {
+            failures.push(format!("LOD at zoom {zoom} is {:?}, want {want:?}", cam.lod()));
+        }
+    }
+    println!(
+        "[{}] LOD transitions — zoom 1.0/0.5/0.3 → Full/Simplified/Dot",
+        if failures.is_empty() { "PASS" } else { "FAIL" }
+    );
 }
 
 // ------------------------------------------------------------------ synthetic gesture smoke
@@ -1732,6 +1819,16 @@ pub fn run_svg(opts: &UiOptions) -> i32 {
             }
             shell.canvas.selection.clear();
             shell.canvas.selection.nodes.insert(id);
+        }
+        // WO-020 INC4: the Observatory joins the convergence sheet — the wall-class card beside
+        // the backbone set, painted from its at-rest display list (SPARQ_ATREST / the cache dir;
+        // WORDS in the band when none exists, never a blank rect). The sheet is where a reviewer
+        // sees the D6 sizing against the backbone cards at a glance.
+        if let Ok(text) = std::fs::read_to_string("instruments/observatory/sparqmod.toml") {
+            if let Some(spec) = sparq_ui::canvas::model::NodeSpec::from_manifest_text(&text) {
+                let _obs =
+                    nid(shell.graph.op_add_node(spec, sparq_ui::geom::Vec2::new(1_400.0, 0.0)));
+            }
         }
         // The scope rig joins the review sheet (operator ruling 2026-10-01 made the scope
         // screen bigger, with a graticule and measurements — the sheet is where a reviewer

@@ -391,6 +391,7 @@ mod tests {
             min,
             max,
             default: def,
+            options: Vec::new(),
         }
     }
 
@@ -406,6 +407,7 @@ mod tests {
                 min: 0.0,
                 max: 0.0,
                 default: 0.0,
+                options: Vec::new(),
             },
         ]);
         let mut g = Graph::new();
@@ -476,6 +478,7 @@ mod tests {
                 min: 10.0,
                 max: 20_000.0,
                 default: 1_000.0,
+                options: Vec::new(),
             },
         ]);
         let mut g = Graph::new();
@@ -672,6 +675,7 @@ mod tests {
             min: 0.1,
             max: 10_000.0,
             default: 440.0,
+            options: Vec::new(),
         };
         assert!(is_log_scale(&d));
         let track = Rect::from_min_size(Vec2::new(100.0, 0.0), Vec2::new(200.0, 44.0));
@@ -706,6 +710,7 @@ mod tests {
             min: 0.0,
             max: 1.0,
             default: 0.0,
+            options: Vec::new(),
         };
         assert!(is_binary(&b));
         // the manifests' Mute/Mode shape: an int whose whole domain is [0, 1]

@@ -75,6 +75,11 @@ pub enum Well {
     /// row, MIRRORED from the pinned seed hash (the display never re-rolls), with the
     /// cursor bar lit from the published position.
     Steps,
+    /// The instrument display band (WO-020 INC4 §8.2): the wall-class surface an instrument-layer
+    /// node wears INSTEAD of a well — the guest's display list, painted by the host (the at-rest
+    /// JSON while the loader is absent, the live instance's frames once INC5 lands). The band's
+    /// geometry is [`super::layout::instrument_display_band`]; its content is the painter's.
+    Display,
 }
 
 /// The well registry: which module wears which well, by stable id. THE single place this is
@@ -106,6 +111,11 @@ pub fn inset_well(module_id: &str) -> Option<Well> {
 /// wears nothing: the body is the box, honest.
 #[must_use]
 pub fn well_for(spec: &NodeSpec) -> Option<Well> {
+    // An instrument's display band outranks the well registry (a wall is not a well); the registry
+    // stays the only door for backbone modules (operator ruling 2026-09-30 stands).
+    if spec.layer == sparq_module_api::manifest::Layer::Instrument && spec.display.is_some() {
+        return Some(Well::Display);
+    }
     inset_well(&spec.module_id)
 }
 

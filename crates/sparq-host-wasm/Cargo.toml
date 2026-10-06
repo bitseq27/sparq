@@ -31,6 +31,10 @@ default = []
 # The wasm runtime. OFF by default: the zero-dependency core build, the CI default cells and
 # every golden stay untouched without it.
 instrument-host = ["dep:wasmtime"]
+# The hermetic sources door (WO-020 INC4 §8.3): ReplayProvider — fixture windows served through
+# the same binding-resolution the device's BrokerProvider (INC5, `streams-net`) will wear. Pulls
+# sparq-streams' serde_json half; the default build stays zero-dependency.
+streams = ["sparq-streams/streams"]
 
 [lints]
 workspace = true
