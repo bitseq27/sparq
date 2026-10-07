@@ -1991,3 +1991,27 @@ default** (that deletion is gated on this device run — do not do it early).
   samples did not move; test006's [05] A/B keeps its shape). Inc15's drift expectations stand
   (healthy runs read `accepted frames vs wall` within a few hundred ppm of 0 in BOTH share
   modes); the digest remains the send-back artefact (the full logs stay on the device).
+
+## WO-020 INC5 — slices 1–2 (2026-10-07, sandbox session on `wo020-inc5`)
+
+* **Slice 1 (MEASURED):** `streams-net` landed — `sparq-streams::{fetch,broker}`, the
+  `HttpTransport` (ureq 3 + rustls), `BrokerProvider` behind the same `StreamProvider` trait, the
+  real `sparq streams probe --live|fetch|tail` verbs, the registry's `accumulate` column (the
+  three SWPC summary feeds; INC3 finding #7 discharged), the python recorder's key-redaction fix.
+  Gates: root 1033/0/1, streams 96/0 both cells, host-wasm+streams 28/0, app 34/0, observatory
+  124/0, every python gate, fmt/clippy clean, zero-dep promise by `cargo tree`. LIVE: smoke fetch
+  green; probe 22/23 HTTP 200 + FIRMS KEY NEEDED in words. `record-fixtures` stays a refusal
+  naming its owner (tools/streams_record.py) — a recorded ruling, reversible.
+* **Slice 2 (WRITTEN — device/CI first compile, the §8 memory verdict re-confirmed):**
+  `sparq-host-wasm::runtime` — the wasmtime 49.0.2 loader (identity cross-check, prepare-before-
+  anything ×2 instances, fuel→Overrun, the memory limiter, wasmtime's own compile cache so no
+  unsafe enters Tier-2 host code), the four doors, the gate's runtime stages 3/4/5m/6 (smoke
+  mirror, golden ×2, measured budgets, visual + preview.svg + the at-rest publish),
+  `validate::run_gated`, `Registry::register_instrument` (the SharedFactory door, tested here),
+  the noop fixture REBUILT + sha-pinned (`df14d18f…`, 53 747 B), the §7 test plan as 12
+  integration tests, `sparq mod validate` wired for the FULL chain under the app feature, and
+  `scripts/test007.bat` (the §15.2 run-sheet A–L) + the gates/build/CI feature-on cells.
+  Written against the REAL bindgen expansion (the pinned generator run over the frozen WIT —
+  recipe in WO020-STATE.md) and the vendored 49.0.2 sources.
+* **Outstanding:** the device run (test007 A–L) and **INC5b** (launch registration, PLAY #58,
+  the shell's live-provider swap) — named in LATER.md and the STATE card.

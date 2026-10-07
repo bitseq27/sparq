@@ -54,6 +54,11 @@ pub struct StreamDef {
     pub default_tide_station: Option<String>,
     /// Default FIRMS country code (`{CC}`), if this stream uses one.
     pub default_country: Option<String>,
+    /// Whether a successful fetch APPENDS to the window instead of replacing it (see
+    /// `streams.toml`'s field vocabulary). `true` for the SWPC `summary/*` feeds, whose payload is
+    /// a single record per poll — history lives in the broker, not in the payload. Default `false`
+    /// (replace): a whole-picture payload — a 3-day series, an event set, a grid — IS the window.
+    pub accumulate: bool,
 }
 
 impl StreamDef {
@@ -357,6 +362,7 @@ fn parse_row(row: &Table, index: usize) -> Result<StreamDef, RegistryError> {
         uses_location: row.get("uses_location").and_then(Value::as_bool).unwrap_or(false),
         default_tide_station: opt_str(row, "default_tide_station").map(str::to_string),
         default_country: opt_str(row, "default_country").map(str::to_string),
+        accumulate: row.get("accumulate").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 
@@ -407,6 +413,36 @@ mod tests {
         assert!(!reg.contains("nope.nope"));
         assert_eq!(ids.len(), 23);
         assert_eq!(reg.get("sat.iss").map(|s| s.cadence_s), Some(5));
+    }
+
+    #[test]
+    fn accumulate_defaults_false_and_the_summary_trio_declares_it() {
+        // The registry column is data: absent means REPLACE (a whole-picture payload is the
+        // window). Exactly the three SWPC `summary/*` feeds — one record per poll, history lives
+        // in the broker — declare `accumulate = true` (INC3 finding #7's remedy, INC5).
+        let reg = Registry::load().unwrap();
+        let accum: Vec<&str> =
+            reg.streams().iter().filter(|d| d.accumulate).map(|d| d.id.as_str()).collect();
+        assert_eq!(accum, vec!["swpc.solar-wind", "swpc.bz", "swpc.flux10cm"]);
+        assert!(!reg.get("swpc.kp").unwrap().accumulate, "a 3-day series payload REPLACES");
+        assert!(!reg.get("geo.quakes-hour").unwrap().accumulate, "an event set REPLACES");
+        // A hand-written row without the column parses to the default.
+        let one = Registry::from_toml(
+            r#"
+[[stream]]
+id = "test.plain"
+domain = "SW"
+label = "Plain"
+endpoint = "https://example.test/x"
+cadence_s = 60
+view = "text"
+schema = "observatory/text@1"
+units = ""
+attribution = "test"
+"#,
+        )
+        .unwrap();
+        assert!(!one.get("test.plain").unwrap().accumulate);
     }
 
     #[test]

@@ -35,6 +35,9 @@ pub mod package;
 pub mod sources;
 pub mod validate;
 
+#[cfg(feature = "instrument-host")]
+pub mod runtime;
+
 pub use ceilings::{ceilings_for, GpuCeilings};
 pub use package::{discover, Inventory, Package, Profile, Role};
 pub use validate::{schema_check, GateReport, Stage, StageOutcome, Verdict, HOST_MODULE_API};

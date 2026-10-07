@@ -1,0 +1,6 @@
+{
+  "nodes": [
+    { "id": 1, "module": "example/syn/noop", "x": 0.0, "y": 0.0 }
+  ],
+  "wires": []
+}

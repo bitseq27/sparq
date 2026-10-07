@@ -140,10 +140,10 @@ if not defined PURGE (
     )
 )
 
-echo  building sparq.exe ^(release, hal-wasapi + bootstrap-audio + ui-window^) ...
+echo  building sparq.exe ^(release, hal-wasapi + bootstrap-audio + ui-window + instrument-host + streams + streams-net^) ...
 echo  first build takes a few minutes (wgpu is big); later builds are incremental.
 echo.
-cargo build --release -p sparq-app --features bootstrap-audio,hal-wasapi,ui-window
+cargo build --release -p sparq-app --features bootstrap-audio,hal-wasapi,ui-window,instrument-host,streams,streams-net
 if errorlevel 1 (
     echo.
     echo  ============================================
@@ -195,7 +195,7 @@ if errorlevel 1 (
     echo.
     del /f /q target\release\sparq.exe target\release\sparq.pdb 2>nul
     if exist target\release\.fingerprint rd /s /q target\release\.fingerprint
-    cargo build --release -p sparq-app --features bootstrap-audio,hal-wasapi,ui-window
+    cargo build --release -p sparq-app --features bootstrap-audio,hal-wasapi,ui-window,instrument-host,streams,streams-net
     if errorlevel 1 (
         echo  REBUILD FAILED - copy this log into a message back.
         exit /b 1

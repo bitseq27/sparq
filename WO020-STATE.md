@@ -1,6 +1,12 @@
-# WO020-STATE.md — state record (The Observatory, WO-020) — **INC1–INC4 CLOSED, built and measured green**
+# WO020-STATE.md — state record (The Observatory, WO-020) — **INC1–INC4 CLOSED; INC5 slices 1–2 CLOSED in the sandbox, device run + INC5b outstanding**
 
-**Last touched:** 2026-10-06, delivery session (same sandbox, after the INC4 seal) — **INC1–INC4
+**Last touched:** 2026-10-07, the INC5 session (fresh sandbox on the re-published main `a9dbf31`;
+branch `wo020-inc5`) — **slice 1** landed the stream plane's live half (`streams-net`: fetch.rs,
+the broker, `BrokerProvider`, the real CLI verbs — ALL MEASURED here, incl. a 22/23 live probe);
+**slice 2** wrote the instrument runtime (`sparq-host-wasm::runtime`: the wasmtime loader, the four
+doors, the gate's runtime stages, the noop fixture rebuilt + sha-pinned, `scripts/test007.bat`) —
+device-first-compile by the §8 memory verdict, re-probed and RE-CONFIRMED this session (winch
+alone still pulls cranelift). See the INC5 section below. **Previous touch:** 2026-10-06, delivery session (same sandbox, after the INC4 seal) — **INC1–INC4
 PACKED FOR THE DEVICE**: `sparq-update-2026-10-06-wo020-inc4.zip` + `WO020-INC4-RUN-SHEET.md` +
 the closing `handoff/sparq-wo020-delivery.bundle` (see **Delivery** below). **Previous touch:**
 the INC4 session — **INC4 CLOSED**:
@@ -44,6 +50,223 @@ resolves `wit-bindgen` unpinned — the shipped component is byte-pinned in the 
 16 increment commits (`cef2385`..`44d623b`) + the delivery commits (the documents at `097a7ff`,
 then the artefacts); working tree clean; nothing pushed (no credentials —
 the bundles + this pack are the delivery, ROUND8's discipline).
+
+---
+
+## INC5 — the device increment: runtime loader + live acceptance — **IN PROGRESS (sandbox slices 1–2 CLOSED; device run + INC5b launch wiring outstanding)**
+
+**Session:** 2026-10-07, fresh sandbox on the re-published main `a9dbf31` (which carries
+INC1–INC4). Branch `wo020-inc5`. Baseline re-measured EXACTLY at the INC4 seal (root 1033/0/1,
+streams 75/0, observatory 124+6, every python gate) plus one pre-existing fmt red fixed as the
+first hygiene commit (`577e13d`).
+
+### The environment verdict, re-measured (the §8 discipline)
+
+The plan called INC5 device-only; this session split it instead: **everything that does not need
+cranelift is sandbox-buildable and was built, measured, committed.** The wasmtime half stays
+device-first-compile, and the blockage was RE-PROBED, not assumed: a scratch winch-only tree
+(wasmtime `=49.0.2`, `default-features=false`, `features=[std,runtime,winch,component-model]`)
+still SIGKILLed `cranelift-codegen` at `cargo check` — `cargo tree -e features` shows why:
+`wasmtime-internal-winch` → `wasmtime-internal-cranelift` → `cranelift-codegen`. **No wasmtime
+feature set avoids cranelift; the 1 GB wall is categorical** (§8's conclusion, now from two
+directions). The mitigation that replaced compiling: the pinned generator itself
+(`wasmtime-internal-wit-bindgen 49.0.2`) is a standalone crate — a scratch driver
+(`/tmp/bindgen-dump`, recipe: `Resolve::push_dir` → `select_world(&[pkg], Some("instrument"))` →
+`Opts{with: {"sparq:instrument/assets.asset": AssetRep}}.generate`) **RAN the real bindgen over
+the frozen WIT and dumped the exact 2677-line host expansion**; every wasmtime signature the
+loader uses was then verified against the vendored sources (`Agent::new_with_config` was the one
+guess the vendored read caught and killed). The loader is written against measured API, not
+memory — but its first COMPILE is the device's / CI's feature-on cell.
+
+### Delivery — 2026-10-07 (handoff prep: the pack, the run sheet, the closing bundle)
+
+Operator instruction: **"Prep sync zip."** Delivered in the r8/rev-4 house shape:
+`sparq-update-2026-10-07-wo020-inc5.zip` (**485 entries FULL-TREE**, 6 725 644 B, sha256
+`d14db3698e4908c289532813abc7d44051e4452f4bf5323a4e4044a188b3cc88` — workspace root + the
+committed copy under `handoff/` + `sha256sums-wo020-inc5.txt`), `WO020-INC5-RUN-SHEET.md` (ships
+inside the pack: apply → re-stamp `sparq-wo020-inc5-2026-10-07` → gates → test007 A–L → the
+send-back list, with BOTH honest states up front: INC5b/PLAY #58 and the pre-existing
+token_audit red), the SYNC.md top entry (INC4 demoted to Previous), the packer adapted +
+self-verified (its own clean-tree gate caught an uncommitted packer fix mid-run — the gate
+working, recorded), and `handoff/sparq-wo020-inc5-delivery.bundle` (`a9dbf31`..the artefact
+seal, sha `3a32f9b2…`) superseding the slice bundle for recovery. Namelist vs `a9dbf31`:
+40 paths (17 A / 23 M), 37 shipped; MUST-NOT-MOVE surfaces (WIT, `modules/`, the stamp,
+fixtures, goldens) asserted unmoved by the packer; nothing pushed (no credentials — the bundles
++ pack ARE the delivery). NOTE: this delivery record itself post-dates the bundle it names by
+one commit (a bundle cannot carry its own commit — the r8 pattern); its sha is in the sums file
+beside the pack.
+
+**Incident (recovered, no trace in the tree):** between the seal turn and this one the sandbox
+snapshot dropped `.git` AGAIN (the environment note's known behaviour) — and with it
+`modules/out/main/sparqmod.toml` from the working tree (the #93 trap's directory-name pattern,
+second occurrence). Recovery was exactly the recorded recipe: re-clone origin (still serving the
+base `a9dbf31`), fetch `handoff/sparq-wo020-inc5.bundle`, `symbolic-ref` HEAD onto the branch +
+`git reset` (tree untouched), `git checkout -- modules/out/main/sparqmod.toml`, re-commit the
+bundle artefacts. The reset-vs-seal diff came back EMPTY except the known drop — byte-identical
+recovery, proven not assumed. Lesson re-recorded: the bundle in `handoff/` remains the durable
+artefact; commit + bundle every slice, exactly as this WO has.
+
+### Device session 1 — 2026-10-07 (the first test007 run: REFUSED at [A], root-caused from the log)
+
+The operator applied the pack and ran `test007.bat`; the symptom reported was "the new instrument
+does not show in the library". The log is unambiguous: **[A] never built** — `sync_check: FAIL,
+this tree is NOT sync sparq-wo018-rebuild-2026-10-05 (27 files differ)` → build.bat's defect-#78
+guard refused (the re-stamp, run-sheet §1.2, had not run yet), so **[B] `unknown command
+streams`**, **[D] `unknown command mod`**, and **[E] the shell was the STALE pre-WO-020 exe** —
+a shell from before the instrument browser existed. Nothing was wrong with the pack or the
+discovery path; the run-sheet's own ordering was skipped and my test007 [A] note ("stamp-mismatch
+words are EXPECTED") was WRONG — build.bat refuses, it does not merely warn. Found-by-running-it
+fixes, landed in-tree (rides the next pack; the deployed zip is unchanged):
+* `test007.bat` grows **step [0]**: `sync_check` first, fail fast with the exact re-stamp command
+  printed — the trap cannot re-fire silently.
+* `WO020-INC5-RUN-SHEET.md` §3: "re-stamp BEFORE test007", with this incident named.
+* The CWD-relative + silent discovery defect found while diagnosing (the shell says nothing when
+  `instruments\` is absent from the process CWD) stays recorded in LATER.md as INC5b's first fix —
+  it was NOT this symptom's cause, but it is real and measured (root CWD: observatory in the
+  convergence SVG ×2; other CWD: ×0).
+Remedy given to the operator: `python tools\sync_check.py --write --sync
+sparq-wo020-inc5-2026-10-07` then re-run `scripts\test007.bat` (first build 10–40 min; then
+[B]/[D]/[E] run against the new binary).
+
+### Device session 2 — 2026-10-07 (the re-stamp run: wasmtime COMPILES on SATURN; the first-compile defects, found and fixed)
+
+Re-stamp → test007 again. Step [A] built for real: **wasmtime 49.0.2 + cranelift compiled clean
+on the device** (the §8 memory wall is the sandbox's alone, as ruled), and the build reached the
+runtime — **5 errors + 1 warning, all in the blind-written half** (four `*display_w/h` derefs of
+by-value f32s; a format! passing `draw_fuel` positionally AND inline — which also would have
+printed draw fuel as the memory high-water; a dead `full_json` initializer under -D warnings;
+two unused test imports; the preview assertion not knowing svg() opens with the XML declaration).
+All fixed smallest-honest-patch (`1e3fe95`), the budget-overrun report lines moved to
+E-CROSS-FIELD (measured-vs-declared, not requires-unsupported), and the layers rustc never
+reached were desk-checked against the vendored sources in the same pass (HasSelf, BlockStatus's
+module, the sparq-ui pub faces). **Revision pack `sparq-update-2026-10-07-wo020-inc5r2.zip`**
+(485 entries, sha `d6e283231252626aca1954da2d40125b09ec3de1af404e7883f1b4d60ed2947c`, stamp
+`sparq-wo020-inc5r2-2026-10-07` — a second zip must not share the first's stamp name); test007
+grew the fail-fast step [0] after session 1. This is the §4 loop working as designed: the device
+is where the instrument-host cell compiles; every defect it finds comes back, gets fixed, and
+gets recorded.
+
+### Device session 3 — 2026-10-07 (the caret bug: a fail-fast gate that refused everyone)
+
+The operator applied r2, re-stamped (`sync_check: OK — 175 of 175 … byte-for-byte`) and test007
+STILL refused at step [0]. Root cause, in words: my step-[0] patch wrote `if errorlevel 1 ^(` —
+the ESCAPED open paren. cmd treats `^(` as a literal, the block never forms, and the "guarded"
+body (`echo TEST007 REFUSED … exit /b 1`) runs UNCONDITIONALLY: the stamp gate refused every
+tree, healthy ones included. One character class, found on the device because a bat file is only
+really parsed by cmd. Fixed in r3; `check_text_io.py` grows **rule 5** (an escaped `^(` on a
+structural if/for line is a defect — rule 4's mirror image), proven failable by injection then
+reverted byte-identical, per the house rule that a gate nobody has seen fail is a gate nobody
+trusts. Revision pack `sparq-update-2026-10-07-wo020-inc5r3.zip`, stamp
+`sparq-wo020-inc5r3-2026-10-07` (a third zip must not share the second's stamp name either).
+
+### Device session 4 — 2026-10-07 (the zero-fuel instantiation trap; the loader's first real run)
+
+r3 on the device: the runtime COMPILED, linked, and ran — stages 3–6 all reported. The load
+refused with `instantiate: wasm trap: all fuel consumed by WebAssembly`, and my error words
+mis-blamed the import list. The real defect, one line: **`consume_fuel(true)` starts the store
+at ZERO fuel and instantiation itself executes wasm** (start sections, lowering trampolines) —
+`spawn()` fueled the store only inside `budget_call`, which first runs AFTER instantiate. Fixed:
+the store is fueled with the prepare-class budget before instantiation; the instantiate error
+classifies through `trap_words` (traps keep their own words; only NON-trap failures carry the
+capability-by-absence sentence — session 4's lesson: do not blame imports for a fuel
+exhaustion); and instantiation fuel is now recorded in the stage-5 report (an invisible load
+cost surprises someone later). Also in r4: the stages' draw calls run under a DIAGNOSTIC budget
+(prepare's multiplier) and stage 5 JUDGES the measured number against the declared `max_fuel` —
+a genuinely under-declared guest now produces a measured re-baselining fact instead of an
+unmeasured trap (the Observatory declares 2 000 000; its real full-wall draw cost was never
+measured anywhere — the sandbox has no runtime, and the harness is fuel-free). Production draw
+enforcement stays the watchdog's row (§3): declared budget, frame-skip, words. The desk check
+missed the zero-fuel instantiation because wasmtime's fuel semantics for `instantiate` were
+never verified against the vendored source — recorded as the class it is: an API-behaviour
+assumption, exactly what the device loop exists to catch. Revision pack
+`sparq-update-2026-10-07-wo020-inc5r4.zip`, stamp `sparq-wo020-inc5r4-2026-10-07`.
+
+### Device session 5 — 2026-10-07 (the epoch deadline that was never armed; [B] live-probed green)
+
+r4 on the device: the fuel fix landed (instantiation now runs metered, budget visible in the
+words), the load reached wasm — and trapped `epoch deadline exceeded` at instantiation. The
+vendored doc says it outright: `epoch_deadline_trap()` arms the trap but leaves the deadline at
+ZERO — "it's required to call `Store::set_epoch_deadline` or otherwise wasm will always
+immediately trap." One line fixed (`set_epoch_deadline(EPOCH_DEADLINE_TICKS)`, 1 000 ticks — the
+gates have no incrementer; the production watchdog's cadence lands with INC5b and turns ticks
+into the §3 deadline). Session 5 also MEASURED the stream plane's device half for the first
+time: **[B] the live probe ran green from SATURN — 22× HTTP 200 + FIRMS KEY NEEDED in words**
+(the §3.3 asterisks are device facts now). r5: `sparq-update-2026-10-07-wo020-inc5r5.zip`, stamp
+`sparq-wo020-inc5r5-2026-10-07`.
+
+### Device session 6 — 2026-10-07 (id() is not cheap: the first call pays the guest's lazy init)
+
+r5 on the device: instantiation SUCCEEDED (epoch armed, fuel metered, instantiation cost
+recorded) and the load reached the first guest call — `guest.id()` trapped, `fuel budget
+exhausted (2000000 of 2000000 burned)`. Two facts, one fix: the SDK builds its state on the
+FIRST export call (for the Observatory that includes `Wall::new()` parsing the embedded
+coastline), and the loader had given a load-time lifecycle call the PER-BLOCK budget. The
+per-block budget is `process`'s contract and nothing else's: `id`/`activate`/`deactivate`/
+`save-state` now ride the control budget (prepare's multiplier, 64×). Recorded for the guide's
+eventual author-facing text: a guest's first-call cost is real and lands on whichever door opens
+first. r6: `sparq-update-2026-10-07-wo020-inc5r6.zip`, stamp `sparq-wo020-inc5r6-2026-10-07`.
+
+### Slice 1 — the stream plane's live half (`streams-net` LANDED) — commit `83b2091`, MEASURED
+
+`sparq-streams::fetch` (the endpoint fill mirroring `streams_record.py` exactly — `{d-N}`/`{D-N}`/
+`{lat}`/`{lon}`/`{st}`/`{CC}`/`{KEY}`, one-retry-on-429/5xx, key redaction: a resolved env key
+exists only inside `Request::url`), `sparq-streams::broker` (cadence floors count ATTEMPTS;
+**replace-vs-accumulate is registry DATA** — new `accumulate` column, exactly the three SWPC
+`summary/*` rows append monotonically with dedup, INC3 finding #7's remedy; last-good cache seeds
+relaunches; failures keep windows and leave words), `HttpTransport` (ureq 3.4.2 + rustls/ring +
+webpki-roots — compiles AND runs in the 1 GB box), `BrokerProvider` (the live `StreamProvider`
+behind the same trait, `SharedBroker` = the `HealthMirror` idiom), the CLI's real `probe
+[--live]`/`fetch`/`tail` verbs, and **`record-fixtures` stays a refusal naming its owner**
+(tools/streams_record.py — one owner of the fixture format; a ruling to record, reversible).
+The plane's only two impure helpers (`now_unix`, `sleep_millis`) are the ADR-011 §5 wall-clock
+edge, allow-with-reason per defect #66. Python recorder gained the redaction fix (a latent INC1
+leak: `_meta.json` would carry a real `SPARQ_FIRMS_KEY` on a keyed device).
+**Measured:** root 1033/0/1 unchanged; streams 96/0 both cells; host-wasm+streams 28/0; app
+34/0; observatory 124/0 (registry drift green over the new column); every python gate; zero-dep
+promise verified by `cargo tree`; **live smoke green** (real TLS fetch of swpc.kp, 200, normalized);
+**live probe from the sandbox: 22/23 HTTP 200**, FIRMS KEY NEEDED in words, `wx.alerts` resolved
+here this time, `geo.wildfires` still byte-identical to `geo.eonet` (INC1 drift #2 re-confirmed).
+
+### Slice 2 — the instrument runtime (`instrument-host`) — commit `2fdb0f9`, WRITTEN, device-first-compile
+
+`sparq-host-wasm::runtime` = instrument-host.md §2–§4 + §7 as code: the four doors (tokens serves
+the checked-in bundle verbatim; host.now/random-seed — the KERNEL's `derive_seed`, one copy — /log
+with RT-violation capture; assets scoped to the manifest's declared hashes, v1 answers `not-found`
+honestly; sources = the D4 resolution over `StreamProvider`, serving `window.snapshot(now)` — the
+flag-stamping that makes the guest's clockless status derivation equal the broker's, which is the
+golden's cross-boundary parity rule), the §2 load order (compile → identity cross-check →
+prepare-before-anything on BOTH instances), the memory limiter + fuel→`Overrun` mapping (§3), the
+**wasmtime `cache` feature added to the pin** (the §2.1 compile cache with NO unsafe in sparq
+code — `Component::deserialize` is unsafe and the allowlist forbids unsafe in Tier-2 host code;
+the pin comment records the ruling), `WasmInstrument` (the `Module` face — the registry grew
+`register_instrument`/`SharedFactory` for state-capturing factories, tier-blind rules unchanged),
+and the gate's runtime stages: 3 smoke (the smoke.mjs mirror), 4 golden (draw ×2 bit-exact, fuel
+recorded), 5 measured (fuel + memory high-water vs the declared class), 6 visual (LOD ladder vs
+the gpu ceilings, the 500-primitive Minimal rule, the unknown-token scan, `preview.svg` through
+the SHELL's painter, the at-rest publish — the LATER door). `validate::run_gated(dir, ctx)` runs
+the FULL chain when the caller names the world; `sparq mod validate` does so under the app's
+`instrument-host` feature. The noop fixture was REBUILT in this sandbox (SDK 1.1.0, rustc 1.99.0,
+wasm-tools 1.261.0, unknown-unknown recipe): **53 747 B, sha `df14d18f781ea477596db552e60bdb9df06344bc673593c38148e28a3d546c65`**,
+pinned in `tests/instrument_runtime.rs` with the §7 plan as 12 tests (incl. the cross-boundary
+anchor: the Observatory wasm path must hash to the harness's `bdf59cdb…`). Static gates measured
+green on the fixture (stages 1/2/7 PASS). `scripts/test007.bat` is the §15.2 run-sheet A–L;
+`gates.bat`/`build.bat`/`ci.yml` carry the feature-on cells.
+
+### What is NOT done (honest, in words)
+
+1. **INC5b — the launch wiring:** discovery→`register_instrument` at launch, PLAY #58's
+   discharge (the executor adopting `WasmInstrument`), and the shell's live-provider swap
+   (BrokerProvider + driver thread in `ui/live.rs`). The registry door and the Module face exist
+   and are tested; the app-side wiring is the next slice. Until it lands, test007's E/F steps run
+   against the at-rest wall (stage 6 publishes it) and PLAY still refuses in words.
+2. **The device run itself:** every `instrument-host` compile/test, the FULL validate chain on
+   the sealed package, the frame-time histogram, the network story, the re-theme demo — test007
+   A–L, recorded not invented.
+3. Known-small gaps, declared in code: `TimeInfo`'s tempo/bar fields ride defaults inside
+   `process` until the executor publishes the musical clock (the type's docs say so); a corporate
+   TLS-inspecting proxy would need ureq's proxy door (webpki-roots ride the binary); the wasm
+   `process` marshalling allocates (wasmtime's lifting — bounded for port-less; the native
+   zero-alloc proof is the Phase-5 arena work).
 
 ---
 

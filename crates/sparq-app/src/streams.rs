@@ -5,13 +5,16 @@
 //!   (KEY NEEDED in words, plan D14 — never a silent hole).
 //! * `cache path|clear` — the disk cache location and its contents (plan §6.2).
 //!
-//! The live verbs (`probe`, `fetch`, `tail`, `record-fixtures`) need the transport half — `ureq` +
-//! TLS + `fetch.rs`, behind `streams-net` — which is the DEVICE increment (plan INC5, D2/§12.1: the
-//! ~1 GB sandbox builds the hermetic half; the socket lands on a ≥ 2 GB host). Until it does, they
-//! **refuse in words and exit non-zero**, exactly like `sparq mod validate`'s runtime stages and
-//! `sparq ui` without the windowing stack: a refusal that names what would make it run, never a
-//! pretend-fetch and never a silent hole. (Fixtures are recorded with `tools/streams_record.py`,
-//! which has python + network and is the sandbox's legal way to capture live payloads.)
+//! The live verbs (`probe --live`, `fetch`, `tail`) ride the transport half — `ureq` + TLS +
+//! `fetch.rs`, behind `streams-net` (landed INC5). Without the feature they **refuse in words and
+//! exit non-zero**, exactly like `sparq mod validate`'s runtime stages and `sparq ui` without the
+//! windowing stack: a refusal that names what would make it run, never a pretend-fetch and never
+//! a silent hole. With it, they really reach the network — one request per stream, the recorder's
+//! politeness (400 ms apart), one retry on 429/5xx, every status recorded as data (the DONKI
+//! lesson: a dead endpoint is a fact, not a crash). `record-fixtures` stays a refusal even with
+//! the transport on: the fixture format (`_meta.json` + raw payloads + PROBE-LOG + the flagged
+//! synthetic FIRMS sample) has ONE owner — `tools/streams_record.py` — and a second owner in Rust
+//! would be exactly the drift the house forbids.
 
 use std::process::ExitCode;
 
@@ -160,10 +163,10 @@ fn run_code(cmd: StreamsCommand) -> u8 {
         match cmd {
             StreamsCommand::List => run_list(),
             StreamsCommand::Cache { op } => run_cache(op),
-            StreamsCommand::Probe { live } => refuse_network("probe", live),
-            StreamsCommand::Fetch { .. } => refuse_network("fetch", true),
-            StreamsCommand::Tail { .. } => refuse_network("tail", true),
-            StreamsCommand::RecordFixtures { .. } => refuse_network("record-fixtures", true),
+            StreamsCommand::Probe { live } => probe_cmd(live),
+            StreamsCommand::Fetch { id, out } => fetch_cmd(&id, out.as_deref()),
+            StreamsCommand::Tail { id } => tail_cmd(&id),
+            StreamsCommand::RecordFixtures { out } => record_fixtures_cmd(&out),
         }
     }
     #[cfg(not(feature = "streams"))]
@@ -253,20 +256,316 @@ fn run_cache(op: CacheOp) -> u8 {
     0
 }
 
-/// The refusal for a live verb when the transport half is not in the build (plan INC5 / D2). Names
-/// what would make it run and the hermetic alternatives, in words; returns `1` (a refusal is not a
-/// success). When INC5 lands `fetch.rs`, the real transport path replaces this behind
-/// `#[cfg(feature = "streams-net")]`.
-#[cfg(feature = "streams")]
+/// The refusal for a live verb when the transport half is not in the build (plan INC5 / D2).
+/// Names what would make it run and the hermetic alternatives, in words; returns `1` (a refusal
+/// is not a success).
+#[cfg(all(feature = "streams", not(feature = "streams-net")))]
 fn refuse_network(verb: &str, _live: bool) -> u8 {
     eprintln!("sparq streams {verb}: the live transport half is not in this build.");
-    eprintln!("  `streams-net` (ureq + TLS + fetch.rs) is the DEVICE increment — WO-020 INC5 (plan D2, §12.1):");
     eprintln!(
-        "  the ~1 GB sandbox builds the hermetic half only; the socket lands on a >= 2 GB host."
+        "  build it with:  cargo build --release -p sparq-app --features streams,streams-net"
+    );
+    eprintln!(
+        "  (ureq + rustls ride `streams-net`; the default build is deliberately socket-free.)"
     );
     eprintln!("  hermetic now:   sparq streams list    |    sparq streams cache path|clear");
     eprintln!("  record live payloads with python (it has network):  python3 tools/streams_record.py --all");
     1
+}
+
+#[cfg(all(feature = "streams", not(feature = "streams-net")))]
+fn probe_cmd(live: bool) -> u8 {
+    refuse_network("probe", live)
+}
+#[cfg(all(feature = "streams", not(feature = "streams-net")))]
+fn fetch_cmd(_id: &str, _out: Option<&str>) -> u8 {
+    refuse_network("fetch", true)
+}
+#[cfg(all(feature = "streams", not(feature = "streams-net")))]
+fn tail_cmd(_id: &str) -> u8 {
+    refuse_network("tail", true)
+}
+
+// ── the live verbs (streams-net) ────────────────────────────────────────────────────────────────
+
+#[cfg(all(feature = "streams", feature = "streams-net"))]
+fn probe_cmd(live: bool) -> u8 {
+    if live {
+        run_probe_live()
+    } else {
+        run_probe_static()
+    }
+}
+
+/// `sparq streams probe` — the fetch plan as data: what WOULD be requested, with which key state,
+/// on which cadence. Hermetic (no socket); `--live` is the real probe.
+#[cfg(all(feature = "streams", feature = "streams-net"))]
+fn run_probe_static() -> u8 {
+    let reg = match Registry::load() {
+        Ok(r) => r,
+        Err(e) => {
+            println!("sparq streams probe: the checked-in registry failed to load: {e}");
+            return 1;
+        },
+    };
+    let env = |k: &str| std::env::var(k).ok();
+    println!(
+        "sparq streams probe — the fetch plan ({} streams; add --live to hit the network)",
+        reg.len()
+    );
+    println!("STREAM ID            DOM  CADENCE  KEY          ENDPOINT (template)");
+    let mut needed = 0usize;
+    for def in reg.streams() {
+        let key = match def.key_state(env) {
+            sparq_streams::KeyState::NotNeeded => "—".to_string(),
+            sparq_streams::KeyState::Ready => "key set".to_string(),
+            sparq_streams::KeyState::UsingFallback(fb) => format!("{fb} (fallback)"),
+            sparq_streams::KeyState::KeyNeeded => {
+                needed += 1;
+                "KEY NEEDED".to_string()
+            },
+        };
+        println!(
+            "{:<20} {:<4} {:>5}s  {:<12} {}",
+            def.id, def.domain, def.cadence_s, key, def.endpoint
+        );
+    }
+    if needed > 0 {
+        println!("\n  {needed} stream(s) KEY NEEDED — not fetched, in words (plan D14); set the env var named in streams.toml.");
+    }
+    0
+}
+
+/// `sparq streams probe --live` — every endpoint, once, for real: the run-sheet's step B
+/// (test007 §15.2). Statuses are DATA (a 404 is recorded, not a crash — the DONKI lesson), so the
+/// exit code stays 0; the summary line names every kind of failure in words.
+#[cfg(all(feature = "streams", feature = "streams-net"))]
+fn run_probe_live() -> u8 {
+    use sparq_streams::fetch::{self, POLITE_DELAY_MS};
+    let reg = match Registry::load() {
+        Ok(r) => r,
+        Err(e) => {
+            println!("sparq streams probe --live: the checked-in registry failed to load: {e}");
+            return 1;
+        },
+    };
+    let transport = fetch::HttpTransport::new(std::time::Duration::from_secs(20));
+    let now = fetch::now_unix();
+    let env = |k: &str| std::env::var(k).ok();
+    println!("sparq streams probe --live — {} endpoints at {}", reg.len(), utc_stamp_i64(now));
+    println!("  one request per stream, {POLITE_DELAY_MS} ms apart; 429/5xx retried once (the recorder's policy)");
+    println!();
+    println!(" #  STREAM ID            DOM   STATUS      BYTES  KEY SOURCE           NOTE");
+    let (mut ok, mut other, mut dead, mut refused) = (0usize, 0usize, 0usize, 0usize);
+    for (i, def) in reg.streams().iter().enumerate() {
+        if i > 0 {
+            fetch::sleep_millis(POLITE_DELAY_MS);
+        }
+        match fetch::fetch_raw(&reg, &def.id, &transport, now, env, fetch::sleep_millis) {
+            Err(e) => {
+                refused += 1;
+                println!(
+                    "{:>2}  {:<20} {:<5} {:>6}  {:>9}  {:<20} {}",
+                    i + 1,
+                    def.id,
+                    def.domain,
+                    "—",
+                    "—",
+                    "—",
+                    e.message
+                );
+            },
+            Ok(raw) => {
+                match raw.status {
+                    200 => ok += 1,
+                    0 => dead += 1,
+                    _ => other += 1,
+                }
+                let status =
+                    if raw.status == 0 { "ERR".to_string() } else { raw.status.to_string() };
+                println!(
+                    "{:>2}  {:<20} {:<5} {:>6}  {:>9}  {:<20} {}",
+                    i + 1,
+                    def.id,
+                    def.domain,
+                    status,
+                    raw.body.len(),
+                    raw.key_source.as_words(),
+                    if raw.note.is_empty() { "—".to_string() } else { raw.note.clone() }
+                );
+            },
+        }
+    }
+    println!(
+        "\n  {ok}/{} HTTP 200 · {other} other status · {dead} transport failure(s) · {refused} refused pre-fetch (KEY NEEDED, in words — D14)",
+        reg.len()
+    );
+    println!("  statuses are data: record them (run-sheet test007 §B); a dead endpoint is a fact, not a crash.");
+    0
+}
+
+#[cfg(all(feature = "streams", feature = "streams-net"))]
+fn fetch_cmd(id: &str, out: Option<&str>) -> u8 {
+    use sparq_streams::fetch;
+    let reg = match Registry::load() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("sparq streams fetch: the checked-in registry failed to load: {e}");
+            return 1;
+        },
+    };
+    let transport = fetch::HttpTransport::new(std::time::Duration::from_secs(20));
+    let now = fetch::now_unix();
+    let env = |k: &str| std::env::var(k).ok();
+    let raw = match fetch::fetch_raw(&reg, id, &transport, now, env, fetch::sleep_millis) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("sparq streams fetch {id}: {}", e.message);
+            return 1;
+        },
+    };
+    if raw.status != 200 {
+        eprintln!(
+            "sparq streams fetch {id}: HTTP {} — payload NOT written{}.",
+            raw.status,
+            if raw.note.is_empty() { String::new() } else { format!(" ({})", raw.note) }
+        );
+        return 1;
+    }
+    match out {
+        Some(path) => {
+            // File::create + write_all, the cache.rs idiom — the banned `std::fs::write`
+            // convenience is the audio-path rule; this is the CLI's control path.
+            use std::io::Write;
+            let mut f = match std::fs::File::create(path) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("sparq streams fetch {id}: cannot create {path}: {e}");
+                    return 1;
+                },
+            };
+            if let Err(e) = f.write_all(raw.body.as_bytes()) {
+                eprintln!("sparq streams fetch {id}: write to {path} failed: {e}");
+                return 1;
+            }
+            eprintln!(
+                "wrote {} bytes to {path} — {} (key: {})",
+                raw.body.len(),
+                raw.url,
+                raw.key_source.as_words()
+            );
+        },
+        None => print!("{}", raw.body),
+    }
+    0
+}
+
+#[cfg(all(feature = "streams", feature = "streams-net"))]
+fn tail_cmd(id: &str) -> u8 {
+    use sparq_streams::fetch;
+    let reg = match Registry::load() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("sparq streams tail: the checked-in registry failed to load: {e}");
+            return 1;
+        },
+    };
+    let Some(def) = reg.get(id) else {
+        eprintln!("sparq streams tail: {}", reg.unknown_id_message(id));
+        return 1;
+    };
+    let transport = fetch::HttpTransport::new(std::time::Duration::from_secs(20));
+    let now = fetch::now_unix();
+    let env = |k: &str| std::env::var(k).ok();
+    let raw = match fetch::fetch_raw(&reg, id, &transport, now, env, fetch::sleep_millis) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("sparq streams tail {id}: {}", e.message);
+            return 1;
+        },
+    };
+    let records = match fetch::records_of(def, &raw, now) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("sparq streams tail {id}: {}", e.message);
+            return 1;
+        },
+    };
+    let units = if def.units.is_empty() { "—".to_string() } else { def.units.clone() };
+    println!(
+        "sparq streams tail {id} — {} record(s), oldest → newest, schema {} (units: {units}); one fetch, no follow (the live wall owns cadence)",
+        records.len(),
+        def.schema
+    );
+    // The newest 20, oldest → newest (a tail shows the end, not the whole 3-day series).
+    let start = records.len().saturating_sub(20);
+    if start > 0 {
+        println!("  … {} older record(s) not shown", start);
+    }
+    for r in &records[start..] {
+        println!("  {}  {}", utc_stamp_ns(r.t_wall_ns), channel_words(&r.channels));
+    }
+    0
+}
+
+/// `record-fixtures` refuses even with the transport on: ONE owner of the fixture format.
+#[cfg(feature = "streams")]
+fn record_fixtures_cmd(out: &str) -> u8 {
+    eprintln!("sparq streams record-fixtures: the fixture recorder is tools/streams_record.py — one owner, not two.");
+    eprintln!("  the fixture format (_meta.json + raw payloads + PROBE-LOG + the flagged synthetic FIRMS sample)");
+    eprintln!("  is that tool's artefact; the normalizer tests and the golden pin read what it writes, and");
+    eprintln!("  re-recording MOVES the goldens — run it deliberately, never as a side effect of a CLI verb:");
+    eprintln!("    python3 tools/streams_record.py --all --out {out}");
+    eprintln!(
+        "  the Rust live verbs cover probe/fetch/tail; recording stays with the python owner."
+    );
+    1
+}
+
+/// A unix-seconds stamp as `YYYY-MM-DD HH:MM:SS UTC` (the probe header's clock words).
+#[cfg(all(feature = "streams", feature = "streams-net"))]
+fn utc_stamp_i64(now_unix: i64) -> String {
+    let (y, m, d) = sparq_streams::fetch::civil_from_unix(now_unix);
+    let sod = now_unix.rem_euclid(86_400);
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC", sod / 3600, (sod % 3600) / 60, sod % 60)
+}
+
+/// A record's nanosecond stamp as `YYYY-MM-DDTHH:MM:SSZ` (the tail's row head).
+#[cfg(all(feature = "streams", feature = "streams-net"))]
+fn utc_stamp_ns(t_wall_ns: u64) -> String {
+    let secs = i64::try_from(t_wall_ns / 1_000_000_000).unwrap_or(0);
+    let (y, m, d) = sparq_streams::fetch::civil_from_unix(secs);
+    let sod = secs.rem_euclid(86_400);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", sod / 3600, (sod % 3600) / 60, sod % 60)
+}
+
+/// One record's channels, positionally (the schema declares the order; the tail is a diagnostic,
+/// not a renderer — numbers WITH their units ride the header line, token rule 9).
+#[cfg(all(feature = "streams", feature = "streams-net"))]
+fn channel_words(channels: &[sparq_streams::record::DataValue]) -> String {
+    use sparq_streams::record::DataValue;
+    let parts: Vec<String> = channels
+        .iter()
+        .map(|v| match v {
+            DataValue::Single(f) => format!("{f}"),
+            DataValue::Double(f) => format!("{f}"),
+            DataValue::Int32(i) => format!("{i}"),
+            DataValue::Int64(i) => format!("{i}"),
+            DataValue::Boolean(b) => format!("{b}"),
+            DataValue::Vec(xs) => format!("[{} value(s)]", xs.len()),
+            DataValue::Enumerated(i) => format!("#{i}"),
+            DataValue::Text(t) => {
+                let flat: String = t.chars().take(60).collect();
+                if flat.len() < t.len() {
+                    format!("“{flat}…”")
+                } else {
+                    format!("“{flat}”")
+                }
+            },
+            DataValue::Blob(b) => format!("<{} byte(s)>", b.len()),
+        })
+        .collect();
+    parts.join("  ")
 }
 
 #[cfg(test)]
@@ -320,8 +619,11 @@ mod tests {
     }
 
     // The refusal contract, tested via the u8 exit code (ExitCode itself is opaque). Without the
-    // `streams` feature EVERY verb refuses (exit 1); with it, the hermetic verbs succeed (exit 0)
-    // and the live verbs still refuse (exit 1) until the transport half lands (INC5).
+    // `streams` feature EVERY verb refuses (exit 1); with `streams` but without `streams-net`, the
+    // hermetic verbs succeed (exit 0) and the live verbs still refuse (exit 1) — the INC1
+    // contract, unchanged. With `streams-net` the live verbs are real (the tests below stay
+    // hermetic: they exercise the pre-network refusals and the static faces only).
+    #[cfg(all(feature = "streams", not(feature = "streams-net")))]
     #[test]
     fn live_verbs_exit_nonzero_without_streams_net() {
         for cmd in [
@@ -344,6 +646,43 @@ mod tests {
             0,
             "cache path is hermetic"
         );
+    }
+
+    // With the transport on, the refusal contract narrows to the shapes that refuse BEFORE any
+    // socket: unknown ids (the registry's own words), record-fixtures (the python recorder owns
+    // the fixture format — one owner, not two), and the static probe still exits 0 hermetically.
+    #[cfg(all(feature = "streams", feature = "streams-net"))]
+    #[test]
+    fn streams_net_verbs_refuse_the_right_shapes_hermetically() {
+        assert_eq!(
+            run_code(StreamsCommand::Fetch { id: "foo.bar".into(), out: None }),
+            1,
+            "an unknown id refuses pre-network with the registry's words"
+        );
+        assert_eq!(run_code(StreamsCommand::Tail { id: "foo.bar".into() }), 1);
+        assert_eq!(
+            run_code(StreamsCommand::RecordFixtures { out: "/tmp/sparq-rec".into() }),
+            1,
+            "record-fixtures stays a refusal — tools/streams_record.py owns the format"
+        );
+        assert_eq!(
+            run_code(StreamsCommand::Probe { live: false }),
+            0,
+            "the static probe is hermetic (the fetch plan as data)"
+        );
+    }
+
+    #[cfg(all(feature = "streams", feature = "streams-net"))]
+    #[test]
+    fn the_stamp_and_channel_formatters_print_words() {
+        // 2026-10-06T12:34:56Z = 1791290096 (cross-checked against python datetime).
+        assert_eq!(utc_stamp_i64(1_791_290_096), "2026-10-06 12:34:56 UTC");
+        assert_eq!(utc_stamp_ns(1_791_290_096_000_000_000), "2026-10-06T12:34:56Z");
+        let words = channel_words(&[
+            sparq_streams::record::DataValue::Double(3.5),
+            sparq_streams::record::DataValue::Text("hello".into()),
+        ]);
+        assert!(words.contains("3.5") && words.contains("hello"), "{words}");
     }
 
     #[test]

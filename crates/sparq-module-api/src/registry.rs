@@ -6,7 +6,12 @@
 //!
 //! 1. **Registration is data.** A module enters the registry as a manifest plus a [`Factory`] — a
 //!    plain function pointer, so storing one cannot allocate and registering cannot fail for want of
-//!    memory. Nothing in this crate names any particular module.
+//!    memory. Nothing in this crate names any particular module. Instrument-tier packages (T2,
+//!    WO-018/WO-020) need a factory that CAPTURES its handles — a compiled wasm component and its
+//!    engine are state — so [`Registry::register_instrument`] takes a [`SharedFactory`] instead.
+//!    The fn-pointer door stays the builtins'; the shared door is the loader's, and the registry
+//!    itself stays tier-blind: it cross-checks identity and refuses duplicates identically for
+//!    both (instrument-host.md §2.5 — "pairing is the loader's job").
 //! 2. **The manifest and the implementation are cross-checked at registration**, not at first use.
 //!    [`Registry::register`] builds the module once and refuses the registration if its
 //!    [`Module::id`] disagrees with `identity.id`, because a module that lies about who it is breaks
@@ -36,11 +41,26 @@ use crate::module::Module;
 /// captured environment that could hide a dependency.
 pub type Factory = fn() -> Box<dyn Module>;
 
+/// Builds a module instance from CAPTURED state — the instrument tier's door (WO-020 INC5). A
+/// wasm-backed module is built from a compiled component and an engine, which are values, not
+/// functions; the loader captures them in a closure and shares it. `Send + Sync` because the
+/// registry (and the modules it builds) cross the control/audio/UI thread boundary the executor
+/// owns — the same bar `Module: Send` sets.
+pub type SharedFactory = std::sync::Arc<dyn Fn() -> Box<dyn Module> + Send + Sync>;
+
+/// Which door a registration came through. Private: consumers call [`Registration::create`] and
+/// never branch on the tier (the registry is tier-blind by design).
+#[derive(Clone)]
+enum FactoryKind {
+    Builtin(Factory),
+    Shared(SharedFactory),
+}
+
 /// One registered module: what it declared, and how to build it.
 #[derive(Clone)]
 pub struct Registration {
     manifest: ValidatedManifest,
-    factory: Factory,
+    factory: FactoryKind,
 }
 
 impl Registration {
@@ -53,7 +73,10 @@ impl Registration {
     /// Builds a fresh instance.
     #[must_use]
     pub fn create(&self) -> Box<dyn Module> {
-        (self.factory)()
+        match &self.factory {
+            FactoryKind::Builtin(f) => f(),
+            FactoryKind::Shared(f) => f(),
+        }
     }
 
     /// The module's stable id.
@@ -170,6 +193,44 @@ impl Registry {
         // Build once, now, so a disagreement about identity is a registration failure rather than a
         // wrong module running in someone's patch.
         let probe = factory();
+        self.insert(manifest, FactoryKind::Builtin(factory), probe)
+    }
+
+    /// Registers an instrument-tier package from its manifest text with a state-capturing
+    /// factory — the loader's door (instrument-host.md §2.5). Decode, validate, cross-check and
+    /// duplicate rules are IDENTICAL to [`Self::register`]: the tier changes how a module is
+    /// built, never what it must declare.
+    ///
+    /// # Errors
+    /// As [`Self::register`].
+    pub fn register_instrument(
+        &mut self,
+        manifest_text: &str,
+        factory: SharedFactory,
+    ) -> Result<(), RegisterError> {
+        let manifest = decode(manifest_text).map_err(RegisterError::Invalid)?;
+        self.register_instrument_validated(manifest, factory)
+    }
+
+    /// [`Self::register_instrument`] for an already-validated manifest.
+    ///
+    /// # Errors
+    /// As [`Self::register_validated`].
+    pub fn register_instrument_validated(
+        &mut self,
+        manifest: ValidatedManifest,
+        factory: SharedFactory,
+    ) -> Result<(), RegisterError> {
+        let probe = factory();
+        self.insert(manifest, FactoryKind::Shared(factory), probe)
+    }
+
+    fn insert(
+        &mut self,
+        manifest: ValidatedManifest,
+        factory: FactoryKind,
+        probe: Box<dyn Module>,
+    ) -> Result<(), RegisterError> {
         let declared = manifest.id().to_string();
         let actual = probe.id().to_string();
         if declared != actual {
@@ -403,6 +464,58 @@ latency = 0
             reg.get_pinned("sparq/test/throwaway", "9.9.9").is_none(),
             "a pin that does not match must fail, not fall back to whatever is installed"
         );
+    }
+
+    /// A module whose id comes from CAPTURED state — the shape a wasm-backed factory has (the
+    /// component and engine are values, not functions).
+    struct Captured(String);
+    impl Module for Captured {
+        fn id(&self) -> &str {
+            &self.0
+        }
+        fn configure(&mut self, _state: &[u8]) -> Result<(), ModuleError> {
+            Ok(())
+        }
+        fn prepare(&mut self, _resources: &Resources) -> Result<(), ModuleError> {
+            Ok(())
+        }
+        fn process(&mut self, _ctx: &mut AudioCtx<'_>) -> BlockStatus {
+            BlockStatus::Silenced
+        }
+        fn message(&mut self, _payload: &[u8]) -> Result<(), ModuleError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_instrument_registers_through_the_shared_factory_door() {
+        let mut reg = Registry::new();
+        let captured = "sparq/test/throwaway".to_string();
+        let factory: SharedFactory =
+            std::sync::Arc::new(move || Box::new(Captured(captured.clone())));
+        reg.register_instrument(&manifest_for("sparq/test/throwaway", "0.1.0"), factory)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(reg.len(), 1);
+        let m = reg.create("sparq/test/throwaway").expect("the shared door builds");
+        assert_eq!(m.id(), "sparq/test/throwaway");
+        // The tier-blind rules hold identically: a lying capture is refused…
+        let mut reg2 = Registry::new();
+        let lying: SharedFactory =
+            std::sync::Arc::new(|| Box::new(Captured("sparq/test/someone-else".to_string())));
+        let e = reg2
+            .register_instrument(&manifest_for("sparq/test/throwaway", "0.1.0"), lying)
+            .unwrap_err();
+        assert!(matches!(e, RegisterError::IdMismatch { .. }), "{e}");
+        // …and a duplicate is refused, whichever door the first registration came through.
+        let again: SharedFactory =
+            std::sync::Arc::new(|| Box::new(Captured("sparq/test/throwaway".to_string())));
+        let e = reg
+            .register_instrument(&manifest_for("sparq/test/throwaway", "0.2.0"), again)
+            .unwrap_err();
+        assert!(matches!(e, RegisterError::Duplicate { .. }), "{e}");
+        let builtin_over_instrument =
+            reg.register(&manifest_for("sparq/test/throwaway", "0.3.0"), throwaway);
+        assert!(matches!(builtin_over_instrument, Err(RegisterError::Duplicate { .. })));
     }
 
     #[test]

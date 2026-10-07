@@ -111,6 +111,24 @@ jobs:
         run: |
           cargo clippy -p sparq-host-wasm --features instrument-host --all-targets -- -D warnings
           cargo test -p sparq-host-wasm --features instrument-host
+          cargo clippy -p sparq-app --features instrument-host,streams,streams-net --all-targets -- -D warnings
+
+      # WO-020: the stream plane. `streams` is the hermetic half (serde_json: normalizers, windows,
+      # cache, replay, the broker's scheduling core + the fetch/transport seam); `streams-net` adds
+      # the live edge (ureq + rustls + the wall-clock/sleep helpers). Live-network tests are
+      # #[ignore]d — CI runs hermetically (the D11 firewall); the device run-sheet (test007 §B) and
+      # deliberate `-- --ignored` runs probe for real. INC5.
+      - name: Stream plane (streams + streams-net cells)
+        if: runner.os == 'Linux'
+        run: |
+          cargo clippy -p sparq-streams --features streams --all-targets -- -D warnings
+          cargo test -p sparq-streams --features streams
+          cargo clippy -p sparq-streams --features streams-net --all-targets -- -D warnings
+          cargo test -p sparq-streams --features streams-net
+          cargo clippy -p sparq-host-wasm --features streams --all-targets -- -D warnings
+          cargo test -p sparq-host-wasm --features streams
+          cargo clippy -p sparq-app --features streams,streams-net --all-targets -- -D warnings
+          cargo test -p sparq-app --features streams,streams-net --bin sparq
 
       # WO-012: the shell. `ui` is the hermetic egui half (headless driver, audit); `ui-window`
       # adds winit + wgpu — on the Windows runner that is a NATIVE dx12-backend compile (the

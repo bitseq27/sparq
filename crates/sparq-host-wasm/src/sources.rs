@@ -9,7 +9,9 @@
 //!
 //! * [`ReplayProvider`] (feature `streams`) — fixture windows from `reference/fixtures/observatory/`,
 //!   the hermetic door for the sandbox shell, the at-rest wall, tests and goldens;
-//! * the device's `BrokerProvider` (INC5, `streams-net`) — the live transport behind the same trait.
+//! * the device's `BrokerProvider` — the live broker's windows behind the same trait (landed
+//!   INC5; the socket itself rides `sparq-streams`' `streams-net`, and this read face rides the
+//!   same `streams` feature as the replay provider).
 //!
 //! The wasmtime `sources` import (INC5) will be a thin door over this same trait, which is why the
 //! sandbox can prove every binding behaviour — `param:` indirection, OFF, KEY NEEDED, unknown-id —
@@ -23,6 +25,19 @@ use sparq_module_api::params::ParamSet;
 use sparq_module_api::toml::{self, Value};
 use sparq_streams::registry::Registry;
 use sparq_streams::window::{StreamStatus, Window};
+// The broker mirror's lock is held for a struct copy on the CONTROL/UI path — never on an audio
+// path (the stream plane has no audio path at all, plan D5). The disallowed-type lint is the
+// audio thread's rule; this is the defect-#66 allow-with-reason precedent (app `ui/live.rs`).
+#[cfg(feature = "streams")]
+#[allow(clippy::disallowed_types)]
+use std::sync::Mutex;
+
+/// The shared broker handle: the driver thread polls it, the provider reads it. The `Mutex` is
+/// the control-plane mirror idiom (`HealthMirror` in the app's `ui/live.rs`) — one allow, here,
+/// with the reason; every other mention rides the alias.
+#[cfg(feature = "streams")]
+#[allow(clippy::disallowed_types)] // control-plane mirror; see the import note above
+pub type SharedBroker = std::sync::Arc<Mutex<sparq_streams::broker::Broker>>;
 
 /// One declared source binding on a display (the manifest's `ui.displays[].sources[]`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,7 +207,7 @@ impl ManifestSources {
 }
 
 /// A source of stream windows behind the contract's door. Two implementations: [`ReplayProvider`]
-/// (fixtures, hermetic) and the device's BrokerProvider (INC5, `streams-net`). The wasmtime
+/// (fixtures, hermetic) and the device's [`BrokerProvider`] (the live broker's windows). The wasmtime
 /// `sources` import will be a thin door over this trait.
 pub trait StreamProvider {
     /// The registry the provider serves against (ids, cadences, key states).
@@ -267,6 +282,64 @@ impl StreamProvider for ReplayProvider {
         match self.windows.get(stream_id) {
             Some(w) => w.status(now_unix),
             None => StreamStatus::Offline,
+        }
+    }
+    fn key_needed_env(&self, stream_id: &str) -> Option<String> {
+        let def = self.registry.get(stream_id)?;
+        match def.key_state(|k| std::env::var(k).ok()) {
+            sparq_streams::registry::KeyState::KeyNeeded => def.key_env.clone(),
+            _ => None,
+        }
+    }
+}
+
+/// The device's live provider (INC5): the broker's windows behind the SAME trait the replay
+/// provider wears — the swap the shell performs when the build carries `streams-net` (plan §8.3:
+/// one door, two guests). The broker itself lives in `sparq-streams` (cadence floors, the
+/// replace/accumulate rules, the last-good cache); a driver thread the app owns polls it through
+/// an injected transport, and this provider is the read face: `window`/`status` clone out of the
+/// shared broker, `key_needed_env` reads the registry. The lock is the control-plane's usual
+/// `Arc<Mutex<…>>` (the defect-#66 precedent, `ui/live.rs`): held for a struct copy on the UI
+/// thread, never on an audio path — the stream plane has no audio path at all (plan D5).
+#[cfg(feature = "streams")]
+pub struct BrokerProvider {
+    registry: Registry,
+    broker: SharedBroker,
+}
+
+#[cfg(feature = "streams")]
+impl BrokerProvider {
+    /// Wraps a broker the caller (the app's driver thread) keeps a handle to.
+    ///
+    /// # Errors
+    /// A string naming the registry load failure (the same checked-in bytes every other door reads).
+    pub fn new(broker: SharedBroker) -> Result<Self, String> {
+        let registry = Registry::load().map_err(|e| format!("registry: {e}"))?;
+        Ok(Self { registry, broker })
+    }
+
+    /// The shared broker handle — the driver thread polls through the same `Arc` this reads.
+    #[must_use]
+    pub fn broker(&self) -> SharedBroker {
+        std::sync::Arc::clone(&self.broker)
+    }
+}
+
+#[cfg(feature = "streams")]
+impl StreamProvider for BrokerProvider {
+    fn registry(&self) -> &Registry {
+        &self.registry
+    }
+    fn window(&self, stream_id: &str) -> Option<Window> {
+        // A poisoned lock answers None (draw at rest, in words) rather than panicking the UI
+        // thread — the shell survives every broker failure (§6.3).
+        let broker = self.broker.lock().ok()?;
+        broker.window(stream_id).cloned()
+    }
+    fn status(&self, stream_id: &str, now_unix: i64) -> StreamStatus {
+        match self.broker.lock() {
+            Ok(broker) => broker.status(stream_id, now_unix),
+            Err(_) => StreamStatus::Offline,
         }
     }
     fn key_needed_env(&self, stream_id: &str) -> Option<String> {
@@ -427,6 +500,70 @@ port = "out"
         let b = bindings();
         let r = registry();
         assert_eq!(b.resolve(&r, "wall", "nope", &params_with(0.0, 0.0)), Resolution::Off);
+    }
+
+    #[cfg(feature = "streams")]
+    #[test]
+    fn the_broker_provider_serves_live_windows_behind_the_same_trait() {
+        // One real broker poll over a fixture-backed transport (hermetic — the socket is the
+        // injected seam), then the provider read face: same trait, same label grammar as replay.
+        use sparq_streams::broker::Broker;
+        use sparq_streams::fetch::{self, Transport, TransportResponse};
+        struct KpOnly(String);
+        impl Transport for KpOnly {
+            fn get(&self, url: &str) -> TransportResponse {
+                if url == self.0 {
+                    let body = std::fs::read_to_string(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../../reference/fixtures/observatory/swpc.kp.json"
+                    ))
+                    .unwrap();
+                    TransportResponse {
+                        status: 200,
+                        content_type: "application/json".into(),
+                        body,
+                        note: String::new(),
+                    }
+                } else {
+                    TransportResponse {
+                        status: 404,
+                        content_type: "".into(),
+                        body: "".into(),
+                        note: "".into(),
+                    }
+                }
+            }
+        }
+        let reg = Registry::load().unwrap();
+        let now = 1_791_290_096i64; // 2026-10-06T12:34:56Z
+        let kp_url = fetch::fill_endpoint(&reg, "swpc.kp", now, |_| None).unwrap().url;
+        let mut broker = Broker::new(reg, None);
+        let out = broker.poll(&["swpc.kp".into()], &KpOnly(kp_url.clone()), now, |_| None, |_| ());
+        assert!(out[0].ok, "{}", out[0].words);
+        #[allow(clippy::disallowed_types)]
+        // the one construction site; the alias carries the reason
+        let shared = SharedBroker::new(Mutex::new(broker));
+        let prov = BrokerProvider::new(std::sync::Arc::clone(&shared)).unwrap();
+        // The trait face: window, status, key words — the same shapes ReplayProvider answers.
+        let w = prov.window("swpc.kp").expect("the broker polled kp green");
+        assert!(!w.is_empty());
+        assert_eq!(prov.status("swpc.kp", now), StreamStatus::Live);
+        assert_eq!(prov.status("swpc.kp", now + 10 * 300), StreamStatus::Offline);
+        assert!(prov.window("geo.firms").is_none(), "a keyless stream has no window");
+        assert_eq!(prov.key_needed_env("geo.firms").as_deref(), Some("SPARQ_FIRMS_KEY"));
+        assert_eq!(prov.key_needed_env("swpc.kp"), None);
+        // The §5.2 label over the test manifest: cell_02 selects kp (LIVE — just polled);
+        // cell_01 selects quakes-hour and the fixed binding is wwv — neither was ever polled,
+        // so both read OFFLINE. The port binding is not a stream and is not counted (§5.2).
+        let b = bindings();
+        let label = status_label(&b, "wall", &params_with(2.0, 1.0), &prov, now);
+        assert_eq!(label, "LIVE 1/3 · 2 OFFLINE");
+        // The driver and the provider share one broker: a second poll is visible through the read face.
+        let mut bk = shared.lock().unwrap();
+        let out2 = bk.poll(&["swpc.kp".into()], &KpOnly(kp_url), now + 300, |_| None, |_| ());
+        assert!(out2[0].ok, "{}", out2[0].words);
+        drop(bk);
+        assert_eq!(prov.status("swpc.kp", now + 300), StreamStatus::Live);
     }
 
     #[cfg(feature = "streams")]

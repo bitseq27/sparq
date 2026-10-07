@@ -100,6 +100,55 @@ pub fn run(cmd: ModCommand) -> Result<ExitCode> {
     }
 }
 
+/// Runs the gate: the FULL chain when this binary carries the runtime (feature
+/// `instrument-host`) and a fixture set exists to name, the static chain otherwise. A stage
+/// never guesses a path — the context below is the caller naming the world (fixtures, cache,
+/// at-rest), and without it the runtime stages refuse in words exactly as a zero-dep build does.
+#[cfg(feature = "instrument-host")]
+fn run_gate(path: &std::path::Path) -> validate::GateReport {
+    validate::run_gated(path, runtime_ctx_for(path).as_ref())
+}
+
+#[cfg(not(feature = "instrument-host"))]
+fn run_gate(path: &std::path::Path) -> validate::GateReport {
+    validate::run(path)
+}
+
+/// The runtime context for the gate, or `None` when the fixture set is absent (the stages then
+/// refuse in words — an honest partial gate, never a guess). The at-rest publish rides the
+/// app's own at-rest door (one owner of the path rule).
+#[cfg(feature = "instrument-host")]
+fn runtime_ctx_for(
+    path: &std::path::Path,
+) -> Option<sparq_host_wasm::runtime::stages::RuntimeContext> {
+    let fixtures = std::env::var("SPARQ_FIXTURES")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("reference/fixtures/observatory"));
+    if !fixtures.is_dir() {
+        eprintln!(
+            "sparq mod validate: no fixture set at {} — the runtime stages will refuse in words \
+             (set SPARQ_FIXTURES or run from the repo root)",
+            fixtures.display()
+        );
+        return None;
+    }
+    let pkg = package::open(path);
+    let module_id = pkg
+        .manifest_text
+        .as_deref()
+        .and_then(|t| sparq_module_api::decode(t).ok())
+        .map(|m| m.id().to_string());
+    let atrest_path = module_id.as_deref().map(crate::ui::atrest::atrest_path_used);
+    Some(sparq_host_wasm::runtime::stages::RuntimeContext {
+        fixtures_dir: fixtures,
+        cache_dir: Some(sparq_host_wasm::runtime::cache_dir()),
+        atrest_path,
+        write_previews: true,
+        sample_rate: 48_000,
+        block_frames: 64,
+    })
+}
+
 /// `sparq mod validate DIR` — the whole gate, printed stage by stage.
 fn run_validate(dir: &str) -> Result<ExitCode> {
     let path = PathBuf::from(dir);
@@ -109,7 +158,7 @@ fn run_validate(dir: &str) -> Result<ExitCode> {
         println!("  Fix: point this at the package folder, e.g. `sparq mod validate instruments/my-fm-terrain/`.");
         return Ok(ExitCode::FAILURE);
     }
-    let gate = validate::run(&path);
+    let gate = run_gate(&path);
     println!("sparq mod validate `{dir}` — the hand-in gate (MODULE-BUILD-GUIDE §7)");
     print!("{}", gate.render());
 

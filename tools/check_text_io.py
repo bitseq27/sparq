@@ -179,6 +179,22 @@ def main() -> int:
                 if depth < 0:
                     depth = 0
 
+    # Rule 5 (2026-10-07, the test007 step-[0] incident): an ESCAPED open paren on a structural
+    # if/for line un-forms the block — cmd sees a literal `(`, the "guarded" body runs
+    # UNCONDITIONALLY, and a fail-fast gate refuses everyone whatever the check returned.
+    # Escaped parens belong in echo text (rule 4); structural parens stay bare.
+    if scripts_dir.is_dir():
+        for path in sorted(scripts_dir.glob("*.bat")):
+            text = path.read_bytes().decode("ascii", errors="replace")
+            for lineno, line in enumerate(text.splitlines(), 1):
+                low = line.strip().lower()
+                if (low.startswith("if ") or low.startswith("for ")) and "^(" in line:
+                    offenders.append(
+                        f"scripts/{path.name}:{lineno}: escaped ^( on a structural if/for line — "
+                        "the block never forms and its body runs unconditionally (the test007 "
+                        "step-[0] incident); structural parens stay bare, only echo text escapes"
+                    )
+
     if offenders:
         print("check_text_io: FAIL")
         for o in offenders:

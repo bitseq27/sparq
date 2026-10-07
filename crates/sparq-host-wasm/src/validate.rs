@@ -212,9 +212,47 @@ impl GateReport {
 #[must_use]
 pub fn run(dir: &Path) -> GateReport {
     let pkg = package::open(dir);
+    GateReport { outcomes: static_chain(&pkg) }
+}
+
+/// Runs the FULL chain: the static stages plus — with the `instrument-host` feature AND a
+/// caller-named [`RuntimeContext`](crate::runtime::stages::RuntimeContext) — the runtime stages
+/// for real (smoke, golden ×2, measured budgets, visual conformance + `preview.svg`). Without
+/// the context the chain is the static one: a stage never guesses where fixtures or caches live.
+#[cfg(feature = "instrument-host")]
+#[must_use]
+pub fn run_gated(dir: &Path, ctx: Option<&crate::runtime::stages::RuntimeContext>) -> GateReport {
+    let pkg = package::open(dir);
+    let Some(ctx) = ctx else {
+        return GateReport { outcomes: static_chain(&pkg) };
+    };
+    // Stage 5: the static declared-budget check still runs first — a manifest with no sane
+    // max_fuel fails there and the measurement is pointless (and would use the fallback caps).
+    let static_budgets = budgets_stage(&pkg);
+    let budgets = if static_budgets.verdict == Verdict::Fail {
+        static_budgets
+    } else {
+        crate::runtime::stages::measured_budgets(&pkg, ctx)
+    };
     let outcomes = vec![
         schema_stage(&pkg),
         package_stage(&pkg),
+        crate::runtime::stages::smoke_stage(&pkg, ctx),
+        crate::runtime::stages::golden_stage(&pkg, ctx),
+        budgets,
+        crate::runtime::stages::visual_stage(&pkg, ctx),
+        signature_stage(&pkg),
+    ];
+    GateReport { outcomes }
+}
+
+/// The static-only chain: stages 3/4/6 refuse in words (and stage 5 refuses its measurement
+/// half). This is the zero-dependency build's gate — and a feature-on build's gate when the
+/// caller has no runtime context to name.
+fn static_chain(pkg: &package::Package) -> Vec<StageOutcome> {
+    vec![
+        schema_stage(pkg),
+        package_stage(pkg),
         refused(
             Stage::Smoke,
             "the component's instantiation needs the instrument-host runtime (wasmtime behind \
@@ -228,7 +266,7 @@ pub fn run(dir: &Path) -> GateReport {
              device, twice, bit-exact, hash recorded — the instrument's regression anchor \
              forever (guide §7 stage 4).",
         ),
-        budgets_stage(&pkg),
+        budgets_stage(pkg),
         refused(
             Stage::VisualConformance,
             "visual conformance needs the runtime half plus the headless painter: panel and \
@@ -237,9 +275,8 @@ pub fn run(dir: &Path) -> GateReport {
              (guide §7 stage 6). The manifest-side vocabularies ARE checked — stage 1 polices \
              the display shapes; what refuses here is the emitted-frame half.",
         ),
-        signature_stage(&pkg),
-    ];
-    GateReport { outcomes }
+        signature_stage(pkg),
+    ]
 }
 
 /// A stage that refuses in words, with an empty report.

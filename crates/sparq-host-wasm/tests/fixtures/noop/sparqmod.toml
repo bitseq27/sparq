@@ -1,0 +1,54 @@
+# The noop fixture's manifest — the smallest honest instrument package (instrument-host.md §7.2).
+# Hand-written for the fixture (the observatory's is generated; this one is the test artefact the
+# runtime stages and the smoke mirror drive). Its shape mirrors the §10 draft minus the streams.
+
+[identity]
+id = "example/syn/noop"
+version = "0.1.0"
+host_api = { min = 1, max = 1 }
+display_name = "Noop (fixture)"
+summary = "The compile-verified reference skeleton: silence in the exact negotiated shapes"
+authors = ["sparq first-party (WO-017/WO-020 fixture)"]
+license = "MIT"
+
+[classification]
+category = "syn/noop"
+top = "syn"
+kind = "display"
+tier = "t2"
+layer = "instrument"
+stability = "experimental"
+
+# ports: NONE (the v1 loader serves port-less instruments; plan D5).
+
+[state]
+schema_id = "example/syn/noop/state"
+schema_version = 1
+
+[resources]
+latency = 0
+cpu_class = "light"
+gpu_class = "light"
+
+[capabilities]
+fs_read = []
+network = "none"
+max_fuel = 1000000
+max_memory_mb = 64
+
+[ui]
+colour_class = "syn"
+
+[[ui.displays]]
+id = "view"
+kind = "display_list"
+min_size = [160, 96]
+lod = "auto"
+
+[distribution]
+package_format = "wasm"
+entrypoint = "noop.wasm"
+platforms = ["any"]
+arch = ["wasm32"]
+min_host_version = "0.0.0-phase0"
+channel = "beta"

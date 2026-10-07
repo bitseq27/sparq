@@ -20,6 +20,15 @@ sparq-module-api.workspace = true
 # validator does NOT enable), so the static half stays zero-dependency.
 sparq-streams.workspace = true
 
+# INC5's runtime half. The seed tree is the kernel's (ADR-007) — `host.random-seed` derives from
+# it rather than inventing a second derivation. serde_json reads the token bundle's envelope and
+# writes the D13 display-list interchange; sparq-ui paints it (stage 6's `preview.svg` and the
+# at-rest publish go through the SAME painter the shell uses, so a preview cannot disagree with
+# the app). Both ride `instrument-host` with wasmtime; the static half stays zero-dependency.
+sparq-kernel.workspace = true
+serde_json = { workspace = true, optional = true }
+sparq-ui = { workspace = true, optional = true }
+
 # wasmtime rides the `instrument-host` feature and nothing else (ADR-010's consequence: feature-
 # gated exactly like egui/wgpu). Exact-pinned at the workspace level; see the root Cargo.toml for
 # the rationale. The runtime half (loader, fuel, hot reload, stages 3/4/6) lands behind this
@@ -30,7 +39,7 @@ wasmtime = { workspace = true, optional = true }
 default = []
 # The wasm runtime. OFF by default: the zero-dependency core build, the CI default cells and
 # every golden stay untouched without it.
-instrument-host = ["dep:wasmtime"]
+instrument-host = ["dep:wasmtime", "dep:serde_json", "dep:sparq-ui", "streams"]
 # The hermetic sources door (WO-020 INC4 §8.3): ReplayProvider — fixture windows served through
 # the same binding-resolution the device's BrokerProvider (INC5, `streams-net`) will wear. Pulls
 # sparq-streams' serde_json half; the default build stays zero-dependency.

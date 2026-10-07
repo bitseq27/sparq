@@ -456,7 +456,29 @@ watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the det
 * **A period probe in caps.** `devices --caps` probes exclusive RATES but not exclusive PERIODS: a ~200 ms `Initialize` probe per ladder candidate would have surfaced #89 at step [03] instead of step [04] — at the cost of touching the device during enumeration and a slower caps command. Parked until a device needs it; the [04] evidence path is sufficient (and the digest keeps it cheap).
 * **Increment 2 backlog** (`docs/hal/windows-notes.md` §5): ASIO, full duplex, round-trip measurement, the STA retry for #75 — and no longer the clock-drift re-derivation (#76 shipped in inc 1.5: delivered-vs-wall, the `IAudioClock` binding deleted, both §4b fixtures pinned as tests).
 
-## WO-020 INC5 doors (parked by INC4's closeout, 2026-10-06)
+## WO-020 INC5 doors (parked by INC4's closeout, 2026-10-06; INC5 slices 1–2 landed 2026-10-07)
+
+* **FOUND ON THE DEVICE (2026-10-07, post-pack): the shell's instrument discovery is CWD-relative
+  AND SILENT.** `shell_ui.rs` discovers `Path::new("instruments")` — relative to the process's
+  working directory — and `package::discover` answers an absent directory with an empty list and
+  NO WORDS (the `if let Ok(read_dir)` swallow). Launch the exe by double-click (CWD =
+  `target\release\`) or from any folder that is not the repo root and the instrument simply is
+  not in the library, with nothing anywhere saying why. `sparq mod list` DOES say it in words
+  ("no `instruments` directory here"); the shell must do the same — a log line in
+  `ShellUi::new` when the directory is absent or a package skips (`from_manifest_text` → None is
+  the second silent `continue`). First fix of INC5b, measured repro in the sandbox (root CWD:
+  observatory in the convergence SVG ×2; any other CWD: ×0).
+
+> **Status after the INC5 sandbox session:** the `BrokerProvider` door below is DISCHARGED (slice
+> 1: the live provider behind the same trait, tested hermetically + a real 22/23 live probe).
+> "Stage 6 writes the at-rest render" is DISCHARGED as code (slice 2: the stage publishes through
+> the app's own at-rest door — device-measured at test007 §D). The wasm-loader door is HALF
+> discharged: the loader, the doors, the stages and the registry's `register_instrument` are
+> built; what remains is **INC5b — the launch wiring**: discovery → registration at launch, PLAY
+> #58's discharge (the executor adopting `WasmInstrument`), and the shell's live-provider swap
+> (a BrokerProvider driver thread in `ui/live.rs`). Until then PLAY still refuses in words and
+> test007's E/F run against the at-rest wall.
+
 
 * **The wasm loader (PLAY's refusal).** A canvas may now CARRY an instrument node (the browser
   offers discovered packages); the native registry cannot INSTANTIATE one until INC5's wasmtime

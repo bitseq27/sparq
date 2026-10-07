@@ -1160,7 +1160,8 @@ mod tests {
         .collect();
         let painted = p.resolve(&items);
         // R6: no colour literal in source — the SVG's ground comes from the bundle like everywhere else.
-        let bg = crate::tokens::color_hex("color.ground.panel").and_then(|h| Rgba::from_hex(h, 1.0));
+        let bg =
+            crate::tokens::color_hex("color.ground.panel").and_then(|h| Rgba::from_hex(h, 1.0));
         let svg = svg(&painted, 100.0, 50.0, bg);
         for tag in ["<rect", "<polyline", "<circle", "<text"] {
             assert!(svg.contains(tag), "svg misses {tag}");

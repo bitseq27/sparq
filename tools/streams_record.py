@@ -201,9 +201,18 @@ def record_stream(stream: dict, now: _dt.datetime, timeout: float) -> dict:
     """Fetch (or synthesise) one stream and return its in-memory record (metadata + raw body)."""
     sid = stream["id"]
     url, key_source = resolve_placeholders(stream["endpoint"], stream, now)
+    # Redaction (INC5): the recorded endpoint must never carry a resolved ENV key — _meta.json is
+    # a checked-in artefact. A keyless recording never hit this path (FIRMS records synthetic),
+    # but a device with SPARQ_FIRMS_KEY set would have written the secret beside the fixture.
+    # The Rust fetch path redacts identically (crates/sparq-streams/src/fetch.rs, RawFetch.url).
+    redacted = url
+    if key_source.startswith("env:"):
+        secret = os.environ.get(stream.get("key_env", ""), "").strip()
+        if secret:
+            redacted = url.replace(secret, "{KEY}")
     envelope = {
         "stream_id": sid,
-        "endpoint": url,
+        "endpoint": redacted,
         "fetched_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "fetched_unix": int(now.timestamp()),
         "status": 0,

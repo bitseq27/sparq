@@ -32,6 +32,13 @@
 #                 ~28 k-row 1° aurora payload to a 2° grid before any window or guest (§6.4).
 #   uses_location (optional bool) endpoint carries {lat}/{lon} from SPARQ_OBSERVATORY_LOC.
 #   default_tide_station / default_country  (optional) config-knob defaults (§6.2).
+#   accumulate    (optional bool, default false) how a successful fetch meets the window (INC5):
+#                 false = REPLACE — the payload is the whole current picture (a 3-day series, an
+#                 event set, a grid), so the window becomes exactly the payload's records.
+#                 true = APPEND — the payload is one summary poll (a single record), so the broker
+#                 accumulates history across polls (monotonic by the record's own stamp; a re-poll
+#                 of an unchanged minute is deduplicated, never doubled). The SWPC `summary/*`
+#                 endpoints are the true rows; INC3's finding #7 (a dot, not a trace) is the reason.
 #
 # DEAD ENDS, probed and recorded 2026-10-06 so the build session does not re-probe ghosts (§3.3):
 #   * NASA DONKI is DECOMMISSIONED — every api.nasa.gov/DONKI/* call returns API_KEY_MISSING or a
@@ -83,6 +90,7 @@ view = "timeseries"
 schema = "observatory/timeseries@1"
 units = "km/s"
 attribution = "NOAA/SWPC solar wind summary"
+accumulate = true
 
 [[stream]]
 id = "swpc.bz"
@@ -94,6 +102,7 @@ view = "timeseries"
 schema = "observatory/timeseries@1"
 units = "nT"
 attribution = "NOAA/SWPC solar wind summary"
+accumulate = true
 
 [[stream]]
 id = "swpc.xray-flares"
@@ -116,6 +125,7 @@ view = "timeseries"
 schema = "observatory/timeseries@1"
 units = "sfu"
 attribution = "NOAA/SWPC 10.7 cm flux summary"
+accumulate = true
 
 [[stream]]
 id = "swpc.wwv"

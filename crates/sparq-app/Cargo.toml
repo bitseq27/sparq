@@ -40,11 +40,13 @@ hal-wasapi = ["sparq-kernel/hal-wasapi"]
 # superset so `--features ui-window` alone is enough to build the real thing.
 ui = ["dep:egui"]
 ui-window = ["ui", "dep:winit", "dep:egui-winit", "dep:egui-wgpu", "dep:wgpu", "dep:pollster"]
-# WO-018: the instrument host's runtime half (wasmtime). Pure passthrough to sparq-host-wasm's
-# own feature — the app crate holds no wasmtime code of its own, and the default build stays
-# zero-dependency: `sparq mod validate`/`list` work without it, refusing the runtime stages in
-# words. scripts\build.bat enables it alongside the audio features.
-instrument-host = ["sparq-host-wasm/instrument-host"]
+# WO-018/WO-020-INC5: the instrument host's runtime half (wasmtime). Passthrough to
+# sparq-host-wasm's own feature plus `streams` (the gate's runtime stages drive the golden
+# render from the ReplayProvider's fixture windows) — the app crate holds no wasmtime code of
+# its own, and the default build stays zero-dependency: `sparq mod validate`/`list` work
+# without it, refusing the runtime stages in words. scripts\build.bat enables it alongside the
+# audio features.
+instrument-host = ["sparq-host-wasm/instrument-host", "streams"]
 
 # WO-020: the stream plane's broker (ADR-011). `streams` pulls sparq-streams and its hermetic half
 # (registry, normalizers, windows, cache, replay — one dependency, serde_json), which powers the
@@ -54,7 +56,6 @@ instrument-host = ["sparq-host-wasm/instrument-host"]
 # tail/record) refuse in words either way. The default build compiles neither (zero-dep promise).
 streams = ["dep:sparq-streams", "sparq-streams/streams", "sparq-host-wasm/streams"]
 streams-net = ["streams", "sparq-streams/streams-net"]
-
 # The renderer backend is a per-target choice, made here and nowhere else:
 #   Windows  -> wgpu dx12  (the stage OS is Windows; DX12 also means WARP works over RDP,
 #                           where Vulkan and OpenGL typically do not)

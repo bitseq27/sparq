@@ -53,15 +53,28 @@ cpal = { version = "0.15" }
 # neither and the zero-dependency promise is untouched. Joined to the feature-gated family below.
 serde_json = { version = "1" }
 
+# WO-020 INC5: the stream plane's live transport. ureq is a blocking, minimal HTTP client — no
+# async runtime, no tokio, one thread per fetch, which is exactly the shape the broker's driver
+# thread wants (plan D3: fetching is control-thread work). Default features = rustls (ring
+# provider) + webpki-roots + gzip: TLS roots ride the binary (identical trust on the sandbox and
+# on SATURN, no system-store divergence); ring keeps the C surface small enough for the 1 GB box.
+# Rides sparq-streams' `streams-net` feature and nothing else; the default build compiles none of
+# it, so the zero-dependency promise is untouched.
+ureq = { version = "3" }
+
 # WO-018: the instrument host's runtime (ADR-010 decision 2 — the T2 wasm sandbox, pulled
 # forward from Phase 5). EXACT-PINNED with `=`: wasmtime moves fast, and a minor bump can
 # change the component-model behaviour a frozen guest contract was compiled against, so this
 # pin moves only with a recorded re-baselining (the contract's own versioning rule, applied
-# to the host). Default features OFF; the four listed are the whole host — std, the runtime,
-# cranelift, the component model — and notably NO WASI: capability by absence
-# (docs/api/instrument-wit/README.md, decision E). Resolved only under sparq-host-wasm's
+# to the host). Default features OFF; the five listed are the whole host — std, the runtime,
+# cranelift, the component model, and (INC5) `cache`: the engine's own content-addressed compile
+# cache, which is how instrument-host.md §2.1's "compile once, load serialised" lands WITHOUT an
+# `unsafe` in sparq code — `Component::deserialize` is unsafe and docs/unsafe-allowlist.md
+# forbids unsafe in Tier-2 host code, while wasmtime's cache does the same job behind a safe API
+# (the unsafe stays inside wasmtime, where its audit lives). Still notably NO WASI: capability by
+# absence (docs/api/instrument-wit/README.md, decision E). Resolved only under sparq-host-wasm's
 # `instrument-host` feature; the default build never compiles it.
-wasmtime = { version = "=49.0.2", default-features = false, features = ["std", "runtime", "cranelift", "component-model"] }
+wasmtime = { version = "=49.0.2", default-features = false, features = ["std", "runtime", "cranelift", "component-model", "cache"] }
 
 # WO-012: the UI scaffold. These are the first heavyweight third-party dependencies, and per
 # ADR-003/D-3 they are strictly feature-gated scaffolding: the core build stays zero-dependency

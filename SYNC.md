@@ -1,4 +1,333 @@
-# Sync manifest — WO-020 The Observatory: INC1–INC4 (2026-10-06)
+# Sync manifest — WO-020 INC5 slices 1–2: the stream plane live + the instrument runtime (2026-10-07)
+
+**Current bundle: `sparq-update-2026-10-07-wo020-inc5r6.zip` (a FULL-TREE pack, 485 entries —
+overlays any tree at or after the INC4 pack / git `96fe57d`; this session built on the
+re-published main `a9dbf31`, which carries INC1–INC4).** Excluded by the standing rule:
+`.git/`, `target/`, `Cargo.lock`, `logs/`, `*.wav`, `handoff/`, and `SYNC-STAMP.txt` — **the
+stamp does NOT ride**: after applying, re-run `python tools\sync_check.py --write --sync
+sparq-wo020-inc5r6-2026-10-07` on the machine that will own the tree; until then `build.bat` /
+`test006`'s `[00b]` name the mismatch in words (EXPECTED). The zip's sha256 is in the delivery
+message and in `handoff/sha256sums-wo020-inc5r6.txt`. **Provenance:** sandbox branch `wo020-inc5`
+off main `a9dbf31`; durable history in `handoff/sparq-wo020-inc5.bundle` +
+`sparq-wo020-inc5-delivery.bundle` (`a9dbf31`..the delivery seal), each with a `.sha256` sidecar;
+packer `handoff/make_pack_wo020.py` (self-verifying: entry-by-entry zip↔tree hashes, count
+assertions against this manifest and the run sheet, MUST-NOT-MOVE surfaces diffed vs base).
+
+**What it carries:** WO-020 **INC5 slices 1–2**. Slice 1 (MEASURED in the sandbox): `streams-net`
+landed — `sparq-streams::{fetch,broker}` (the endpoint fill mirroring the recorder exactly, the
+one-retry policy, key redaction; cadence floors counting attempts, replace-vs-accumulate as the
+registry's new `accumulate` column — the three SWPC summary feeds), `HttpTransport` (ureq 3 +
+rustls + webpki-roots — compiles AND runs on the 1 GB box), `BrokerProvider` behind the same
+`StreamProvider` trait, the real `sparq streams probe [--live]|fetch|tail` verbs
+(`record-fixtures` stays a refusal naming its owner: `tools/streams_record.py` — one owner of the
+fixture format), the recorder's key-redaction fix, and the CI stream-plane cells. Slice 2
+(WRITTEN against the pinned wasmtime's REAL API — the vendored generator run over the frozen WIT;
+FIRST COMPILE IS THE DEVICE's / CI's): `sparq-host-wasm::runtime` — the loader (§2's order:
+compile via wasmtime's own cache [the pin gained the `cache` feature: §2.1 with NO unsafe in
+Tier-2 host code] → identity cross-check → prepare on both instances), the four doors (tokens =
+the checked-in bundle verbatim; host = injected clock + the KERNEL's seed derivation + RT-violation
+capture; assets = manifest-scoped, v1 `not-found` honestly; sources = D4 over the provider,
+serving flag-stamped snapshots — the golden's parity rule), fuel→`BlockStatus::Overrun` (§3), the
+memory limiter, `WasmInstrument` (the `Module` face) + `Registry::register_instrument` (the
+SharedFactory door), the gate's runtime stages 3/4/5-measured/6 (smoke mirror, golden ×2,
+fuel/memory vs the declared class, LOD ceilings + preview.svg through the SHELL's painter + the
+at-rest publish), `validate::run_gated` wired into `sparq mod validate`, the noop fixture REBUILT
++ sha-pinned (`df14d18f781ea477596db552e60bdb9df06344bc673593c38148e28a3d546c65`, 53 747 B), the
+§7 test plan as 12 integration tests, and `scripts/test007.bat` (the §15.2 run-sheet A–L) +
+gates/build/CI cells. Sandbox gates at the seal: root **1034 / 0 / 1-ignored**; streams **96 / 0**
+both cells; host-wasm+streams **28 / 0**; app streams-net **34 / 0**; observatory **124 / 0**;
+fmt/clippy clean; every python gate; the zero-dep promise verified by `cargo tree`; LIVE: smoke
+fetch green, probe **22/23 HTTP 200** + FIRMS KEY NEEDED in words. **Two honest states ride
+along:** PLAY with an instrument still refuses in words (#58 — the launch wiring is INC5b, named
+in LATER.md), and `token_audit` still fails the pre-existing §18 mockup SVGs (`gates.bat`'s
+`design conformance` row red on exactly that — on main before this pack).
+
+**Namelist** (58 paths vs git `a9dbf31` — 34 A / 24 M; the pack carries the whole tree, this
+names what moved; the `handoff/` artefacts do not ride): `crates/sparq-host-wasm/` (10 — the
+runtime's 5 modules, the 12-test integration file, the 4-file noop fixture, validate.rs,
+sources.rs, Cargo.toml, lib.rs) · `crates/sparq-streams/` (6 — fetch.rs, broker.rs, registry.rs,
+streams.toml, lib.rs, Cargo.toml) · `crates/sparq-module-api/src/registry.rs` (the
+register_instrument door) · `crates/sparq-app/` (3 — instruments.rs, streams.rs, Cargo.toml) ·
+`crates/sparq-ui/src/displaylist.rs` (the hygiene fmt wrap) · `scripts/` (3 — test007.bat new,
+gates.bat, build.bat) · `.github/workflows/ci.yml` · `tools/streams_record.py` (the redaction
+fix) · `docs/instrument-host.md` (the status line) · root docs (6 — `WO020-INC5-RUN-SHEET.md`
+new; `WO020-STATE.md`, `CHECKLIST.md`, `SYNC.md`, `LATER.md`, `Cargo.toml`).
+
+**THE ASK — the operator's hands on SATURN:** run `WO020-INC5-RUN-SHEET.md` (apply → re-stamp →
+`gates.bat` → `test007.bat` A–L). The feature-on cells are the loader's FIRST COMPILE anywhere;
+[D] is the first FULL hand-in gate (expect COMPLETE + PASS, the golden `bdf59cdb…` in stage 4's
+words, `preview.svg` regenerated). Send back `logs\test007.log` + `test007-digest.log` +
+`logs\gates.log` + screenshots of E/G/I. Then INC5b (launch registration, PLAY #58, the shell's
+live-provider swap) closes the increment.
+
+---
+
+## Previous bundle — WO-020 The Observatory: INC1–INC4 (2026-10-06)
+
+
+
+**Current bundle: `sparq-update-2026-10-06-wo020-inc4.zip` (a FULL-TREE pack, 471 entries —
+defect #94's remedy stands: it overlays any tree at or after `sparq-update-2026-10-05-r8.zip` /
+git `96fe57d` and does not depend on a base the receiver might not have).** Excluded from the
+pack by the standing rule: `.git/`, `target/`, `Cargo.lock` (untracked by house rule; cargo
+re-resolves on first build), `logs/`, `*.wav`, `handoff/` (the receiver's copies win), and
+`SYNC-STAMP.txt` — **the stamp does NOT ride** (rev-3 pattern): after applying, re-run
+`python tools\sync_check.py --write --sync sparq-wo020-inc4-2026-10-06` on the machine that will
+own the tree; until then `scripts\build.bat` / `test006`'s `[00b]` name the stamp mismatch in
+words, which is EXPECTED, not a failure. The zip's sha256 is recorded in the delivery message and
+in `handoff/sha256sums-wo020.txt` (which rides the repo, not the zip). **Provenance:** sandbox
+branch `wo020-observatory` off main `96fe57d` (the operator's Fresh-start re-publish, which
+already carries WO-020 INC1+INC2, the plan and the §18 mockups); durable history in
+`handoff/sparq-wo020-inc1…inc4.bundle` + the closing `sparq-wo020-delivery.bundle`
+(`96fe57d`..the delivery commit), each with a `.sha256` sidecar; packer
+`handoff/make_pack_wo020.py` (self-verifying: entry-by-entry zip↔tree hashes, count assertions
+against this manifest and the run sheet, MUST-NOT-MOVE surfaces diffed vs base — it refuses to
+write a pack whose documents would lie about it).
+
+**What it carries:** WO-020 "The Observatory" (`dat/observatory`) **through INC4** — the stream
+plane's hermetic half (INC1, on main already: `sparq-streams`, the 23-stream registry as data,
+all 23 fixtures at HTTP 200), the contract additions (INC2, on main: ADR-011, the `stream`
+binding, `E-STREAM-UNKNOWN`), **INC3 the guest**: the `instruments-src/observatory/` workspace
+(pure core + wasm glue + native harness over one object, D13), the coastline asset (128 rings /
+3 500 pts / 14 524 B), the generated manifest (26 params, 27 toolbar widgets, 16 stream
+bindings), the **206 081 B component** (`wasm-tools validate` clean, `sparq:instrument/guest@1.1.0`),
+the 4-file package `instruments/observatory/`, the pinned golden IR
+(`bdf59cdb232f947091451017f50712a444687c8b1f0a62b5a630763775e974fa`), and **INC4 the host**:
+`sparq-ui::{json,displaylist}` (zero-dep painter core + SVG backend), the egui backend, the
+dropdown picker (**round-4's OWED item 11 discharged**; 44 px rows, undoable), camera FOCUS, D6
+wall-card sizing (2208×1288), the browser's instrument grouping, the at-rest wall in the shell
+(`SPARQ_ATREST` / cache dir, WORDS when none), `sparq instrument render`. Sandbox gates at the
+seal: root **1033 / 0 / 1-ignored**; observatory workspace **124 + 6**; `sparq-streams`
+**75 / 0**; clippy clean in every runnable cell; fmt clean both workspaces; every python gate;
+`ui --audit` **PASS**, coverage **97.5 %**; `mod validate` **PARTIAL exit 1 BY DESIGN** (stages
+3/4/6 refuse in words — the runtime half is INC5); goldens untouched (`ba577186c988db21`); WIT
+pins, the 24 module manifests and `SYNC-STAMP.txt` unmoved (asserted by the packer). **Two
+honest states ride along:** `token_audit` still fails the pre-existing §18 mockup SVGs (14 groups
+/ 298 occurrences — on main before this pack; `gates.bat`'s `design conformance` row will be red
+on exactly that), and **PLAY with the Observatory on canvas refuses in words (#58)** until INC5's
+wasmtime loader registers packages.
+
+**Namelist** (95 paths vs git `96fe57d` — 61 A / 34 M; the pack carries the whole tree, this
+names what moved; the 10 `handoff/` artefacts — inc3/inc4 + delivery bundles and sidecars, the
+packer, the pack's committed copy, the sums — do not ride): `instruments-src/observatory/**` (34 —
+the whole guest workspace: core 17, wasm glue 2, harness 9, package 3, `gen_manifest.py`, the
+coastline asset) · `instruments/observatory/` (4 — the shipped package incl. the component) ·
+`crates/sparq-ui/` (11 — `json.rs` + `displaylist.rs` + `canvas/picker.rs` new; browser, inset,
+inspector, interact, layout, model, mod, lib touched) · `crates/sparq-app/` (11 — `ui/atrest.rs` +
+`ui/displaylist_egui.rs` new; canvas_ui, headless, shell_ui, ui/mod, bridge, cli, instruments,
+Cargo.toml, `tests/r3_controls.rs`) · `crates/sparq-host-wasm/` (3 — `sources.rs` new + the
+`streams` feature) · `crates/sparq-module-api/` (2 — `ParamSpec.options` decode + manifest) ·
+`crates/sparq-audio/tests/portless_instrument.rs` (the D5 proof, +9 tests) · `design/tokens/` (6
+— additive `layout.marker.radius_s/m/l` + regenerated bundle) · `tools/` (5 —
+`make_coastline.py`, `observatory_package.py`, `fetch_wasm_tools.py` new; `streams_record.py`
+text-I/O fix, `token_gen.py` LUT lookups) · `reference/observatory/` (2 — the INC4 convergence
+sheet + README) · root docs (6 — `WO020-INC4-RUN-SHEET.md` new; `SYNC.md`, `WO020-STATE.md`,
+`CHECKLIST.md`, `LATER.md`, `.gitignore`).
+
+**THE ASK:** apply → re-stamp → `scripts\gates.bat` (expect the single pre-existing
+`design conformance` red, everything else ok) → the WO-020 device column of
+`WO020-INC4-RUN-SHEET.md` §2 (first device measurements: streams 23, guest tests + budget block
+exact-match, `mod validate` PARTIAL, the at-rest render via `SPARQ_ATREST`, the shell visual row,
+the audit) → send back §3's list. The Windows at-rest cache-dir disagreement (harness
+`%USERPROFILE%\.cache\…` vs app `%APPDATA%\…`) is recorded in `LATER.md` — use the env door; INC5
+aligns it. Standing asks from ROUND8-HANDOFF §7 step 4 unchanged. **Next: WO-020 INC5**
+(device-only: wasmtime loader, `BrokerProvider`, stage-6 at-rest publishing, the full validate
+chain, `scripts\test007.bat` live acceptance) on a ≥ 2 GB host.
+
+---
+
+## Previous bundle — operator UI rounds: rev 4 (2026-10-02), the cable-node / living-wells round
+
+**Rev 4 was `sparq-update-2026-10-02.zip` (operator round 4 of 2026-10-02 — a
+FULL-TREE pack, defect #94's remedy: it overlays any tree at git `871d725` or later and does not
+depend on a base the receiver might not have).** Excluded from the pack by rule: `.git/`,
+`target/`, `Cargo.lock` (regenerates on first build), `logs/`, `*.wav`, and `SYNC-STAMP.txt` —
+**the stamp does NOT ride in the pack** (rev-3 pattern): after applying, re-run
+`python tools\sync_check.py --write --sync sparq-round4-2026-10-02` on the machine that will own
+the tree; until then `scripts\build.bat` names the stamp mismatch in words, which is EXPECTED,
+not a failure. **Provenance:** round-4's code was lost with the sandbox that wrote it (only
+`ROUND4-HANDOFF.md` reached git); this pack is the REBUILD from that handoff on a clean clone,
+re-measured end to end on Linux/rustc 1.99.0 — see `CHECKLIST.md`'s round-4 paragraph for the
+three provenance notes (defect #95 pre-existing, mutation-hash baseline moved to
+`8143e1ddfd8fb261` on this box, and defect #96: the pack's `modules/out/main/sparqmod.toml` is
+a DECLARED RECONSTRUCTION — the #93 `out/`-drop trap re-struck the sealed tree and no byte-exact
+copy survived; rebuilt from its generated doc + the `OutMain` implementation, proven
+semantically identical at both layers, its stamp row moved while the fp did not).
+
+**Rev 4 is the operator's 15-item round** (table in `UI-CHANGES-PLAN.md`): **cable nodes** —
+hover ghost, tap-insert at identity (bit-identical render, audit smoke 54 pins it through the
+real gesture door), drag up/down = amp / left/right = offset (the audio offset inert by the DC
+rule), tap to remove, one undo per drag; the bridge gives them a voice (audio → invisible
+`util/gain`, cv → `set_cv_trim`, control → param-mod, mult-collapse composed affinely,
+event/data/spatial refused in words). **The executor adopts** (D1: unchanged nodes keep state
+and allocations across a hotswap — adding a module while playing no longer rebuilds the world).
+**The wells came alive**: clock division rings, seq walking lights, rand step bars (seed pinned
+in both crates), the quantizer's 12-key keyboard with Custom-mode taps, the rms rolling graph,
+the master's latched CLIP LED, the svf curve moving under its cv, the mult strip at quarter
+width. **Three new modules** — `fx/fold`, `util/quant`, `mod/rand` — plus clk `phase`, seq
+`step`, rms `slew`, delay `sync`: the first-party set is **24**, `module_docs` 24/24. **Tokens by
+ruling**: event cables SOLID (D9; control wires stay dashed — mockup-review findings 25–26) and
+ports float 6 px (D10). Gates: **899 tests (+1 ignored)**, goldens untouched
+(`ba577186c988db21`, selftest 9/9, the three pinned exec renders exact), every runnable clippy
+cell clean, every python gate, `ui --audit` **PASS, 0 failures, 59 [PASS] lines**,
+`modules --strict` 24/24, `sync_check` OK at **162 files, `src 96f/2694477B`**. One declared
+OWED piece: the dropdown picker (item 11's inspector list-picker). One declared defect: **#95**
+(pre-existing ui-live glide-lag test; the ui-feature cell reads 28/1).
+
+**Rev 4 namelist** (49 paths vs git `871d725`; the pack carries the whole tree, this names what
+moved): `crates/sparq-audio/src/{executor,engine,modules}.rs` ·
+`crates/sparq-audio/tests/{executor,mixer_cv,r4_modules,r4_new_modules}.rs` ·
+`crates/sparq-kernel/src/sync/hotswap.rs` ·
+`crates/sparq-ui/src/canvas/{model,layout,interact,inset,levels,mod}.rs` ·
+`crates/sparq-app/src/bridge.rs` · `crates/sparq-app/src/ui/{canvas_ui,shell_ui,live,headless}.rs`
+· `crates/sparq-app/tests/r3_controls.rs` · `modules/{fx/fold,util/quant,mod/rand}/sparqmod.toml`
+(new) + bumped `modules/{ana/rms,mod/clk,mod/seq,util/delay,util/vca}/sparqmod.toml` ·
+`docs/modules/` (8 regenerated: ana-rms, fx-fold, mod-clk, mod-rand, mod-seq, util-delay,
+util-quant, util-vca) · `design/tokens/{colors,layout}.toml` + `generated/{tokens.rs,json,css}` +
+`preview.html` · `docs/ui/gestures.md` (§4f, §6 event row, §7 round-4 list) ·
+`design/mockups/mockup-review.md` (findings 25–26) · `scripts/test006.bat` (steps L–U, counts
+moved) · `CHECKLIST.md` · `SYNC.md` · `README.md` · `UI-CHANGES-PLAN.md` (round-4 sheet) ·
+`ROUND4-HANDOFF.md` (§0–§0e session record) · `SYNC-STAMP.txt` (re-stamped, NOT in the pack).
+
+**THE ASK, round 4:** run `scripts\test006.bat` on SATURN — the new steps **L–U** are the
+operator's eyes and ears: the clip LED on a hot render, the clock wheel turning under PLAY, the
+seq/rand walking lights, the quantizer keyboard (Custom tap flips, preset tap refuses in words),
+the cable node under a real finger (silent insert, audible amp drag, inert audio offset,
+tap-remove, one undo), the mult strip, `vca` taking the lfo wire (the tremolo), `fold`'s bloom,
+the rms graph + the svf curve moving, and the round-4 chrome (solid events, dashed controls,
+6 px ports). Send back `test006-digest.log` + `logs\ui-digest.log`.
+
+---
+
+## Previous bundle — operator UI rounds 2026-10-01 (rev 3, the control-wire / junction-bus round)
+
+**Rev 3 was `sparq-update-2026-10-01.zip` (rounds 1+2+3 of 2026-10-01, overlay
+pack; NO patch base this rev — the sandbox lost its `.git` in a reset, so rev 3 is the file set,
+not a diff; revs 1–2 patches remain valid for trees at those states).** It stacks on
+`sync-wo014-inc7c.zip` (applied). Extract at the repo root, overwriting; the pack is
+workspace-relative and touches nothing else. **The stamp does NOT move from the sandbox:**
+`SYNC-STAMP.txt` still reads `sync sync-wo014-inc7c` / `fp 96f/2381733B` and the pack carries no
+stamp — it is the cross-machine contract, so re-run `python tools/sync_check.py --write` on the
+source machine after applying. Session-start discipline: `scripts\build.bat` will print the 24
+changed filenames before cargo — that report is EXPECTED, not a failure. **One manifest moved:**
+`syn/sine`'s frequency range is now 0.1 Hz – 10 kHz (operator ruling), so its sha moves and
+`docs/modules/syn-sine.md` was regenerated — `module_docs --check` reads 17/17 matched.
+
+**Rev 3 adds the third operator list:** control wires into every float parameter (small blue
+sink dots in flight, dashed control wires, executor param-mod plan at one block of latency,
+verdicts in words); `util/mult` the six-dot junction bus (role/type by first connection, one
+source, bridge-collapsed); `util/vca`; the sequencer's sixteen step buttons; the scope accepting
+any source class with the trace in the source's colour (audio outputs now publish waveforms on
+the analysis ring); the 100 % zoom ceiling (`zoom_max` 1.0). First-party set **21 modules**,
+`module_docs` 21/21. Gates: **832 tests (+1 ignored)**, goldens untouched, every runnable clippy
+cell, every python gate, `ui --audit` PASS 0 failures with two new round-3 smokes (the bus
+collapses and lights; the control wire applies).
+
+**Rev 2 added the second operator list:** sine/polyblep at 10 Hz – 10 kHz; the clock family —
+`mod/clk` (tempo clock, 4th/8th/16th/32nd trigger outs, sample-accurate grids, tempo edits
+re-space from the next tick) and `mod/seq` (3–16 step trigger sequencer, bitmask fires at the
+input event's sample) — taking the set to **19 modules** (`module_docs` 19/19); multi-choice ints
+(3…8) as button rows; the card-slider capture dead-zone fix; zoom-relative card content; the
+Main Out band's char-boundary clip + composed-to-fit second line + stereo main in; the lfo well
+in control blue; and delete-with-splice (one Batch, one undo, verdict-checked splices). Gates:
+**825 tests (+1 ignored)**, goldens untouched, every runnable clippy cell, every python gate,
+`ui --audit` PASS 0 failures; five new clock/seq gate tests pin exact tick lists and zero
+allocations in `process`.
+
+What round 1 is, in one breath: the operator's UI list, each item in the compute-then-draw
+discipline — log-mapped Hz sliders (the sine follows the mouse), ports floating 4 px beside the
+window with covered-is-untouchable hit-testing, 2 px stripes, a WHITE selection (the token set's
+one documented pure-white exemption), 32 px library tiles under per-group toggle switches, toggle
+buttons for binary settings, the right-edge IN/OUT strip gone, `out/main` permanent and reading
+the negotiated driver truth on its own info band, a 160 px scope screen with graticule and
+measurements, and the mouse hand's bindings (wheel = canvas zoom, right-drag = pan, DEL = delete
+the selection). `docs/ui/gestures.md` carries the rules (2b, 3c, 3d, 4c, 4e); the round's
+screenshots live in `docs/ui/shots/`.
+
+**Measured:** 818 tests (+10, +1 ignored) · goldens bit-identical (`ba577186c988db21` — the DSP
+never moved) · selftest 9/9 · every clippy cell runnable in the sandbox (workspace, `ui`,
+`ui-window`, `bootstrap-audio`) · every python gate · `ui --audit` PASS, 0 failures — the 5
+viewport × 4 DPI matrix and all 41 smoke checks (same count as inc7c; smokes 12, 17, 36, 45 and 50
+were RE-POINTED at the new behaviour, none removed).
+
+**THE ASK, two lines:** wheel-zoom and right-drag pan with the real mouse on SATURN; and one fast
+trim drag to hear that the toggle/log-map edits still glide.
+
+---
+
+## Previous bundle — WO-014 increment 7c (the one-pole glide: the fast-drag bumps, dead)
+
+**Current bundle: `sync-wo014-inc7c.zip` (11 entries, listed below).** It stacks on
+`sync-wo014-inc7b.zip` (applied). Extract at the repo root `Q:\morphosis\code\sparq`,
+overwriting. No drift-repair copy step. No device contract moves. Gate numbers: tests stay
+**808** (the sweep gate replaced the 7b geometry gate; the gain unit test was rewritten to the
+glide contract), smokes stay **50** (live smoke 27 now pumps past two glide taus — the lag is
+declared, not hidden), the stamp moves.
+
+**The stamp changes: see `SYNC-STAMP.txt`** (same **155-file** covered set, new byte count —
+`core.rs`, `modules.rs`, `param_ramp.rs`, `headless.rs` moved). `Cargo.lock` stays SOFT and is
+NOT in the zip. No manifest moved — 17/17.
+
+## What this is
+
+Your third ear-report named the shape error exactly: bumps under a FAST drag. The 7b ramp was
+continuous but staircase-shaped — it reached each snapshot's target in one block (1.3 ms) and
+held until the next UI snapshot (~16 ms), so a quick fader move produced sharp kinks at the
+update rate. Kinks at 60 Hz are bumps.
+
+The ramp is now a **one-pole glide** (`dsp::core::glide`, tau = `GLIDE_TAU_MS` = 25 ms): the
+coefficient chases the moving target every sample (per frame on the multi-channel modules —
+channel count still cannot change how far a glide travels, 7b's fix stands inside this one).
+The envelope is smooth inside every block and continuous across every boundary; you get a
+motorised-fader feel (~25 ms of lag, declared) instead of a staircase. A **snap at −80 dB**
+lands settled edits EXACTLY on the target, so settled and static renders are the constant
+multiply again — every checked-in golden stays bit-exact, and the first-block prime rule is
+unchanged. Mute still cuts in exact zeros immediately.
+
+The new gate drives a faster-than-any-hand drag (trim 1.0 → 0.0, one edit per block) and
+asserts: no boundary jump beyond the signal's own slope anywhere in the sweep; block peaks fall
+monotonically (no overshoot, no snap-back); both channels of every frame share one coefficient;
+settled at zero the output is exact silence. On the staircase code the boundary jumps and the
+hold-then-jump envelope fail it.
+
+**Measured:** 808 tests (+1 ignored) · release goldens bit-identical (`ba577186c988db21`,
+`dd975a24f03b19c1`, stress `7bb06379bd6845e5`) · selftest 9/9 · 17/17 · 434.8× realtime · every
+clippy cell runnable in the sandbox · 5 python gates · `ui --audit` PASS, 50 smokes.
+
+**THE ASK, one line:** drag the trim FAST again. The staircase kinks were the bumps; the glide
+has none. Then, stage time permitting: test004 attempt 4 (still the WO-006 acceptance; the
+ADR-008 exit stays unfired) and the gates digest at 808 / the stamp below.
+
+**Waiting:** this bundle only.
+Applied chain (newest first): `sync-wo014-inc7b.zip` (9), `sync-wo014-inc7.zip` (12),
+`sync-wo012-inc6.zip` (27), `sync-wo012-inc5c.zip` (16), `sync-wo012-inc5b.zip` (21),
+`sync-wo012-inc5.zip` (24), `sync-wo012-inc4.zip` (23, operator-confirmed: PLAY makes sound),
+`sync-wo012-inc3.zip` (24), `sync-wo013-inc6.zip` (16), `sync-wo012-inc2.zip` (20),
+`sync-wo008-inc7.zip` (17) — all operator-reported APPLIED — then `sync-wo006-inc15.zip` (15),
+`sync-wo006-inc14.zip` (15), `sync-wo008-inc6.zip` (17), `sync-wo014-inc6.zip` (13),
+`sync-wo013-inc5.zip` (20), `sync-wo014-inc5+wo013-inc4.zip` (29), `sync-wo008-inc5.zip` (22),
+`sync-wo014-inc4.zip` (12), `sync-wo009-inc1.zip` (26), `sync-wo014-inc3.zip` (19),
+`sync-wo008-inc4.zip` (38), `sync-wo014-inc2.zip` (29), `sync-wo008-inc3.zip` (15),
+`sync-wo006-inc13.zip` (10), `sync-wo013-inc3.zip` (19), `sync-wo013-inc2b.zip`, `sync-p1c.zip`,
+`sync-p1b.zip`, `sync-p1-fixes.zip`, `sync-wo007-complete.zip`, `sync-wo007-task1.zip`,
+`sync-wo012-inc1.zip`, `sync-wo006-inc11g.zip`.
+
+## Namelist
+
+```
+CHECKLIST.md
+EXTRACT-AT-REPO-ROOT.txt
+README.md
+SYNC-STAMP.txt
+SYNC.md
+WO014-INC7-PLAN.md
+crates/sparq-app/src/ui/headless.rs
+crates/sparq-audio/src/dsp/core.rs
+crates/sparq-audio/src/modules.rs
+crates/sparq-audio/tests/param_ramp.rs
+tools/log_check.py
+```
+
 
 **Current bundle: `sparq-update-2026-10-06-wo020-inc4.zip` (a FULL-TREE pack, 471 entries —
 defect #94's remedy stands: it overlays any tree at or after `sparq-update-2026-10-05-r8.zip` /

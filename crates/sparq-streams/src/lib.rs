@@ -19,14 +19,16 @@
 //! * **default (no features):** the hermetic, dependency-free core — the data model ([`record`],
 //!   [`schema`]), the [`registry`] (parsed with sparq-module-api's TOML subset, no serde), and the
 //!   [`window`]s + stale policy. This is real, tested content, not an empty crate (ADR-000).
-//! * **`streams`:** adds the one third-party dependency (`serde_json`) and with it the JSON/GeoJSON/
-//!   CSV [`normalize`]rs, the disk [`cache`] and fixture [`replay`]. Everything the sandbox can
-//!   prove lives here; the app's `sparq streams` verbs and the 23 per-stream normalizer tests ride
-//!   this feature.
-//! * **`streams-net`:** the live transport (`ureq` + TLS + `fetch.rs`). Declared so the feature
-//!   surface and the CLI's refusals are stable, but the transport itself is the *device* increment
-//!   (plan INC5) — it is not in this crate yet, so until it lands every network verb refuses in
-//!   words rather than pretending to reach the network.
+//! * **`streams`:** adds the first third-party dependency (`serde_json`) and with it the
+//!   JSON/GeoJSON/CSV [`normalize`]rs, the disk [`cache`], fixture [`replay`], the live fetch path
+//!   ([`fetch`]: endpoint fill, the transport seam, the retry policy) and the broker's scheduling
+//!   core ([`broker`]: cadence floors, replace-vs-accumulate windows, last-good seeding). All of
+//!   it hermetic — tests drive the flow through injected transports and clocks.
+//! * **`streams-net`:** the live edge (INC5, landed): `fetch`'s [`HttpTransport`](fetch::HttpTransport)
+//!   (`ureq` + rustls + webpki-roots) and the plane's ONLY two impure helpers —
+//!   [`now_unix`](fetch::now_unix) and [`sleep_millis`](fetch::sleep_millis). Without it every
+//!   network verb still refuses in words; with it the refusals are replaced by real fetches and
+//!   the same hermetic core does the thinking.
 //!
 //! # No clocks, no sockets, no panics in the core
 //!
@@ -43,7 +45,11 @@ pub mod time;
 pub mod window;
 
 #[cfg(feature = "streams")]
+pub mod broker;
+#[cfg(feature = "streams")]
 pub mod cache;
+#[cfg(feature = "streams")]
+pub mod fetch;
 #[cfg(feature = "streams")]
 pub mod normalize;
 #[cfg(feature = "streams")]

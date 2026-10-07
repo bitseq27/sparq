@@ -66,6 +66,16 @@ call :run "rustfmt"            "cargo fmt --all --check"
 call :run "clippy default"     "cargo clippy --workspace --all-targets -- -D warnings"
 call :run "clippy audio+hal"    "cargo clippy -p sparq-app --features bootstrap-audio,hal-wasapi --all-targets -- -D warnings"
 call :run "tests"              "cargo test --workspace"
+REM WO-020 INC5: the runtime half's cells. wasmtime needs the >= 2 GB host (docs/instrument-host.md
+REM S8 - the 1 GB sandbox OOMs in cranelift-codegen, measured); on SATURN these are ordinary
+REM compiles. The stream-plane cells cover both halves: `streams` (hermetic) and `streams-net`
+REM (ureq + rustls, the live transport). Live-network TESTS stay #[ignore]d - test007's probe is
+REM the deliberate live face.
+call :run "clippy instrument-host" "cargo clippy -p sparq-host-wasm --features instrument-host --all-targets -- -D warnings"
+call :run "tests instrument-host"  "cargo test -p sparq-host-wasm --features instrument-host"
+call :run "clippy stream plane"    "cargo clippy -p sparq-streams --features streams-net --all-targets -- -D warnings"
+call :run "tests stream plane"     "cargo test -p sparq-streams --features streams,streams-net"
+call :run "clippy app streams"     "cargo clippy -p sparq-app --features streams,streams-net --all-targets -- -D warnings"
 call :run "golden reference"   "cargo test --release -p sparq-audio --test golden"
 call :run "release build"      "cargo build --release -p sparq-app --features bootstrap-audio,hal-wasapi,ui-window"
 REM Version stamp + selftest belong in this log: tools/log_check.py reads the stamp, the

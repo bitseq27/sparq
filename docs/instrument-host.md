@@ -1,7 +1,10 @@
 # The instrument host — WO-018 design record
 
-**Status:** the zero-dependency half is BUILT and gated (this tree); the runtime half is DESIGNED
-here and awaits a build environment (§8 records why, and the retry recipe). **Companions:**
+**Status:** the zero-dependency half is BUILT and gated (this tree); the runtime half is BUILT
+against the pinned wasmtime's vendored API (WO-020 INC5 slice 2, `crates/sparq-host-wasm/src/runtime/`)
+and awaits its first COMPILE on a ≥ 2 GB host (§8 records why the sandbox cannot; the retry recipe
+is now `scripts\test007.bat` + the CI feature-on cells). Where this document and the code could
+drift, this document wins and the code is the defect. **Companions:**
 `MODULE-BUILD-GUIDE.md` (the author-facing text this implements) · `docs/adr/010-instrument-layer.md`
 (the decision) · `docs/api/instrument-wit/README.md` (the frozen ABI, incl. the two debts this
 file closes) · `WO018-STATE.md` / `ROUND7-HANDOFF.md` (the round records).
