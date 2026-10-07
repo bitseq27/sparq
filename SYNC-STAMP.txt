@@ -10,9 +10,9 @@
 # bury the one line that matters. `fp` mirrors build.rs and build.bat - all three must change
 # together (defect #68).
 
-sync sparq-wo020-inc5r6-2026-10-07
+sync sparq-wo020-inc5r7-2026-10-07
 sent unsent
-fp 103f/2942674B
+fp 103f/2948000B
 
 b25c47db9424de9e46b61b759dab69676281a653e338eff0f7ad17f504e376dd 124575 Cargo.lock
 8facba248ee8abfda8ad914bf4c6ab11215c6dd814e853ff6a4cdef4dd64c613 7222 Cargo.toml
@@ -38,7 +38,7 @@ ba767789e5a86c1f9894dced45a723bf1d025b30d376b0b7d600edb7aff3454b 29023 crates/sp
 b1be3a99b87806ec28d0db29b0f14eddc01595ff822ae83f6df8799f3903e786 12808 crates/sparq-app/src/ui/adapter.rs
 cdadcf017d2336eeaaa6566117b7f75aa2b5d7e3054d9708e81e94691302c8ef 7217 crates/sparq-app/src/ui/atrest.rs
 67573f6f74e6d6ad75babf1ad9cbe75901c21d2dd99e06732aa1025d20dbb27d 102771 crates/sparq-app/src/ui/canvas_ui.rs
-847df306fd0aa4bb2045b1ed48ef8407ed02e5a03f5d370018e4232b55376db0 11948 crates/sparq-app/src/ui/displaylist_egui.rs
+0445be97df08e82aeb86ae14065a322cdcee7a43253af1fd317eb9e55fc2f071 17274 crates/sparq-app/src/ui/displaylist_egui.rs
 d3212dc0bc99083fac233c40636a308dc6e13f109f591c6d5f7cf20f72c960be 144294 crates/sparq-app/src/ui/headless.rs
 5f63f916d9db5bcc3ed63c600ba3b077a612bf4689f28311a987f5bf27b2650c 57887 crates/sparq-app/src/ui/live.rs
 403365373e7d9cb36d6dbc723be3b671be70753ebeacf705c3bd3006be0ba54e 4225 crates/sparq-app/src/ui/mod.rs
@@ -172,7 +172,7 @@ f5793a64da7cea947026d28d2a54c6ed896cae4a2859ede7bc482d47f18069aa 7426 scripts/te
 ac1a868023618bbbd4c152d42eaac80edefc59fe1817c0a9cb0877b6687e7ebd 15580 scripts/test004.bat
 7d413b7740ccdaba45216968b59d69440712100dd4b2e137ad85f8ee3e3313e3 8058 scripts/test005.bat
 fc2331fa9f4e19912ed3ec4897413077b7d7173b2e098aa90a716a1f9e0942f2 19079 scripts/test006.bat
-d63ea05ca08600b25914e364db3921ee605723c4a041b6f7fa1d8e5a4f01feb1 6308 scripts/test007.bat
+9c20e58fe16ac0bcc3bed5394ff5b9ad97d899a8d63e969030820b76a67adf8b 6308 scripts/test007.bat
 77bb4b0473daa032032c6330f0a4ccc49311a8a8ebf29fb4ec64d8c016747965 2089 scripts/ui.bat
 716c1f6c41af12740edf30decd4eba1a894703612d7bd5bf46048091948175ac 3898 scripts/verify.bat
 cb43f5b0b03d0f7cc73c977bf9cd3d661342201da5394817f1e5955fb48a7043 11184 tools/check_text_io.py

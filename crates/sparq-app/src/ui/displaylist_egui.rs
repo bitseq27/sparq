@@ -218,30 +218,44 @@ fn rect_loop(r: egui::Rect) -> Vec<Pos2> {
 }
 
 /// Decomposes a polyline into dash segments of `on` px separated by `off` px gaps.
+///
+/// The walk computes in f64 (defect #97). In f32 it stalled at almost every band scale: the
+/// per-step rounding drift parks `phase` within an ulp of a dash boundary — `on * z` and
+/// `(on + off) * z` are different roundings of the same product — where `at + (on - phase)`
+/// rounds back to `at` and the step stops advancing. The dash branch then pushed zero-length
+/// segments until the process was killed for memory; the gap branch spun with the UI thread
+/// frozen and nothing to show for it. At the toolbar's zoom values EVERY dotted hairline of the
+/// Observatory's at-rest wall hit this at once — one press of − from the 100 % default (the one
+/// scale where 1/4/5 happen to be exact binary) hung the shell. In f64 the drift is
+/// sub-femtopixel over any line the wall can draw; the totality guard below makes termination
+/// independent of even that: a step that fails to advance `at` ends the run, and what it drops
+/// is less than a representable pixel-step of ink.
 fn dash_segments(pts: &[Pos2], on: f32, off: f32) -> Vec<(Pos2, Pos2)> {
     let mut out = Vec::new();
+    let (on, off) = (f64::from(on), f64::from(off));
     let cycle = on + off;
-    if cycle <= 0.0 {
-        return out;
+    if cycle.is_nan() || cycle <= 0.0 {
+        return out; // a NaN or non-positive cycle has no honest dash to measure out
     }
-    let mut carried = 0.0f32; // distance into the current cycle at the start of this segment
+    let mut carried = 0.0f64; // distance into the current cycle at the start of this segment
     for w in pts.windows(2) {
         let (a, b) = (w[0], w[1]);
-        let len = a.distance(b);
-        if len <= f32::EPSILON {
+        let len_px = a.distance(b);
+        if len_px <= f32::EPSILON {
             continue;
         }
-        let dir = (b - a) / len;
-        let mut at = 0.0f32;
+        let (len, dir) = (f64::from(len_px), (b - a) / len_px);
+        let mut at = 0.0f64;
         while at < len {
             let phase = (carried + at) % cycle;
-            if phase < on {
+            let next = if phase < on {
                 let stop = (at + (on - phase)).min(len);
-                out.push((a + dir * at, a + dir * stop));
-                at = stop;
+                out.push((a + dir * at as f32, a + dir * stop as f32));
+                stop
             } else {
-                at += (cycle - phase).min(len - at);
-            }
+                at + (cycle - phase).min(len - at)
+            };
+            at = if next > at { next } else { len }; // #97's guard: the walk always ends
         }
         carried = (carried + len) % cycle;
     }
@@ -252,6 +266,9 @@ fn dash_segments(pts: &[Pos2], on: f32, off: f32) -> Vec<(Pos2, Pos2)> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
+    use sparq_ui::tokens::{
+        LAYOUT_CANVAS_ZOOM_DEFAULT, LAYOUT_CANVAS_ZOOM_MAX, LAYOUT_CANVAS_ZOOM_MIN,
+    };
 
     #[test]
     fn dash_segments_cover_the_on_runs_of_a_straight_line() {
@@ -280,5 +297,83 @@ mod tests {
         let sub = vec![Seg::Line(0.0, 0.0), Seg::Line(4.0, 0.0), Seg::Line(0.0, 4.0)];
         let pts = flatten(&sub, true);
         assert_eq!(pts.first(), pts.last());
+    }
+
+    /// The zoom values the toolbar's −/+ buttons actually land on: f32 steps of ×1.2 and
+    /// ×(1/1.2) from the token default, clamped to the token band. Written out because the
+    /// defect lives in the exact bit patterns, and a rounded decimal would hide it.
+    fn toolbar_zoom_values() -> Vec<f32> {
+        let mut zs = vec![LAYOUT_CANVAS_ZOOM_DEFAULT];
+        let mut z = LAYOUT_CANVAS_ZOOM_DEFAULT;
+        for _ in 0..8 {
+            z = (z * (1.0f32 / 1.2)).max(LAYOUT_CANVAS_ZOOM_MIN);
+            zs.push(z);
+        }
+        let mut z = LAYOUT_CANVAS_ZOOM_MIN;
+        for _ in 0..8 {
+            z = (z * 1.2).min(LAYOUT_CANVAS_ZOOM_MAX);
+            zs.push(z);
+        }
+        zs
+    }
+
+    #[test]
+    fn dash_segments_terminate_at_every_toolbar_zoom() {
+        // Defect #97: the OLD f32 walk stalled on EVERY one of these zoom values except the
+        // 1.0 default (where 1/4/5 happen to be exact binary). Rounding drift put `phase`
+        // within an ulp of a dash boundary, the advance rounded back to `at`, and the loop
+        // either grew the segment list without bound or spun — so one press of the toolbar's
+        // zoom button with an instrument band painted hung the shell. All 130 dotted hairlines
+        // of the Observatory's at-rest wall hit it at once.
+        //
+        // A stall is a HANG, not a wrong number, so this test asserts the walk's own invariant:
+        // it must return, and return the dash run an exact-arithmetic walk would. The dotted
+        // metrics are the display list's (`dash_pair(Dotted)` × the band scale); the run length
+        // is the Observatory's longest dotted hairline (196 logical px of graticule).
+        for z in toolbar_zoom_values() {
+            if z < 0.3 {
+                continue; // below the band's paint floor: never decomposed
+            }
+            let (on, off) = (1.0f32 * z, 4.0f32 * z);
+            let run = 196.0f32 * z;
+            let pts = vec![Pos2::new(0.0, 0.0), Pos2::new(run, 0.0)];
+            let segs = dash_segments(&pts, on, off);
+
+            let ink: f32 = segs.iter().map(|(p, q)| p.distance(*q)).sum();
+            let want = run * on / (on + off);
+            assert!(
+                (ink - want).abs() <= on * 1.5,
+                "z={z}: ink {ink} vs {want} over {} segment(s)",
+                segs.len()
+            );
+            // Ordered, in bounds, and no zero-length dashes (a stalled walk emits millions).
+            let mut last = 0.0f32;
+            for (p, q) in &segs {
+                assert!(q.x > p.x, "z={z}: a dash with no ink");
+                assert!(p.x >= last - 1e-3, "z={z}: dashes out of order");
+                assert!(q.x <= run + 1e-3, "z={z}: a dash past the run's end");
+                last = q.x;
+            }
+            assert!(segs.len() <= (run / (on + off)).ceil() as usize + 1, "z={z}: too many dashes");
+        }
+    }
+
+    #[test]
+    fn dash_segments_carry_the_phase_across_a_multi_segment_run() {
+        // The quieter face of #97: the gap branch stalled too, with NO memory growth — a
+        // frozen thread and nothing to show for it. A stair-step polyline (the graticule's
+        // shape) at the first zoom-out value must come back with a sane ink share.
+        let z = LAYOUT_CANVAS_ZOOM_DEFAULT * (1.0f32 / 1.2);
+        let (on, off) = (1.0f32 * z, 4.0f32 * z);
+        let pts: Vec<Pos2> = (0..64)
+            .map(|i| Pos2::new(3.7 * i as f32 * z, (5.0 + 41.0 * ((i % 7) + 1) as f32) * z))
+            .collect();
+        let segs = dash_segments(&pts, on, off);
+        assert!(!segs.is_empty(), "a dotted multi-segment run emits dashes");
+
+        let total: f32 = pts.windows(2).map(|w| w[0].distance(w[1])).sum();
+        let ink: f32 = segs.iter().map(|(p, q)| p.distance(*q)).sum();
+        let want = total * on / (on + off);
+        assert!((ink - want).abs() <= on * 2.0 * 64.0, "ink {ink} vs {want}");
     }
 }

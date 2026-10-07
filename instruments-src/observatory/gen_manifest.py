@@ -303,7 +303,12 @@ def gen_manifest(rows: list[dict]) -> str:
     w("[capabilities]")
     w("fs_read = []")
     w('network = "none"  # the broker is host-side (D3); the T2 world has no network door')
-    w("max_fuel = 2_000_000")
+    # 32M, not the plan §5.8's 2M: the device MEASURED one full-wall draw at 12 707 802 fuel
+    # (2026-10-07, SATURN, stage 5). §5.8's own words were "fuel is essentially all `draw`",
+    # declared before any runtime existed to meter it; a 2M cap traps every real draw. Operator
+    # ruling 2026-10-07 (defect #98): ceilings move up only with a measurement, and this one has
+    # ~2.5x of headroom for a wall whose cells are all live. process stays cheap (9 260 measured).
+    w("max_fuel = 32_000_000")
     w("max_memory_mb = 64")
     w("")
     w("[distribution]")

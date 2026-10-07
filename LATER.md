@@ -468,6 +468,29 @@ watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the det
   `ShellUi::new` when the directory is absent or a package skips (`from_manifest_text` → None is
   the second silent `continue`). First fix of INC5b, measured repro in the sandbox (root CWD:
   observatory in the convergence SVG ×2; any other CWD: ×0).
+* **Parked by session 7 (2026-10-07, defect #98's standing lesson): a golden re-pin must FORCE a
+  component rebuild.** The INC4 `cell_ground` fix moved the core and re-pinned the harness golden,
+  and nothing in the tree noticed that `instruments/observatory/observatory.wasm` still carried
+  the pre-fix logic — the device gate caught it, which is the catch working, but a round-trip to
+  SATURN is an expensive tripwire. Candidates: the packager embeds the source-tree fingerprint it
+  was built from (a custom section or the README's build line) and `sparq mod validate` stage 2
+  compares it against `instruments-src/` (refuse in words on drift); or `observatory_package.py`
+  gains `--build` and the house rule becomes "the package is only ever assembled by the tool that
+  just built the component". Ruling needed on which door owns the freshness proof.
+* **Parked by session 7: the two budget vocabularies are not aligned for wall-class instruments.**
+  `gpu_class = medium` admits 262 144 vertices / 16 384 instances / 65 536 heat cells; the
+  Observatory's fixture wall (~22 k / ~0.5 k / ~16 k) draws at 12.7 M fuel — linearly, a wall that
+  FILLS the medium ceilings could want >100 M fuel, past any sane `max_fuel`. Today the mismatch
+  is latent (the Observatory's renderers bound themselves below the ceilings); when WO-021+ types
+  the draw budget or a third-party wall-class instrument arrives, either the ceilings become a
+  fuel predictor or `max_fuel` grows a per-call draw face. The re-baseline ruling (32 M) is
+  recorded against the MEASUREMENT, not the ceilings — keep the two numbers' relationship in view.
+* **Parked by session 7: device-generated package artefacts must not ride sync-backs unprovenanced.**
+  The stale `preview.svg` in git was the device's stage-6 output from the stale component — a
+  generated artefact synced back beside the sources, with nothing recording which component bytes
+  produced it. The r7 pack drops it (stage 6 regenerates on every validate). If a preview ever
+  ships checked-in again, it ships with the component sha it was rendered from (the README's build
+  line is the natural home), or not at all.
 
 > **Status after the INC5 sandbox session:** the `BrokerProvider` door below is DISCHARGED (slice
 > 1: the live provider behind the same trait, tested hermetically + a real 22/23 live probe).
@@ -477,7 +500,10 @@ watchdog (N consecutive overruns ⇒ auto-bypass + bounded journal), and the det
 > built; what remains is **INC5b — the launch wiring**: discovery → registration at launch, PLAY
 > #58's discharge (the executor adopting `WasmInstrument`), and the shell's live-provider swap
 > (a BrokerProvider driver thread in `ui/live.rs`). Until then PLAY still refuses in words and
-> test007's E/F run against the at-rest wall.
+> test007's E/F run against the at-rest wall. **SUPERSEDED 2026-10-07: the operator's window
+> report commissioned `WO020-INC6-PLAN.md` — the launch wiring is its slice S4, and this door's
+> three named parts are discharged there (with the card controls, the resizable window, the key
+> field and the per-panel poll rates the same report asked for).**
 
 
 * **The wasm loader (PLAY's refusal).** A canvas may now CARRY an instrument node (the browser

@@ -347,6 +347,17 @@ pub fn golden_stage(pkg: &crate::package::Package, ctx: &RuntimeContext) -> Stag
         lod: display::Lod::Full,
         time_sec: 0.0, // the pinned animation phase — a golden with a moving ticker is no golden
     };
+    // The warm-up draw (defect #99): wasmtime meters `memory.grow` per page, so the FIRST draw
+    // of a fresh load pays the cold heap — the guest's allocator grows linear memory for the
+    // items/strings of a full wall, and every later draw reuses that warm shape. Both numbers
+    // are deterministic (the device measured 12 707 802 for the first draw of TWO independent
+    // loads — smoke's and the golden's — and 12 401 514 for the second), but cold-against-warm
+    // is not "two identical runs": the fuel moved between run 1 and run 2 and failed the stage
+    // with the words for unseeded randomness, which was not the defect. Warm the heap once,
+    // discard the surface, then measure the pair — the steady state a frame loop actually lives in.
+    let _ = loaded
+        .display
+        .budget_call(draw_diagnostic_budget(loaded.caps.max_fuel), |s, g| g.call_draw(s, &frame));
     let mut hashes = Vec::new();
     let mut fuels = Vec::new();
     let mut items = 0usize;
@@ -386,7 +397,10 @@ pub fn golden_stage(pkg: &crate::package::Package, ctx: &RuntimeContext) -> Stag
             "runtime.golden",
             format!("{} / fuel {} vs {}", hashes[0], fuels[0], fuels[1]),
             "a golden render that moves between two identical runs is a determinism defect, not \
-             a statistic (instrument-host §3) — find the unseeded randomness or the clock read",
+             a statistic (instrument-host §3) — find the unseeded randomness or the clock read; \
+             if ONLY the fuel moved (the hashes agree), it is a first-call cost inside the guest — \
+             defect #99's class: the heap the first draw grows, which wasmtime meters per page — \
+             not randomness",
         ));
     }
     outcome(

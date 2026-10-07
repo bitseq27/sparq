@@ -1,4 +1,135 @@
-# Sync manifest — WO-020 INC5 slices 1–2: the stream plane live + the instrument runtime (2026-10-07)
+# Sync manifest — WO-020 INC5 r8: the session-8 records + the INC6 commission (2026-10-07)
+
+**Current bundle: `sparq-update-2026-10-07-wo020-inc5r8.zip` (a FULL-TREE pack, 489 entries —
+overlays any tree at or after the r7 pack; built on the published main `7ed2e08` + the
+session-7/8 commits + the r8 documents seal).** Excluded by the standing rule: `.git/`,
+`target/`, `Cargo.lock`, `logs/`, `*.wav`, `handoff/`, and `SYNC-STAMP.txt` — **the stamp does
+NOT ride**: if applied, re-run `python tools\sync_check.py --write --sync
+sparq-wo020-inc5r8-2026-10-07` on the machine that will own the tree. The zip's sha256 is in
+the delivery message and in `handoff/sha256sums-wo020-inc5r8.txt`. Provenance: sandbox `main`
+off the published `7ed2e08`; durable history in `handoff/sparq-wo020-inc5r8.bundle`
+(`7ed2e08..HEAD` at the documents seal, self-contained, `.sha256` sidecar — it supersedes the
+r7 and session-8 bundles, which stay committed as the increment record); packer
+`handoff/make_pack_wo020.py` (the reconstructed self-verifying gate).
+
+**What it carries — RECORDS, not behaviour:** the device session-8 lines recorded in
+`WO020-STATE.md` ([D] **GATE: PASS the whole chain** on r7: stage 4 `bdf59cdb…` ×2 bit-exact on
+component `4b29a5ae…`, the two runs' fuels EQUAL at 12 390 844 — #98/#99 device-proven; stage 5
+inside the ruled 32 000 000; [B] 20/23 + the two DEMO_KEY 429s; [H] p99 622 µs; the [K]
+cancellation named as a cancellation — every exit code `0xc000013a`, zero test failures), the
+**DEVICE-CONFIRMED clauses on ledger rows #97/#98/#99** (#97 by the operator's own words: "the
+zoom is working without OOM"), test007.bat's [C] echo corrected to the component the pack
+actually ships + the run sheet's do-not-cancel-[K] words, **`WO020-INC6-PLAN.md` — the
+operator's window report commissioned as the next increment** ("the live instrument": the four
+rulings O-1…O-4, D15–D20, slices S1–S5, superseding LATER.md's INC5b door), and **`RESUME.md`
+REWRITTEN as the current new-session prompt** (the 2026-09-22 resume was four work orders
+stale; git history keeps it).
+
+**Device application is OPTIONAL** — nothing here changes a compiled byte except test007.bat's
+echo text. The device stays correct at r7 + its own stamp; if r8 is applied, re-stamp r8. The
+device's outstanding list is unchanged: the [K] gates re-run (uninterrupted — the debug rebuild
++ wasmtime's debug compile is LONG, not hung), the [G]/[I] eyes + screenshots.
+
+**Namelist** (21 paths vs the r7 pack — 20 M / 1 A; the pack carries the whole tree, this names
+what moved; `handoff/` artefacts do not ride): `WO020-INC6-PLAN.md` (**A** — the commission) ·
+`RESUME.md` (rewritten) · `WO020-STATE.md`, `CHECKLIST.md`, `LATER.md`, `SYNC.md`,
+`WO020-INC5-RUN-SHEET.md` (the records) · `scripts/test007.bat` (the [C] words + the [0]
+remedy's stamp name).
+
+**THE ASK:** none on the device beyond its outstanding list. The next pack carries **INC6 slice
+S1 — the resizable instrument card** (O-1: drag-resizable, default half-size 1088×560 band,
+clamped ¼-face → the declared 2176×1120; undoable; audit-registered handle), built and gated in
+the sandbox before it ships.
+
+---
+
+## Previous bundle — WO-020 INC5 r7: the session-7 defect fixes (#97/#98/#99) + the max_fuel re-baseline (2026-10-07)
+
+**Current bundle: `sparq-update-2026-10-07-wo020-inc5r7.zip` (a FULL-TREE pack, 488 entries —
+overlays any tree at or after the r6 pack; built on the published main `7ed2e08` + the session-7
+commit + this delivery's documents commit).** Excluded by the standing rule: `.git/`, `target/`,
+`Cargo.lock`, `logs/`, `*.wav`, `handoff/`, and `SYNC-STAMP.txt` — **the stamp does NOT ride**:
+after applying, re-run `python tools\sync_check.py --write --sync sparq-wo020-inc5r7-2026-10-07`
+on the machine that will own the tree; until then `build.bat` / `test006`'s `[00b]` name the
+mismatch in words (EXPECTED). The zip's sha256 is in the delivery message and in
+`handoff/sha256sums-wo020-inc5r7.txt`. **Provenance:** sandbox `main` off the published
+`7ed2e08`; durable history in `handoff/sparq-wo020-inc5r7.bundle` (`7ed2e08..HEAD` at the
+documents seal, `.sha256` sidecar; prerequisite: any clone of the published main); packer
+`handoff/make_pack_wo020.py` — **RECONSTRUCTED this session** from the state card's description
+of the lost original (the #96 precedent; its header declares it), same gates: clean tree at
+pack time, the entry count asserted against this manifest and the run sheet, the MUST-NOT-MOVE
+surfaces diffed vs base, entry-by-entry zip↔tree hashes, the component's sha asserted inside.
+
+**ONE HAND-STEP ON APPLY:** delete `instruments\observatory\preview.svg` from the device tree —
+an overlay zip cannot delete, and this pack DELIBERATELY ships without it: the checked-in copy
+was the stale stage-6 sync-back from the OLD component (defect #98 — its bytes carry the
+ground-over-body order the INC4 fix moved under). Stage 6 regenerates the file from the fresh
+component at the next validate.
+
+**What it carries:** the session-7 defect trio + one operator ruling — evidence and reasoning in
+`WO020-STATE.md` (session 7) and the CHECKLIST ledger rows:
+* **#97 — the operator's report, "sparq becomes unstable when the zoom buttons are used while the
+  observatory is loaded."** `dash_segments` (the egui display-list painter) walked in f32 and
+  stalled at EVERY toolbar zoom except exactly 1.0: rounding drift parks `phase` within an ulp
+  of a dash boundary, the advance rounds back onto itself, and the shell either froze (gap
+  branch) or grew zero-length segments until the OOM killer took the process (dash branch —
+  reproduced: SIGKILL 3.5 s into the regression test on the old walk). All 130 dotted hairlines
+  of the at-rest wall hit at once at every painted ladder value (0.8333…, 0.6944…, 0.5787…,
+  0.4823…, 0.4019… down; 0.36, 0.432, 0.5184, 0.6221, 0.7465, 0.8958 up). Fixed: the walk
+  computes in f64 + a totality guard; two regression tests pin the exact ladder values (proven
+  failable). The SVG back end rides `stroke-dasharray` — no golden moves.
+* **#98 — stage 4's hash off the pin (`5acfc1e6…` ≠ `bdf59cdb…`): the checked-in
+  `observatory.wasm` (`3f775856…`) PREDATED INC4's `cell_ground` draw-order fix.** Repackaged
+  around the rebuilt component **`4b29a5ae…`, 206 316 B** (the documented recipe: rustc 1.99.0 +
+  wasm-tools 1.261.0); the manifest regenerated; the cross-boundary pin does NOT move —
+  `bdf59cdb…` is the current core, harness goldens green (6/6).
+* **#99 — stage 4's moved fuel (`12 707 802 vs 12 401 514`): the golden stage compared the
+  FIRST draw against the second — a cold heap against a warm one.** wasmtime meters
+  `memory.grow` per page; both numbers were fully deterministic (two independent loads each
+  burned exactly 12 707 802 on their first draw). Fixed: one discarded warm-up draw before the
+  measured pair; stage 5 KEEPS the cold draw on purpose (the declared budget's worst case); the
+  failure words name the fuel-only class.
+* **Ruling — `capabilities.max_fuel` 2 000 000 → 32 000 000**, operator ruling 2026-10-07, over
+  the device's own stage-5 measurement (draw 12 707 802 cold / 12 401 514 warm; process blocks
+  9 260; memory 1.2/3.2 MB of 64 MB) — recorded in `gen_manifest.py`, the package README and
+  WO020-STATE session 7.
+
+**Sandbox gates at the seal (MEASURED):** root **1034 / 0**; observatory workspace **124 / 0** +
+harness goldens **6/6** (the pin holds) + fmt + clippy clean; `sparq-app --features ui`
+**45 / 46** — the one red is the environment-sensitive `ui::live` level-follows test, which
+fails identically on the PRISTINE tree in this sandbox (a host fact, not this pack's); fmt
+clean; clippy `-D warnings` clean (default + ui cells); the python gates clean
+(`check_text_io`, `make_coastline --check`, `gen_manifest --check`). The `instrument-host` cell
+stays device-first-compile — the 1 GB wall re-confirmed from a third direction
+(`cranelift-assembler-x64` OOM); the `stages.rs` patch is desk-checked against the adjacent
+call patterns per the run sheet's §4 discipline. **The pre-existing red rides along:**
+`token_audit` vs the §18 mockup SVGs (on main before this pack).
+
+**Namelist** (15 paths vs git `7ed2e08` — 14 M / 1 D; the pack carries the whole tree, this
+names what moved; the `handoff/` artefacts do not ride):
+`crates/sparq-app/src/ui/displaylist_egui.rs` (#97) ·
+`crates/sparq-host-wasm/src/runtime/stages.rs` (#99) ·
+`instruments-src/observatory/{gen_manifest.py, package/sparqmod.toml, package/README.md}` (the
+re-baseline) · `instruments/observatory/{sparqmod.toml, README.md, observatory.wasm}` (the
+repackage; the component is `4b29a5ae…`) · `instruments/observatory/preview.svg` (**DELETED** —
+the stale sync-back; the hand-step above) · `scripts/test007.bat` (step [0]'s remedy word names
+the r7 re-stamp) · the records (`WO020-STATE.md`, `CHECKLIST.md`, `LATER.md`,
+`WO020-INC5-RUN-SHEET.md`, `SYNC.md`).
+
+**THE ASK — the operator's hands on SATURN:** apply → **delete the stale `preview.svg`** →
+re-stamp `sparq-wo020-inc5r7-2026-10-07` → `scripts\gates.bat` → `scripts\test007.bat`. [D]
+expects **GATE: COMPLETE + PASS**: stage 4's words `golden render ×2 bit-exact:
+bdf59cdb232f947091451017f50712a444687c8b1f0a62b5a630763775e974fa`, component `4b29a5ae…`, the
+two runs' fuels EQUAL (warm); stage 5 inside the declared 32 M class; stage 6 rewriting
+`preview.svg` (the package back to 5 of 5) + re-publishing the at-rest IR. [E/F] grew the zoom
+eyes: with the Observatory on the canvas, walk the −/+ ladder through every value — the shell
+must survive each and the graticules must stay dotted (#97's regression, by eye). Send back
+`logs\test007.log` + `test007-digest.log` + `logs\gates.log` + the stage-4/5 words + the zoom
+verdict.
+
+---
+
+## Previous bundle — WO-020 INC5 slices 1–2: the stream plane live + the instrument runtime (2026-10-07, r6)
 
 **Current bundle: `sparq-update-2026-10-07-wo020-inc5r6.zip` (a FULL-TREE pack, 485 entries —
 overlays any tree at or after the INC4 pack / git `96fe57d`; this session built on the

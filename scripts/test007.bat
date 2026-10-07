@@ -46,7 +46,7 @@ python tools\sync_check.py
 if errorlevel 1 (
     echo.
     echo  TEST007 REFUSED: the tree does not match SYNC-STAMP.txt. Re-stamp first:
-    echo      python tools\sync_check.py --write --sync sparq-wo020-inc5r6-2026-10-07
+    echo      python tools\sync_check.py --write --sync sparq-wo020-inc5r8-2026-10-07
     echo  ^(or, for a deliberate local edit: scripts\build.bat --skip-sync-check^)
     exit /b 1
 )
@@ -70,9 +70,10 @@ if errorlevel 1 set FAILED=!FAILED! B-probe-static
 
 echo.
 echo === [C] the sealed component is in the pack =================================
-echo   instruments\observatory\observatory.wasm ^(206 081 B, sha pinned in
-echo   WO020-STATE.md's INC3 record^). A device rebuild follows the STATE resume
-echo   recipe sec 5 - the guest workspace lockfile door is LATER.md's INC5 row.
+echo   instruments\observatory\observatory.wasm ^(206 316 B, sha 4b29a5ae... - the
+echo   session-7 rebuild carrying INC4's cell_ground fix, pinned in WO020-STATE.md's
+echo   session-7 record^). A device rebuild follows the STATE resume recipe sec 5 -
+echo   the guest workspace lockfile door is LATER.md's INC5 row.
 if not exist instruments\observatory\observatory.wasm (
     echo  MISSING: instruments\observatory\observatory.wasm
     set FAILED=!FAILED! C-component

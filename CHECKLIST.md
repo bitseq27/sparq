@@ -1957,6 +1957,68 @@ default** (that deletion is gated on this device run — do not do it early).
   session-start discipline in the environment notes below is what failed to happen this
   session; it stands), the pack carries the file, and the device's `gates.bat` re-proves it
   end to end after apply.
+- **#97 — REMEDIED (device report 2026-10-07, "sparq becomes unstable when the zoom buttons are
+  used while the observatory is loaded"; host-painter class): `dash_segments`'s f32 walk stalled
+  at EVERY toolbar zoom except exactly 1.0.** The egui display-list painter decomposes
+  dashed/dotted strokes into segments (the SVG back end rides `stroke-dasharray`, which is why no
+  headless gate ever saw it). Per-step f32 drift lands `phase` within an ulp of a boundary —
+  `on*z` and `(on+off)*z` are different roundings of the same products — where `at + (on-phase)`
+  rounds back to `at` and the walk stops advancing: the dash branch pushed zero-length segments
+  until the OOM killer took the process (reproduced: SIGKILL 3.5 s into the regression test on
+  the old walk), the gap branch spun with the UI thread frozen. An exact-f32 model over the real
+  at-rest geometry (130 dotted polylines out of `preview.svg`) hangs **130/130 at every painted
+  ÷1.2/×1.2 ladder value** (0.8333…, 0.6944…, 0.5787…, 0.4823…, 0.4019…, 0.36, 0.432, 0.5184,
+  0.6221, 0.7465, 0.8958); only z = 1.0 survives (1/4/5 are exact binary there) — the default
+  view is clean and the FIRST zoom click kills the shell. Fixed in
+  `crates/sparq-app/src/ui/displaylist_egui.rs`: the walk computes in f64 plus a totality guard
+  (a step that fails to advance ends the run; what it drops is sub-ulp ink). Two regression tests
+  pin the exact ladder values, proven failable per the house rule. No golden moves: the dash walk
+  is host-painter geometry, not IR. Cell measured: `sparq-app --features ui` 45/46 (the one red
+  is the environment-sensitive `ui::live` level-follows test, which fails identically on the
+  pristine tree in this sandbox). **DEVICE-CONFIRMED (session 8, r7, the operator's own words):
+  "the zoom is working without OOM" — the whole ladder, with the Observatory loaded.**
+- **#98 — REMEDIED (device gate log 2026-10-07, stage 4's hash `5acfc1e6…` ≠ the harness pin
+  `bdf59cdb…`; artefact-staleness class — the #78/#93 lineage): the checked-in
+  `instruments/observatory/observatory.wasm` (`3f775856…`, 206 081 B) PREDATED INC4's
+  `cell_ground` draw-order fix.** The core moved (ground → body → chrome, "caught by LOOKING at
+  the render"), the harness golden re-pinned to `bdf59cdb…`, and the component was never rebuilt
+  — the device faithfully rendered the OLD logic. Proof: the rebuild from current source
+  (documented recipe, rustc 1.99.0 + wasm-tools 1.261.0) exports `observatory_core::render::cell_ground`
+  and the checked-in one does not; the checked-in `preview.svg` (the device's stage-6 sync-back)
+  carries all sixteen cell grounds at 78–100 % of file — ground painted OVER the bodies, the
+  exact bug the fix moved under — while the current core's harness output puts the first ground
+  at 0.1 %; and the host-side pipeline is parity-proven by reading (both IR writers
+  field-for-field identical, no `preserve_order` on either side, fixtures all-LIVE at replay-now
+  so `snapshot(now)` == `iter()`, frame/params/LOD identical). Remedy: the package reassembled
+  around the rebuilt component **`4b29a5ae…`, 206 316 B**, the stale `preview.svg` dropped (the
+  device's stage 6 regenerates file 5 of 5 from the fresh component); the cross-boundary pin does
+  NOT move — bdf59cdb is the current core, harness goldens green in the sandbox (6/6). Standing
+  lesson parked in LATER.md: a golden re-pin must force a component rebuild — the pin moved when
+  the renderer moved and the package did not. **DEVICE-CONFIRMED (session 8, r7): [D] stage 4
+  reproduced `bdf59cdb…` EXACTLY over the WASM boundary on component `4b29a5ae…` — GATE: PASS,
+  the whole chain; stage 6's regenerated `preview.svg` came out the same 1 554 915 B as the stale
+  one (the ground fix reordered items, it added and removed none).**
+- **#99 — REMEDIED (the same gate log, stage 4's fuel `12 707 802 vs 12 401 514`; gate-
+  measurement class): the golden stage compared the FIRST draw against the second — a cold heap
+  against a warm one, not two identical runs.** wasmtime 49 meters `memory.grow` per page
+  (`translate_memory_grow` charges `operator_cost.variable().memory_grow_per_page`, read in the
+  pinned source), and the guest's first draw grows linear memory for the wall's items/strings;
+  later draws reuse the warm free-list. Both costs are fully deterministic — TWO independent
+  loads each burned EXACTLY 12 707 802 on their first draw (smoke's and the golden's) — so the
+  stage's failure words ("find the unseeded randomness or the clock read") named the wrong class;
+  there was no randomness anywhere. Fixed in `runtime/stages.rs::golden_stage`: one discarded
+  warm-up draw before the measured pair; stage 5 KEEPS the cold draw on purpose (the first
+  production frame pays it — it is the worst case the declared budget must cover). The failure
+  words grew the fuel-only sentence. **Companion ruling (not a defect): `capabilities.max_fuel`
+  re-baselined 2 000 000 → 32 000 000, operator ruling 2026-10-07** — stage 5's measurement
+  (draw 12 707 802 cold / 12 401 514 warm; process blocks 9 260; memory 1.2/3.2 MB of 64 MB) is
+  exactly the re-baselining fact the r4 session built stage 5 to produce; plan §5.8's 2 000 000
+  was its own words "fuel is essentially all `draw`", declared before any runtime could meter it.
+  Recorded in `gen_manifest.py`'s comment, the package README and WO020-STATE session 7.
+  **DEVICE-CONFIRMED (session 8, r7): stage 4's two runs came back EQUAL (warm, 12 390 844 fuel
+  each — the warm-up fixed the comparison), and stage 5 passed inside the re-baselined class
+  (cold draw 12 680 530, worst block 9 260 of 32 000 000; memory 1 245 184 B / 3 211 264 B of
+  64 MB).**
 - #69 — `build.bat` cmd-parser death: probe ships, culprit statement not yet named (stays open)
 - compat-matrix mirror in `port.rs` vs `docs/api/compat-matrix.toml` — **re-worded (contract
   v1):** the drift gate pins the two together; full deletion waits on restructuring the table's

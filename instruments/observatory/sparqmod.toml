@@ -983,7 +983,7 @@ gpu_class = "medium"  # §5.8: measured by the harness against ceilings.rs; move
 [capabilities]
 fs_read = []
 network = "none"  # the broker is host-side (D3); the T2 world has no network door
-max_fuel = 2_000_000
+max_fuel = 32_000_000
 max_memory_mb = 64
 
 [distribution]

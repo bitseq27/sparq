@@ -1,4 +1,4 @@
-# WO020-STATE.md — state record (The Observatory, WO-020) — **INC1–INC4 CLOSED; INC5 slices 1–2 CLOSED in the sandbox, device run + INC5b outstanding**
+# WO020-STATE.md — state record (The Observatory, WO-020) — **INC1–INC4 CLOSED; INC5 slices 1–2 CLOSED; r7 device run: [D] GATE: PASS (session 8); gates.bat row + [G]/[I] eyes outstanding; INC5b SUPERSEDED by WO020-INC6-PLAN.md (r8 delivery)**
 
 **Last touched:** 2026-10-07, the INC5 session (fresh sandbox on the re-published main `a9dbf31`;
 branch `wo020-inc5`) — **slice 1** landed the stream plane's live half (`streams-net`: fetch.rs,
@@ -205,6 +205,176 @@ per-block budget is `process`'s contract and nothing else's: `id`/`activate`/`de
 `save-state` now ride the control budget (prepare's multiplier, 64×). Recorded for the guide's
 eventual author-facing text: a guest's first-call cost is real and lands on whichever door opens
 first. r6: `sparq-update-2026-10-07-wo020-inc5r6.zip`, stamp `sparq-wo020-inc5r6-2026-10-07`.
+
+### Device session 7 — 2026-10-07 (the operator's zoom report: three defects, all root-caused, all fixed in-tree; the max_fuel re-baseline ruled)
+
+The operator reported "**sparq becomes unstable when the zoom buttons are used while the
+observatory is loaded**" and sent the [D] gate log (stages 4+5 FAIL). Three distinct defects,
+each proven before its patch — none of them the class the gate words first named:
+
+* **#97 — the zoom instability itself (the report): `dash_segments`'s f32 walk stalls at EVERY
+  toolbar zoom but exactly 1.0.** The egui display-list painter decomposes dashed/dotted strokes
+  into segments (the SVG back end rides `stroke-dasharray` — that is why no headless gate ever saw
+  it). In f32 the per-step drift lands `phase` within an ulp of a boundary (`on*z` and `(on+off)*z`
+  are different roundings of the same products), `at + (on - phase)` rounds back to `at`, and the
+  walk stops advancing: the dash branch pushes zero-length segments until the OOM killer takes the
+  process (reproduced: SIGKILL 3.5 s into the regression test on the OLD walk), the gap branch
+  spins with the UI thread frozen. Measured with an exact-f32 model over the REAL at-rest wall
+  geometry (130 dotted polylines out of preview.svg): every painted ÷1.2/×1.2 ladder value hangs
+  130/130 (0.8333…, 0.6944…, 0.5787…, 0.4823…, 0.4019… down; 0.36, 0.432, 0.5184, 0.6221, 0.7465,
+  0.8958 up); only z = 1.0 survives because 1/4/5 are exact binary there — the default view is
+  clean and the FIRST zoom click kills the shell. Fixed in `crates/sparq-app/src/ui/displaylist_egui.rs`:
+  the walk computes in f64 (sub-femtopixel drift over any line the wall can draw) plus a totality
+  guard (a step that fails to advance ends the run; what it drops is sub-ulp ink). Two regression
+  tests pin the exact ladder values + a multi-segment carried-phase run; proven failable per the
+  house rule. Cell measured: `sparq-app --features ui` 45/46 (the one red is
+  `ui::live::…level_follows` — environment-sensitive, fails identically on the PRISTINE tree here;
+  it is a sandbox fact, not this change's).
+* **#98 — stage 4's moved hash (`5acfc1e6…` ≠ the harness pin `bdf59cdb…`): the checked-in
+  component was STALE.** `instruments/observatory/observatory.wasm` (`3f775856…`, 206 081 B) predates
+  INC4's `cell_ground` draw-order fix — the core moved, the harness golden re-pinned, and nobody
+  rebuilt the component; the device faithfully rendered the OLD logic. Proven three ways: the
+  rebuilt component (documented recipe, rustc 1.99.0 + the pinned wasm-tools 1.261.0, same paths)
+  exports `observatory_core::render::cell_ground` and the checked-in one does not; the checked-in
+  `preview.svg` (the device's stage-6 sync-back) carries all 16 cell grounds at 78–100 % of file —
+  ground painted OVER the bodies, the exact bug INC4's fix moved under — while the current core's
+  harness output puts the first ground at 0.1 %; and the host-side pipeline is parity-proven by
+  reading (both IR writers field-for-field identical, serde_json without `preserve_order` on both
+  sides, fixtures all-LIVE at replay-now so `window.snapshot(now)` == `iter()`, frame/params/LOD
+  identical). Remedy: repackaged with the rebuilt component **`4b29a5ae…`, 206 316 B** (the
+  packager dropped the stale `preview.svg` — stage 6 regenerates file 5 of 5 on the next device
+  validate, from the FRESH component this time). The cross-boundary pin does NOT move: bdf59cdb is
+  the current core, and the harness golden is green in the sandbox (6/6).
+* **#99 — stage 4's moved fuel (`12 707 802 vs 12 401 514`): the stage compared the FIRST draw
+  against the second — a cold heap against a warm one.** wasmtime 49 meters `memory.grow` per page
+  (`translate_memory_grow` charges `operator_cost.variable().memory_grow_per_page` — read in the
+  pinned source), and the guest's first draw grows linear memory for the wall's items/strings;
+  every later draw reuses the warm free-list. Both numbers are fully deterministic — TWO
+  independent loads each burned EXACTLY 12 707 802 on their first draw (the smoke stage's and the
+  golden's) — so the failure words ("find the unseeded randomness or the clock read") named the
+  wrong class; there was no randomness anywhere. Fixed in `runtime/stages.rs::golden_stage`: one
+  warm-up draw (discarded) before the measured pair, so "×2 bit-exact" compares identical steady
+  states; stage 5 KEEPS the cold draw on purpose (the first production frame pays it, so it is the
+  worst case the declared budget must cover). The failure words grew the fuel-only sentence.
+* **The stage-5 FAIL was the measurement the r4 session predicted** ("its real full-wall draw cost
+  was never measured anywhere"): draw 12 707 802 cold / 12 401 514 warm vs the declared 2 000 000;
+  process blocks 9 260; memory 1.2 MB / 3.2 MB of 64 MB. **Operator ruling 2026-10-07:
+  `capabilities.max_fuel` re-baselined 2 000 000 → 32 000 000** — the measured cold worst case
+  with ~2.5× headroom for a wall whose sixteen cells are all live; the ceilings moved up WITH the
+  measurement, recorded here and in `gen_manifest.py`'s comment + the package README. Manifest
+  regenerated (`gen_manifest.py --check` green), package reassembled (4 files until the device's
+  stage 6 writes the 5th). The process-block watchdog loosens with the number (9 260 measured vs
+  a 32 M budget); the epoch deadline and the frame-skip words still bound wall time — the §3 row.
+
+**Sandbox facts this session (the environment verdict, extended):** no `curl` (rustup-init was
+fetched with python `urllib`), no `xz` (zig's tarball unpacked with python `lzma`), apt hangs
+(no reachable repos) — the C linker is **zig cc 0.17.0** (`-target x86_64-linux-gnu` behind a
+two-line shim, `linker =` in `$CARGO_HOME/config.toml`); toolchain kept OUTSIDE the snapshot
+(`/tmp/tools/{rustup,cargo}` — `.rustup` under `/home/user` would eat the 128 MB cap). The 1 GB
+wall re-confirmed from a third direction: `sparq-host-wasm --features instrument-host` OOM-kills
+in `cranelift-assembler-x64` — the runtime stages stay device-first-compile; the stages.rs patch
+here is desk-checked against the call patterns around it. Measured in the sandbox: observatory
+workspace goldens 6/6 (the pin holds), `sparq-app --features ui` dash cell green, the rebuilt
+component's WIT byte-identical to the old one's (`wasm-tools component wit` diff empty).
+
+**Delivered as r7 (this session):** `sparq-update-2026-10-07-wo020-inc5r7.zip` (workspace root,
+one level above the repo; **488 entries**, FULL-TREE — overlays any tree at or after the r6
+pack; the standing exclusions; **the stamp does not ride and did not move from the sandbox** —
+the device re-stamps `--sync sparq-wo020-inc5r7-2026-10-07`). sha256 + size:
+`handoff/sha256sums-wo020-inc5r7.txt` + the delivery message. Durable history:
+`handoff/sparq-wo020-inc5r7.bundle` (`7ed2e08..HEAD` at the documents seal) + its `.sha256`
+sidecar; the artefacts commit (sha256sums + the bundle itself) lands after the bundle, as
+always. Packer: `handoff/make_pack_wo020.py`, **RECONSTRUCTED this session from the
+2026-10-06 delivery table's description** (the original rode the sealed tree and was lost in
+the re-publication; the header declares the reconstruction, the #96 precedent) — its gates ran:
+clean tree at pack time, 488 == the documents' count, the MUST-NOT-MOVE surfaces (WIT,
+`modules/`, the stamp, the fixtures, the goldens) unmoved vs `7ed2e08`, entry-by-entry zip↔tree
+hashes green, the component `4b29a5ae…` asserted inside the zip. **One hand-step rides in every
+document:** the pack ships WITHOUT `instruments/observatory/preview.svg` on purpose (the stale
+sync-back, #98) and an overlay zip cannot delete — the device removes it by hand at apply;
+stage 6 rewrites it from the fresh component. Expected on the re-run: [D] stage 4 words
+`golden render ×2 bit-exact: bdf59cdb232f947091451017f50712a444687c8b1f0a62b5a630763775e974fa`,
+component `4b29a5ae…`, equal warm fuels; stage 5 inside the 32 M class; GATE: COMPLETE + PASS;
+the shell survives the zoom ladder with the wall loaded (#97's fix is host-side — it rides the
+same pack).
+
+### Device session 8 — 2026-10-07 (r7 on SATURN: **[D] GATE: PASS — the whole chain**; #97 confirmed by the operator's eyes; the gates.bat row was CANCELLED, not failed)
+
+The operator applied r7 (hand-delete of the stale `preview.svg` included), re-stamped
+(`sync_check: OK — sync sparq-wo020-inc5r7-2026-10-07, 175 of 175 stamped files byte-for-byte,
+src 103f/2948000B`), built ([A] release, `instrument-host,streams,streams-net` + the UI/HAL
+stack) and ran test007. The acceptance lines, RECORDED from `logs\test007.log`, not invented:
+
+* **[B] the live probe from SATURN: 20/23 HTTP 200 · 2 other status · 0 transport failures ·
+  1 refused pre-fetch in words.** The two others are `space.neo` + `space.epic` at **429 on the
+  shared DEMO_KEY, retried once** (the recorder's policy) — a rate-limit fact of the probe hour,
+  not a defect; `SPARQ_NASA_API_KEY` clears it (README §keys). FIRMS stays KEY NEEDED in words
+  (D14). §3.3's asterisks are device facts now, twice over.
+* **[D=J] `sparq mod validate instruments\observatory\` — GATE: PASS, the whole chain; "this
+  package loads at launch."** All seven stages green on the r7 component `4b29a5ae…`:
+  smoke 9/9 (process 9 260 fuel/block; save-state 109 B bit-identical ×2; first draw
+  12 680 530 fuel — the COLD number, as expected post-#99); **stage 4 `golden render ×2
+  bit-exact: bdf59cdb232f947091451017f50712a444687c8b1f0a62b5a630763775e974fa` — the harness's
+  pin, reproduced over the WASM boundary (the cross-boundary parity the D13 interchange
+  promises), 361 items at 2176×1120 Full, draw fuel 12 390 844 — the two runs EQUAL (the
+  warm-up fixed #99; prepare burned 8 502 640)**; stage 5 inside the declared class (worst
+  block 9 260 of 32 000 000; one full draw 12 680 530; memory 1 245 184 B / 3 211 264 B of
+  64 MB — the re-baseline ruled this morning covers the measurement with ~2.5×); stage 6 the
+  three breakpoints inside the medium ceilings (v22343/i497/h16264 · v11823/i437/h16200 ·
+  v927/i403/h16200), `preview.svg` regenerated from the FRESH component (1 554 915 B — the same
+  size as the stale one: the cell_ground fix reordered items, it did not add or remove any),
+  at-rest re-published; stage 7 unsigned → BADGED, disabled by default in Perform.
+* **#97 DEVICE-CONFIRMED by the operator's own words: "the zoom is working without OOM."** The
+  zoom ladder with the Observatory loaded — the report that opened session 7 — is clean.
+* **[H] headless 120: frame logic min 328 µs · med 377 µs · p99 622 µs; layout audit PASS
+  (0 violations, 49 dense badges).**
+* **[K] gates.bat: CANCELLED, not failed — recorded so nobody reads the row wrong.** rustfmt ✓,
+  clippy default ✓ (1.39 s), clippy audio+hal ✓ (7.39 s); the `tests` row printed `[FAIL]` with
+  EVERY rustc/link.exe exit code `0xc000013a` = STATUS_CONTROL_C_EXIT — a Ctrl+C during the
+  from-scratch debug rebuild (gates.bat clears the cargo fingerprints on purpose so every row
+  measures THIS tree), zero actual test failures; the instrument-host clippy row was then
+  cancelled mid wasmtime debug compile (`^C` ends the log). The row stands OUTSTANDING, not
+  red: re-run `scripts\gates.bat` and let it finish — the debug rebuild + wasmtime's debug
+  compile is long (expect longer than [A]'s release build; it is not hung). The 12 runtime
+  tests live in that cell; [D] already proved the same golden_stage code path end to end, but
+  the gates row is the formal line and wants its own green.
+* **[G] airplane mode and [I] the token re-theme: operator eyes, not yet sent** (the run sheet's
+  screenshot list stands).
+* **Found-by-running-it, landed in-tree (rides the NEXT pack; the deployed r7 zip is unchanged,
+  the session-1 precedent):** test007.bat's [C] echo still quoted the INC3 component ("206 081
+  B, sha pinned in WO020-STATE.md's INC3 record") — the pack now ships `4b29a5ae…`/206 316 B,
+  pinned in THIS session-7 record; the word is corrected. [C]'s assertion (existence) was and
+  stays correct. Run-sheet §2 grows the "do not cancel [K]" words with this session's evidence.
+
+**Status after session 8:** WO-020's device acceptance is green where it ran — the hand-in gate
+is COMPLETE + PASS on the device for the first time, the instrument is launch-loadable, and the
+three session-7 defects are device-confirmed fixed. Outstanding: the [K] gates row (a re-run,
+not a fix), the [G]/[I] eyes, and INC5b (the launch wiring: discovery → registration → PLAY
+#58 → the shell's live-provider swap — until then the wall shows at rest, which is what [E/F]
+eyed). **INC5b is now SUPERSEDED: the operator's window report of the same evening commissioned
+`WO020-INC6-PLAN.md` ("the live instrument") — the launch wiring is its slice S4, with the card
+controls, the resizable window, the key field and the per-panel poll rates the report asked
+for; the four rulings (O-1…O-4) are recorded in the plan's §0.**
+
+### Delivery — 2026-10-07 (r8: the session-8 records + the INC6 commission)
+
+Operator instruction: **"prep handoff, sync zip and new session prompt."** The records delivery
+in the r6 house shape — RECORDS, not behaviour (nothing compiled moves except test007.bat's echo
+words; device application is optional and the r7 stamp stays valid for an r7 tree):
+
+| artefact | what |
+|---|---|
+| `sparq-update-2026-10-07-wo020-inc5r8.zip` (workspace root, one level above the repo) | **FULL-TREE pack, 489 entries** — overlays any tree at or after r7; the standing exclusions; **the stamp does not ride and did not move from the sandbox** (the device, IF it applies, re-stamps `--sync sparq-wo020-inc5r8-2026-10-07`). sha256 + size: `handoff/sha256sums-wo020-inc5r8.txt` + the delivery message. Packer gates ran: clean tree at the seal, 489 == the documents' count, MUST-NOT-MOVE unmoved vs `7ed2e08`, entry-by-entry zip↔tree hashes, the component `4b29a5ae…` asserted inside. |
+| `handoff/sparq-wo020-inc5r8.bundle` (+ `.sha256`) | `7ed2e08..HEAD` at the documents seal, SELF-CONTAINED from the published main — one fetch restores sessions 7+8 + the r8 records into any clone. Supersedes the r7 and session-8 bundles (kept as the increment record). |
+| `WO020-INC6-PLAN.md` (ships inside the pack) | **the commission**: the operator's window report quoted verbatim, the four rulings (O-1 resizable half-size card · O-2 STREAMS tab + card rate fields · O-3 the 10 s floor · O-4 the user-data key file), D15–D20, slices S1–S5 with acceptance, the honest states. Next action anywhere: **S1**. |
+| `RESUME.md` (ships inside the pack) | **the new-session prompt, REWRITTEN** — the 2026-09-22 resume was four work orders stale (its own fold-it-in rule); the rewrite is sized to load whole and carries the state, the outstanding list, the read-by-range table, the sandbox recipe pointers, the artefacts and the house rules that bite. The old text lives in git history. |
+| `SYNC.md` + the run sheet | new top entries (r7 demoted to Previous per the house pattern); the run sheet grows the r8 revision note, the r8 sync-bundle/namelist paragraphs and the r8 re-stamp word; test007.bat's [0] remedy + [C] echo now name the r8 stamp and the shipped component. |
+
+**Branch state at the r8 seal:** `main` in the sandbox clone off the published `7ed2e08`:
+session-7 fixes `4af7f3d` → r7 documents+packer `8608a31` → r7 artefacts `4ab6827` → session-8
+records `4c017e3`+`e0642a0` → session-8 bundle `3289093` → the INC6 plan `1bb9656` + the LATER
+supersession `3db1ef5` → this delivery's documents seal; working tree clean at the pack; nothing
+pushed (no credentials — the bundles + the pack are the delivery, ROUND8's discipline).
 
 ### Slice 1 — the stream plane's live half (`streams-net` LANDED) — commit `83b2091`, MEASURED
 
@@ -441,8 +611,21 @@ d=urllib.request.urlopen(urllib.request.Request(u,headers={'User-Agent':'sparq'}
 open('/tmp/rustup-init','wb').write(d); os.chmod('/tmp/rustup-init',0o755)
 PY
 /tmp/rustup-init -y --profile minimal --default-toolchain stable --component rustfmt --component clippy --no-modify-path
-# 2. A C linker (rustc needs `cc`; the sandbox has none). Root + apt works:
-apt-get update -qq && apt-get install -y --no-install-recommends gcc libc6-dev
+# 2. A C linker (rustc needs `cc`; the sandbox has none). apt worked on 2026-10-06 and HUNG on
+#    2026-10-07 (no reachable repos) — the fallback that needs no package manager is zig cc:
+apt-get update -qq && apt-get install -y --no-install-recommends gcc libc6-dev   # try first
+# ...else (session-7 measured; no `xz` in the box either, so python unpacks the tarball):
+python3 - <<'PY'
+import urllib.request, lzma, tarfile
+u='https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz'
+urllib.request.urlretrieve(u, '/tmp/zig.tar.xz')
+with lzma.open('/tmp/zig.tar.xz') as fh, tarfile.open(fileobj=fh) as t: t.extractall('/tmp/tools')
+PY
+printf '#!/bin/sh\nexec /tmp/tools/zig-x86_64-linux-0.17.0/zig cc -target x86_64-linux-gnu "$@"\n' \
+  > /tmp/tools/zigcc && chmod +x /tmp/tools/zigcc
+printf '[target.x86_64-unknown-linux-gnu]\nlinker = "/tmp/tools/zigcc"\n' > "$CARGO_HOME/config.toml"
+# Keep RUSTUP_HOME/CARGO_HOME OUTSIDE /home/user (e.g. /tmp/tools/{rustup,cargo}): the snapshot
+# caps around 128 MB and a toolchain under the workspace eats the cap (session 7's lesson).
 # 3. Gates (root workspace):
 export PATH="$HOME/.cargo/bin:$PATH" CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup"
 cd /home/user/sparq

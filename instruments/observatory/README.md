@@ -19,9 +19,14 @@ manifest (the `stream = "param:cell_NN"` binding, ADR-011).
   component; the host's stream broker (`sparq-streams`) fetches and normalises every feed — the
   component itself has **no network and no filesystem capability** (capability-by-absence).
 - Capabilities: none beyond the sandbox defaults. `network = "none"`, `fs_read = []`,
-  `max_fuel = 2 000 000`/block, `max_memory_mb = 64`, `gpu_class = medium` (measured by the harness:
+  `max_fuel = 32 000 000`, `max_memory_mb = 64`, `gpu_class = medium` (measured by the harness:
   ~22 k vertices / ~0.5 k instances / ~16 k heat cells at the 4×4 default — inside medium with
-  headroom).
+  headroom). The fuel figure is the operator's 2026-10-07 re-baseline of plan §5.8's 2 000 000,
+  which was declared before any runtime could meter it: the device measured one full-wall `draw`
+  at 12 707 802 fuel (worst `process` block: 9 260 — §5.8 was right that fuel is essentially all
+  `draw`), so 2 000 000 would trap every real frame. 32 000 000 is that measurement with ~2.5×
+  of headroom for a wall whose sixteen cells are all live; it is a ceiling that moves only with a
+  measurement, never silently.
 - **Ports: none.** v1 is display-only (plan D5): the wall is silent-by-design until the native
   data-port arbiter lands (Phase 5); sonification is a later increment, and every stream already
   normalises to the frozen `data-record` vocabulary so that increment is routing, not reshape.
