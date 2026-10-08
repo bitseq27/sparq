@@ -35,6 +35,34 @@ use crate::ui::atrest::AtRestStore;
 /// panel fill, readable as "waiting", never as a filled state.
 const FLAG_TINT_ALPHA: f32 = 0.12;
 
+/// The host RATE row's content for one instrument card (WO-020 INC6 S5, D20's second door) —
+/// computed by the SHELL per frame (it owns the store, the registry and the bindings; the
+/// painter invents nothing, per this file's whole contract).
+pub struct RateRowInfo {
+    /// The row's sentence: which panel, which stream its rate GOVERNS, the effective cadence
+    /// and the shared-feed truth ("panels sharing a feed share its rate — the broker's truth,
+    /// said in words", O-2).
+    pub words: String,
+    /// The field box's reading: the effective cadence, the override bright with the registry
+    /// value beside it (the dock field's own shape).
+    pub field_words: String,
+    /// Whether the field edits (a build without the stream plane, or a panel bound to no
+    /// stream, shows words only — the row never lies about a door that is not there).
+    pub editable: bool,
+    /// Whether the field holds the entry focus (the accent border + caret).
+    pub focused: bool,
+}
+
+/// The RATE row's at-rest sentence for builds without the stream plane (the row is reserved
+/// geometry in every build — the words say what is missing, never a blank strip).
+pub const RATE_ROW_NO_PLANE_WORDS: &str = "RATE — no stream plane in this build";
+
+/// The panel band's at-rest sentence (WO-020 INC6 S2, the plan's own words): with no loader
+/// run, editing the declared widgets does NOT move the painted wall — the card says so in
+/// words, in the panel band, instead of pretending (refuse-in-words, never a frozen lie). The
+/// provider's live sentence (S3/S4) replaces it the moment one exists.
+const PANEL_AT_REST_WORDS: &str = "params edit; the wall re-renders live when the loader runs";
+
 /// Paint the whole canvas for one frame. `view` is the canvas rect (screen px); `audit` collects
 /// the touch targets the layout audit measures. `main_info` is the live session's driver truth
 /// for the permanent Main Out card's info band (operator ruling 2026-10-01) — `None` at rest.
@@ -59,6 +87,9 @@ pub fn draw(
     main_info: Option<&[String; 2]>,
     pointer: Option<Vec2>,
     atrest: &AtRestStore,
+    live: &crate::ui::live_display::LiveSurfaces,
+    bypassed: &[sparq_ui::canvas::model::NodeId],
+    rates: &std::collections::HashMap<sparq_ui::canvas::model::NodeId, RateRowInfo>,
     audit: &mut Vec<InteractiveElement>,
 ) {
     draw_grid(p, pal, canvas, view);
@@ -75,7 +106,7 @@ pub fn draw(
     let missing = graph.missing_required_inputs();
     draw_nodes(
         p, pal, graph, canvas, layout, master_id, traces, meters, curves, hists, &missing,
-        main_info, atrest, audit,
+        main_info, atrest, live, bypassed, rates, audit,
     );
     draw_marquee(p, pal, canvas);
     draw_menu(p, pal, canvas, view, audit);
@@ -605,6 +636,9 @@ fn draw_nodes(
     missing: &[(NodeId, usize)],
     main_info: Option<&[String; 2]>,
     atrest: &AtRestStore,
+    live: &crate::ui::live_display::LiveSurfaces,
+    bypassed: &[NodeId],
+    rates: &std::collections::HashMap<NodeId, RateRowInfo>,
     audit: &mut Vec<InteractiveElement>,
 ) {
     let z = canvas.camera.zoom;
@@ -617,11 +651,11 @@ fn draw_nodes(
             Lod::Dot => draw_node_dot(p, pal, node, nl, selected, is_master, flagged, z),
             Lod::Simplified => draw_node_box(
                 p, pal, graph, canvas, node, nl, selected, is_master, false, traces, meters,
-                curves, hists, flagged, main_info, z, atrest, audit,
+                curves, hists, flagged, main_info, z, atrest, live, bypassed, rates, audit,
             ),
             Lod::Full => draw_node_box(
                 p, pal, graph, canvas, node, nl, selected, is_master, true, traces, meters, curves,
-                hists, flagged, main_info, z, atrest, audit,
+                hists, flagged, main_info, z, atrest, live, bypassed, rates, audit,
             ),
         }
     }
@@ -872,6 +906,9 @@ fn draw_node_box(
     main_info: Option<&[String; 2]>,
     z: f32,
     atrest: &AtRestStore,
+    live: &crate::ui::live_display::LiveSurfaces,
+    bypassed: &[NodeId],
+    rates: &std::collections::HashMap<NodeId, RateRowInfo>,
     audit: &mut Vec<InteractiveElement>,
 ) {
     // ONE zoom factor for every content object on the card (operator ruling 2026-10-01):
@@ -939,6 +976,47 @@ fn draw_node_box(
             hair(pal.hairline_faint),
             StrokeKind::Middle,
         );
+    }
+
+    // The resize handle (WO-020 INC6 D15): the SELECTED instrument card's bottom-right corner
+    // grows the grab — a filled corner triangle in the selection accent with two hairline grip
+    // diagonals, the classic resize affordance in the token language (no literal may appear
+    // here, R6). The glyph is a WORLD object (it scales with the card, the port circle's rule);
+    // the CAPTURE is screen-sized and zoom-invariant exactly like the port's (a finger does not
+    // shrink with the zoom), and the audit registers it at its ruled class L. What is drawn
+    // here and what `layout::resize_handle_at` offers read the SAME corner point from the same
+    // NodeLayout field — the hit and the draw cannot drift apart. A locked card keeps the
+    // handle drawn and refuses the drag in words (the body's move-refusal, verbatim).
+    if selected {
+        if let Some(c) = nl.resize_corner {
+            let leg = LAYOUT_SPACE_4 as f32 * z;
+            let cp = pos(c);
+            p.add(egui::Shape::convex_polygon(
+                vec![cp, cp - egui::vec2(leg, 0.0), cp - egui::vec2(0.0, leg)],
+                pal.selected,
+                Stroke::NONE,
+            ));
+            // The grip's diagonals: hairlines in the strong hairline colour over the accent
+            // fill, so the glyph reads at every theme (a token pair, never an invented colour).
+            let grip = hair(pal.hairline_strong);
+            p.line_segment(
+                [cp - egui::vec2(leg * 0.75, 0.0), cp - egui::vec2(0.0, leg * 0.75)],
+                grip,
+            );
+            p.line_segment(
+                [cp - egui::vec2(leg * 0.4, 0.0), cp - egui::vec2(0.0, leg * 0.4)],
+                grip,
+            );
+            // The capture box the audit measures: the class-L circle's bounds in screen px
+            // (the port capture's registration idiom, at the handle's ruled class).
+            let cap = sparq_ui::canvas::layout::RESIZE_CAPTURE_RADIUS;
+            audit.push(InteractiveElement {
+                id: format!("canvas/resize/{}", nl.id),
+                class: TouchClass::L,
+                rect: Rect::new(Vec2::new(c.x - cap, c.y - cap), Vec2::new(c.x + cap, c.y + cap)),
+                dense_allowed: false,
+            });
+        }
     }
 
     // Header band.
@@ -1158,9 +1236,21 @@ fn draw_node_box(
         Some(Well::Steps) => draw_step_bars(p, pal, node, nl, canvas, z),
         // WO-020 INC4 §8.2: the instrument display band — the guest's display list, painted by
         // the host from the at-rest interchange while the loader is absent (D13's at-rest wall).
-        Some(Well::Display) => draw_instrument_display(p, pal, node, nl, atrest, z, full),
+        Some(Well::Display) => {
+            draw_instrument_display(p, pal, node, nl, atrest, live, bypassed, z, full)
+        },
         None => {}, // no well: the body is the box, honest
     }
+
+    // The typed panel band (WO-020 INC6 D16): the manifest's declared widgets, painted into
+    // the reserved band and registered for the audit — the host paints no control the manifest
+    // does not declare, and routes nothing it does not paint.
+    draw_panel_widgets(p, pal, node, nl, z, full, audit);
+
+    // The host RATE row (WO-020 INC6 S5, D16/D20): host furniture under the guest's display —
+    // visually distinct (the info band's ground + hairline idiom), the words from the shell's
+    // per-frame data, the field the second door to the per-stream override.
+    draw_rate_row(p, pal, nl, rates.get(&nl.id), z, full, audit);
 
     // The Main Out driver-info band (operator ruling 2026-10-01): the permanent node says
     // WHICH driver is under it and the negotiated truth (rate · channels · block · format) in
@@ -2142,12 +2232,257 @@ fn draw_step_bars(
 /// into the band, because "live where the rings carry it, at rest otherwise" reaches instruments
 /// too. No at-rest render: WORDS in the band centre, never a blank rect that reads as "zero".
 /// The §5.2 status label (the broker's state, host-side words) rides the panel band above.
+/// The host RATE row (WO-020 INC6 S5, D20): the info band's visual idiom on the instrument
+/// card — `ground_inset` under a top hairline, the shell's words at the left (char-clipped to
+/// the row, the info band's ellipsis rule), the editable field at the right end. The field
+/// registers in the audit with the card rows' dense-exception honesty (a 40-px row measures
+/// below class S; it is badged, never silently accepted — and at zooms under the dense floor
+/// it stops registering, exactly like the param rows).
+fn draw_rate_row(
+    p: &Painter,
+    pal: &Palette,
+    nl: &NodeLayout,
+    info: Option<&RateRowInfo>,
+    z: f32,
+    full: bool,
+    audit: &mut Vec<InteractiveElement>,
+) {
+    let Some(band) = nl.rate_band else { return };
+    let r = egui_rect(band);
+    if r.width() <= 0.0 || r.height() <= 0.0 {
+        return;
+    }
+    p.rect_filled(r, LAYOUT_CORNER_NONE as u8, pal.ground_inset);
+    p.line_segment(
+        [r.left_top(), r.right_top()],
+        pal.hairline(pal.hairline_faint, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5)),
+    );
+    if !full {
+        return; // the Simplified contract: the row is chrome, its words are text — no text
+    }
+    let words = info.map(|i| i.words.as_str()).unwrap_or(RATE_ROW_NO_PLANE_WORDS);
+    let field = nl.rate_field.map(egui_rect);
+    let pad = LAYOUT_SPACE_2 as f32 * z;
+    let char_w = LAYOUT_SPACE_2 as f32 * z;
+    let field_w = field.as_ref().map_or(0.0, |f| f.width() + pad);
+    let max_chars = ((r.width() - pad * 2.0 - field_w) / char_w).floor().max(4.0) as usize;
+    let clipped: String = if words.chars().count() <= max_chars {
+        words.to_string()
+    } else {
+        let cut: String = words.chars().take(max_chars.saturating_sub(1)).collect();
+        format!("{cut}…")
+    };
+    p.text(
+        egui::pos2(r.min.x + pad, r.center().y),
+        Align2::LEFT_CENTER,
+        clipped,
+        scaled_font(font_xs(), z),
+        pal.text_secondary,
+    );
+    if let (Some(f), Some(info)) = (field, info) {
+        if !info.editable {
+            return; // words only — the row never draws a door that is not there
+        }
+        let inset = egui::Rect::from_min_size(
+            f.left_top() + egui::vec2(0.0, LAYOUT_SPACE_1 as f32 * z),
+            egui::vec2(f.width(), f.height() - 2.0 * LAYOUT_SPACE_1 as f32 * z),
+        );
+        p.rect_filled(inset, LAYOUT_CORNER_MICRO as u8, pal.ground_panel_alt);
+        let border = if info.focused {
+            Stroke::new(LAYOUT_STROKE_EMPHASIS as f32, pal.selected)
+        } else {
+            pal.hairline(pal.hairline_regular, (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5))
+        };
+        p.rect_stroke(inset, LAYOUT_CORNER_MICRO as u8, border, StrokeKind::Middle);
+        p.text(
+            egui::pos2(inset.min.x + pad, inset.center().y),
+            Align2::LEFT_CENTER,
+            info.field_words.clone(),
+            scaled_font(font_xs(), z),
+            if info.focused { pal.text_primary } else { pal.text_secondary },
+        );
+        // The audit row: the WHOLE field cell is the touch target (the param row's idiom — the
+        // drawn box is thinner than the grab), registered while the measured cell clears the
+        // dense floor, badged below class S, gone below the floor (at that zoom the row is a
+        // reading and the STREAMS tab is the door).
+        if let Some(cell) = nl.rate_field {
+            if cell.min_side() >= LAYOUT_TOUCH_MIN_TARGET_DENSE as f32 {
+                audit.push(InteractiveElement {
+                    id: format!("canvas/rate/{}", nl.id),
+                    class: TouchClass::S,
+                    rect: cell,
+                    dense_allowed: true,
+                });
+            }
+        }
+    }
+}
+
+/// The typed panel band (WO-020 INC6 D16): the manifest's declared widgets painted into the
+/// reserved band — enums as dropdown chips (the tap opens §8.4's EXISTING picker sheet), the
+/// five toggles as flip chips in the card's own class accent (the operator ruling
+/// 2026-10-01's binary vocabulary: a tap flips, and the state wears fill + word redundantly,
+/// never colour alone), sliders in the param row's own track+knob idiom, and the host-side
+/// status LABEL as a reading with no chrome. The host paints NO control the manifest does not
+/// declare (ADR-010's runtime-token rule) — this function reads the declared list and the
+/// layout's cells and invents nothing; hidden widgets (the D7 gate) are not painted, and what
+/// is not painted is neither touchable (the hit-test reads the same `visible`) nor registered
+/// here. Full LOD only: the Simplified contract is "node box, coloured ports, NO TEXT", so the
+/// band sits reserved-but-empty there exactly like the backbone cards' param rows.
+///
+/// The audit registers every routed cell it draws under `canvas/panel/{node}/{widget}` at
+/// class S — the band's given floor is D16's 44 px — with the param row's dense-exception
+/// honesty: registered only while the measured cell clears the dense floor (a resized-down or
+/// zoomed-out band stops claiming touch targets it cannot serve; the inspector remains the
+/// door, exactly as for the card rows).
+fn draw_panel_widgets(
+    p: &Painter,
+    pal: &Palette,
+    node: &Node,
+    nl: &NodeLayout,
+    z: f32,
+    full: bool,
+    audit: &mut Vec<InteractiveElement>,
+) {
+    if !full || nl.panel_widgets.is_empty() {
+        return;
+    }
+    let Some(d) = node.spec.display.as_ref() else { return };
+    let class = class_colour(dominant_class(node), pal);
+    let hair_w = (LAYOUT_STROKE_HAIRLINE as f32 * z).max(0.5);
+    let font = scaled_font(font_xs(), z);
+    let pad = LAYOUT_SPACE_2 as f32 * z;
+    for pw in &nl.panel_widgets {
+        let Some(w) = d.widgets.get(pw.widget) else { continue };
+        if !pw.visible {
+            continue; // the D7 gate: not shown, not touchable, not registered
+        }
+        let r = egui_rect(pw.rect);
+        if r.width() <= 0.0 || r.height() <= 0.0 {
+            continue;
+        }
+        let desc = pw.param.and_then(|pi| node.spec.params.get(pi));
+        match (w.kind, desc) {
+            // The label is the host-side status word's SLOT — its words ride the panel band's
+            // status strip (draw_instrument_display paints them: the provider's sentence live,
+            // the at-rest words otherwise). A reading: no chrome, no control, no audit row.
+            (sparq_ui::canvas::model::PanelWidgetKind::Label, _) => {},
+            (sparq_ui::canvas::model::PanelWidgetKind::EnumSelect, Some(desc)) => {
+                p.rect_filled(r, LAYOUT_CORNER_MICRO as u8, pal.ground_panel_alt);
+                p.rect_stroke(
+                    r,
+                    LAYOUT_CORNER_MICRO as u8,
+                    pal.hairline(pal.hairline_regular, hair_w),
+                    StrokeKind::Middle,
+                );
+                let v = pw.param.and_then(|pi| node.param_value(pi)).unwrap_or(desc.default as f32);
+                // The option's own label IS the dropdown's reading (the picker's rows carry
+                // the same words).
+                p.text(
+                    r.left_center() + egui::vec2(pad, 0.0),
+                    Align2::LEFT_CENTER,
+                    sparq_ui::canvas::inspector::value_text(desc, v),
+                    font.clone(),
+                    pal.text_primary,
+                );
+                // The caret: a down-chevron at the right edge — the DROPDOWN encoding, a shape
+                // (not a colour), so it survives the greyscale test (look-board §4).
+                let cx = r.right_center().x - LAYOUT_SPACE_3 as f32 * z;
+                let cy = r.center().y;
+                let s = LAYOUT_SPACE_1 as f32 * z;
+                let caret = Stroke::new(hair_w, pal.text_tertiary);
+                p.line_segment(
+                    [Pos2::new(cx - s, cy - s * 0.5), Pos2::new(cx, cy + s * 0.5)],
+                    caret,
+                );
+                p.line_segment(
+                    [Pos2::new(cx, cy + s * 0.5), Pos2::new(cx + s, cy - s * 0.5)],
+                    caret,
+                );
+            },
+            (sparq_ui::canvas::model::PanelWidgetKind::Toggle, Some(desc)) => {
+                let v = pw.param.and_then(|pi| node.param_value(pi)).unwrap_or(desc.default as f32);
+                let on = v >= 0.5;
+                // ON wears the card's class accent filled + the word; OFF wears the inset
+                // ground + the word — the state is fill AND word, never colour alone.
+                p.rect_filled(
+                    r,
+                    LAYOUT_CORNER_MICRO as u8,
+                    if on { class } else { pal.ground_inset },
+                );
+                p.rect_stroke(
+                    r,
+                    LAYOUT_CORNER_MICRO as u8,
+                    pal.hairline(
+                        if on { pal.hairline_strong } else { pal.hairline_regular },
+                        hair_w,
+                    ),
+                    StrokeKind::Middle,
+                );
+                p.text(
+                    r.center(),
+                    Align2::CENTER_CENTER,
+                    desc.id.to_uppercase(),
+                    font.clone(),
+                    if on { pal.text_inverse } else { pal.text_secondary },
+                );
+            },
+            (sparq_ui::canvas::model::PanelWidgetKind::Slider, Some(desc)) => {
+                let v = pw.param.and_then(|pi| node.param_value(pi)).unwrap_or(desc.default as f32);
+                // The param row's idiom in the cell: name left / value right above, the track
+                // with its class-accent fill and round knob below (the inspector's mapping —
+                // one geometry, both surfaces).
+                p.text(
+                    r.left_top() + egui::vec2(pad, 0.0),
+                    Align2::LEFT_TOP,
+                    desc.id.to_uppercase(),
+                    font.clone(),
+                    pal.text_secondary,
+                );
+                p.text(
+                    r.right_top() - egui::vec2(pad, 0.0),
+                    Align2::RIGHT_TOP,
+                    sparq_ui::canvas::inspector::value_text(desc, v),
+                    font.clone(),
+                    pal.text_primary,
+                );
+                let a = pos(Vec2::new(pw.track.min.x, pw.track.center().y));
+                let b = pos(Vec2::new(pw.track.max.x, pw.track.center().y));
+                p.line_segment([a, b], Stroke::new(LAYOUT_STROKE_SIGNAL as f32 * z, class));
+                let kx = sparq_ui::canvas::inspector::knob_x(desc, pw.track, v);
+                let knob = Pos2::new(kx, a.y);
+                p.line_segment([a, knob], Stroke::new(LAYOUT_STROKE_SIGNAL as f32 * z, class));
+                p.circle_filled(knob, LAYOUT_SPACE_1 as f32 * z, class);
+            },
+            // A control whose param did not resolve cannot exist (the parse dropped it) — the
+            // arm is unreachable by construction, and inventing a fallback widget here would
+            // be exactly the control the manifest did not declare.
+            (_, None) => {},
+        }
+        // The audit row: every ROUTED cell that is drawn, at the class the band gives (S —
+        // D16's 44 px floor), with the param row's dense-exception gate on the measured size.
+        if pw.param.is_some() && pw.rect.min_side() >= LAYOUT_TOUCH_MIN_TARGET_DENSE as f32 {
+            audit.push(InteractiveElement {
+                id: format!("canvas/panel/{}/{}", nl.id, pw.widget),
+                class: TouchClass::S,
+                rect: pw.rect,
+                dense_allowed: true,
+            });
+        }
+    }
+}
+
+// The shape arguments mirror `draw_node_box`'s own allow: bundling them into a struct would
+// hide, not reduce, the same values (the repo's recorded precedent, interact.rs).
+#[allow(clippy::too_many_arguments)]
 fn draw_instrument_display(
     p: &Painter,
     pal: &Palette,
     node: &Node,
     nl: &NodeLayout,
     atrest: &AtRestStore,
+    live: &crate::ui::live_display::LiveSurfaces,
+    bypassed: &[NodeId],
     z: f32,
     full: bool,
 ) {
@@ -2163,8 +2498,23 @@ fn draw_instrument_display(
         pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
         StrokeKind::Outside,
     );
-    // The panel band (between the header and the display) carries the host's status words (§5.2).
-    if let Some(words) = atrest.status(&node.spec.module_id) {
+    // The panel band's word strip (§5.2 + INC6 S2/S4) — the precedence is a fact ordering,
+    // never a taste call: the WATCHDOG's bypass sentence (a hard fact about this card) beats
+    // the provider's live sentence, which beats the at-rest sentence (no loader run: params
+    // edit, the wall re-renders live when the loader runs — never a frozen lie).
+    let is_bypassed = bypassed.contains(&nl.id);
+    {
+        let (words, colour) = if is_bypassed {
+            (crate::ui::live_display::BYPASS_WORDS.to_string(), pal.warning)
+        } else {
+            (
+                atrest
+                    .status(&node.spec.module_id)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| PANEL_AT_REST_WORDS.to_string()),
+                pal.text_secondary,
+            )
+        };
         let panel = Rect::new(
             Vec2::new(nl.screen.min.x, nl.header_screen.max.y),
             Vec2::new(nl.screen.max.x, band.min.y),
@@ -2173,29 +2523,41 @@ fn draw_instrument_display(
             p.text(
                 pos(Vec2::new(panel.max.x - LAYOUT_SPACE_3 as f32, panel.center().y)),
                 Align2::RIGHT_CENTER,
-                words.to_string(),
+                words,
                 font_xs(),
-                pal.text_secondary,
+                colour,
             );
         }
     }
-    let Some(ar) = atrest.get(&node.spec.module_id) else {
-        p.text(
-            r.center(),
-            Align2::CENTER_CENTER,
-            "NO AT-REST RENDER — run the observatory harness, or validate on a device",
-            font_xs(),
-            pal.text_disabled,
-        );
-        return;
+    // The band's source switch (D17c — the meters' rule extended): LIVE where the instance
+    // carries a surface, AT REST otherwise; a BYPASSED instance's shelf was dropped at the
+    // bypass, so the last-good at-rest render stands in its place ("the last render stands",
+    // §3's words) — never a hole, never a frozen lie dressed as live.
+    let live_surface = (!is_bypassed).then(|| live.get(&node.spec.module_id)).flatten();
+    let (items, src_w, src_h) = match live_surface {
+        Some(ls) => (&ls.items[..], ls.w, ls.h),
+        None => match atrest.get(&node.spec.module_id) {
+            Some(ar) => (&ar.items[..], ar.w, ar.h),
+            None => {
+                p.text(
+                    r.center(),
+                    Align2::CENTER_CENTER,
+                    "NO AT-REST RENDER — run the observatory harness, or validate on a device",
+                    font_xs(),
+                    pal.text_disabled,
+                );
+                return;
+            },
+        },
     };
-    // Scale the display's logical px into the band (uniform, centred — the band IS the declared
-    // min_size at zoom 1 by D6, so at zoom 1 the scale is exactly z).
-    let scale = (band.width() / ar.w.max(1.0)).min(band.height() / ar.h.max(1.0));
-    let ox = band.min.x + (band.width() - ar.w * scale) / 2.0;
-    let oy = band.min.y + (band.height() - ar.h * scale) / 2.0;
+    // Scale the display's logical px into the band (uniform, centred). A LIVE surface was drawn
+    // at the band's ACTUAL px (O-1/D17c — text stays native), so its scale is exactly z; an
+    // at-rest render carries its declared face and scales to fit, as before.
+    let scale = (band.width() / src_w.max(1.0)).min(band.height() / src_h.max(1.0));
+    let ox = band.min.x + (band.width() - src_w * scale) / 2.0;
+    let oy = band.min.y + (band.height() - src_h * scale) / 2.0;
     let mut painter = sparq_ui::displaylist::Painter::new();
-    let painted = painter.resolve(&ar.items);
+    let painted = painter.resolve(items);
     let diag = painter.diagnostics();
     crate::ui::displaylist_egui::paint(p, &painted, scale, |x, y| {
         Pos2::new(ox + x * scale, oy + y * scale)

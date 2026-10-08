@@ -131,6 +131,14 @@ zoom_step           = 1.2
 lod_levels          = 3        # 0 full panel detail, 1 simplified, 2 colour-coded dot
 lod_1_below_zoom    = 0.6
 lod_2_below_zoom    = 0.35
+# WO-020 INC6 (plan D19, ruled in the commissioned plan): the LIVE instrument display's draw
+# cadence, Hz. A full wall draw measured 12.4 M fuel warm (~ms-class on SATURN); 60 Hz guest
+# draws would tax the UI thread for a data wall whose fastest feed is a 5 s cadence. 15 Hz
+# keeps the ticker scroll smooth and the frame budget ≤ ~7 % of a 60 Hz frame; any param edit,
+# cell swap, resize or LOD change forces the next frame's draw regardless of the pace (the
+# edit's effect is immediate, the ambient scroll is paced). Moving this number is an operator
+# ruling, like every token.
+instrument_display_hz = 15
 wire_style          = "bezier-horizontal"   # control point offset = 0.5 * horizontal distance
 wire_crossing_policy = "no bridges; crossings are drawn plain (data-ink)"
 

@@ -72,6 +72,15 @@ pub enum Action {
     /// Open one dock tab by index (0 = MODULES, 5 = LOG — the selectable ones; operator ruling
     /// 2026-09-30 moved the intent log under the LOG tab).
     DockTab(usize),
+    /// Focus the STREAMS tab's cadence field of one registry row (WO-020 INC6 D18/D20 — the
+    /// index addresses the registry's canonical order, the rows' own order).
+    #[cfg(feature = "streams")]
+    StreamsCadence(usize),
+    /// Focus the STREAMS tab's KEY field of one registry row (masked; typing writes the
+    /// overrides store — ruling O-4). A row whose env var is set refuses in words instead:
+    /// the precedence is visible, not a mystery (D20).
+    #[cfg(feature = "streams")]
+    StreamsKey(usize),
     /// Transport: start the live audio session (WO-012 increment 2 — the engine binding the
     /// stub was named for). Refusals are sentences with remedies, like every other voice.
     Play,
@@ -129,6 +138,49 @@ struct Registered {
     action: Action,
 }
 
+/// The focused STREAMS-tab field (WO-020 INC6 D20): which registry row, which of its two
+/// editable fields, and the typing buffer. The buffer is transient UI state — the overrides
+/// store is the truth, and the commit is the only door from one to the other.
+#[cfg(feature = "streams")]
+struct StreamsField {
+    /// Which surface's field is focused: the dock tab's row, or a card's RATE row (D20's two
+    /// doors to ONE store).
+    target: StreamsFieldTarget,
+    /// The row's index in the registry's canonical order (the tab door; `usize::MAX` for the
+    /// card door, which resolves its stream per commit — the selected cell can move mid-entry).
+    row: usize,
+    /// Which field is focused.
+    kind: StreamsFieldKind,
+    /// The typing buffer (the shared text-entry surface — the library search's idiom).
+    entry: sparq_ui::canvas::entry::TextEntry,
+    /// The first typed character REPLACES the pre-fill (the cadence field opens carrying the
+    /// value it would replace — direct manipulation means typing over it, not appending to
+    /// it). Set false on the first insert/backspace.
+    fresh: bool,
+}
+
+/// Which surface a focused field lives on (D20: one store, two doors).
+#[cfg(feature = "streams")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamsFieldTarget {
+    /// The STREAMS dock tab's row (the index addresses the registry's canonical order).
+    TabRow,
+    /// An instrument card's host RATE row (the node whose card it is).
+    Card(sparq_ui::canvas::model::NodeId),
+}
+
+/// The STREAMS tab's two editable fields (D20).
+#[cfg(feature = "streams")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamsFieldKind {
+    /// The per-stream cadence override, seconds (floor 10 — ruling O-3; below it the commit
+    /// refuses in words and keeps the old value).
+    Cadence,
+    /// The per-stream API key (masked; persists to the store — ruling O-4; the env var wins
+    /// and the field says so in words when one is set).
+    Key,
+}
+
 /// Everything the shell carries between frames.
 pub struct ShellUi {
     /// Panel collapse flags, mode, user-resized dimensions.
@@ -154,6 +206,51 @@ pub struct ShellUi {
     /// The at-rest display-list store (WO-020 INC4 §8.2): instrument cards paint their last
     /// rendered display list while no instance runs; WORDS when none exists.
     pub atrest: crate::ui::atrest::AtRestStore,
+    /// The live display instances (WO-020 INC6 S4, D17c): one per spawned instrument whose
+    /// package loaded — the device's launch registration fills this (`instrument_launch`,
+    /// device-first-compile); the sandbox fills it in tests through the SAME seam. Empty in a
+    /// sandbox shell: the tick is a no-op and every band stays at rest, honestly.
+    pub live_displays: std::collections::HashMap<
+        sparq_ui::canvas::model::NodeId,
+        Box<dyn crate::ui::live_display::LiveDisplay>,
+    >,
+    /// The live surfaces the paced draws produced (the band switch's LIVE shelf — D17c:
+    /// "live where the instance carries it, at rest otherwise").
+    pub live_surfaces: crate::ui::live_display::LiveSurfaces,
+    /// Display instances loaded at launch but not yet attached to a canvas node, keyed by
+    /// module id (the at-rest store's own key). The device's launch registration
+    /// (`instrument_launch`, D17a) fills this; the tick attaches one to the FIRST node of its
+    /// module — a second node of the same module stays at rest, in words (one instance, one
+    /// owner: the runtime's `GuestInstance` is not `Sync`, and cloning a wasm instance is not
+    /// a v0 door). Sandbox tests fill it with scripted mocks through the same seam.
+    pub pending_displays:
+        std::collections::HashMap<String, Box<dyn crate::ui::live_display::LiveDisplay>>,
+    /// The display pacer (D19): the token's cadence + the edit force + the skip/bypass count.
+    display_pacer: crate::ui::live_display::DisplayPacer,
+    /// The last tick's edit-diff memo per instrument node (params + size): a change forces the
+    /// next draw (D19's "any param edit, cell swap, resize"), read from the graph so the hook
+    /// cannot be forgotten by a future edit door.
+    display_memo: std::collections::HashMap<
+        sparq_ui::canvas::model::NodeId,
+        (Vec<f32>, Option<sparq_ui::geom::Vec2>),
+    >,
+    /// The LOD the pacer last saw (a transition forces every instance — D19).
+    paced_lod: Option<sparq_ui::canvas::camera::Lod>,
+    /// The live stream provider (WO-020 INC6 S4, D17b): the driver thread's read face, present
+    /// when the build carries `streams-net` and the broker launched. The tab and the §5.2 label
+    /// read THIS first and the replay fixtures second — "live where the driver carries it, at
+    /// rest otherwise", the same switch as the band's.
+    #[cfg(feature = "streams")]
+    pub broker_provider: Option<sparq_host_wasm::sources::BrokerProvider>,
+    /// The stream driver thread's handle (S4): polling the due streams on cadence through the
+    /// injected transport. `None` until `start_live_streams` (the window host's launch door —
+    /// the headless audit never opens it, so a `streams-net` build's gates stay hermetic).
+    #[cfg(feature = "streams-net")]
+    pub streams_driver: Option<crate::ui::streams_driver::StreamsDriver>,
+    /// The driver thread's join handle (the goodbye: `Drop` stops and joins — a shell never
+    /// leaks its control-plane thread).
+    #[cfg(feature = "streams-net")]
+    streams_driver_handle: Option<std::thread::JoinHandle<()>>,
     /// The hermetic stream provider (feature `streams`): fixture windows for the §5.2 status
     /// label. The device swaps in the BrokerProvider (INC5) behind the same trait.
     #[cfg(feature = "streams")]
@@ -162,6 +259,28 @@ pub struct ShellUi {
     /// against the node's live params).
     #[cfg(feature = "streams")]
     bindings: std::collections::HashMap<String, sparq_host_wasm::sources::ManifestSources>,
+    /// The key/cadence overrides store (WO-020 INC6 D18, rulings O-2/O-3/O-4): loaded once at
+    /// launch (control thread, filesystem legal), written on edit, never read on an audio
+    /// path. The STREAMS tab reads and edits it; S4's driver feeds the broker from it.
+    #[cfg(feature = "streams")]
+    pub overrides: sparq_streams::store::Overrides,
+    /// The stream registry for the STREAMS tab's rows (the canonical order — the picker's).
+    /// Separate from the replay provider's copy so the tab exists (in its at-rest words) even
+    /// when no fixture set was recorded.
+    #[cfg(feature = "streams")]
+    streams_registry: Option<sparq_streams::Registry>,
+    /// The focused STREAMS-tab field (the library search's idiom: an INPUT-EVENT feed, not a
+    /// toolkit widget — the wrap-egui rule). Transient view state; the store is the truth.
+    #[cfg(feature = "streams")]
+    streams_entry: Option<StreamsField>,
+    /// The STREAMS tab's scroll offset, px (the library list's idiom; clamped every frame to
+    /// the region the rows actually live in).
+    #[cfg(feature = "streams")]
+    streams_scroll: f32,
+    /// Last frame's STREAMS-tab rows region (the scroll clamp's measured truth, the
+    /// `library_list_rect` convention).
+    #[cfg(feature = "streams")]
+    streams_list_rect: Option<Rect>,
     /// The patch graph being edited (WO-013). The demo set is built from the registry — the same
     /// manifests discovery reads; the browser lands with the next increment.
     pub graph: Graph,
@@ -239,11 +358,94 @@ struct KeyBatch {
 /// ruling moved it off the canvas).
 pub const LOG_TAB: usize = 0;
 
+/// The dock's STREAMS tab index (WO-020 INC6 ruling O-2: the disabled word comes alive as the
+/// stream plane's window — one row per registry stream, live under the `streams` feature and
+/// an honest disabled word without it).
+#[cfg(feature = "streams")]
+pub const STREAMS_TAB: usize = 2;
+
 /// The dock's tabs, in order, with whether the subsystem behind them exists (operator ruling
 /// 2026-09-30: MODULES and LOG are live; the rest stay disabled words until their subsystems
-/// ship). Index 5 is the LOG tab the intent/diagnostic log moved to.
-const DOCK_TABS: [(&str, bool); 5] =
-    [("LOG", true), ("LIBRARY", false), ("STREAMS", false), ("SCENES", false), ("JOURNAL", false)];
+/// ship — the STREAMS tab shipped with WO-020 INC6 S3, behind its feature). Index 5 is the LOG
+/// tab the intent/diagnostic log moved to.
+const DOCK_TABS: [(&str, bool); 5] = [
+    ("LOG", true),
+    ("LIBRARY", false),
+    ("STREAMS", cfg!(feature = "streams")),
+    ("SCENES", false),
+    ("JOURNAL", false),
+];
+
+/// The driver thread's goodbye (S4): the shell stopping stops the control-plane thread and
+/// joins it — a leaked poller would keep hammering rate-limited feeds after the window closed
+/// (the O-3 floor is a promise to the feeds, not just to the operator).
+#[cfg(feature = "streams-net")]
+impl Drop for ShellUi {
+    fn drop(&mut self) {
+        if let Some(d) = self.streams_driver.as_ref() {
+            d.stop();
+        }
+        if let Some(h) = self.streams_driver_handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+/// The last-fetch age in words (D20: "the last-fetch age in words") — the provider's stamp
+/// against its clock, never a bare number without its unit (token rule 9's spirit).
+#[cfg(feature = "streams")]
+fn age_words(seconds: i64) -> String {
+    match seconds {
+        s if s < 0 => "—".to_string(),
+        s if s < 60 => format!("{s} s ago"),
+        s if s < 3_600 => format!("{} m ago", s / 60),
+        s if s < 86_400 => format!("{} h ago", s / 3_600),
+        s => format!("{} d ago", s / 86_400),
+    }
+}
+
+/// The §5.2 status sentence for every instrument node, from ANY provider (S4's swap reads the
+/// live broker first and the replay fixtures second — one function, two guests, the trait's
+/// whole promise). Returns `(module id, sentence)` pairs for the shell to publish.
+#[cfg(feature = "streams")]
+fn status_words_for<P: sparq_host_wasm::sources::StreamProvider>(
+    graph: &Graph,
+    bindings: &std::collections::HashMap<String, sparq_host_wasm::sources::ManifestSources>,
+    prov: &P,
+    now_unix: i64,
+) -> Vec<(String, String)> {
+    use sparq_host_wasm::sources::status_label;
+    use sparq_module_api::params::ParamSet;
+    let mut out = Vec::new();
+    for n in graph.nodes() {
+        let Some(ms) = bindings.get(&n.spec.module_id) else { continue };
+        let vals: Vec<f32> = n.param_values.clone();
+        let ps = ParamSet::new(0, &vals).unwrap_or_else(ParamSet::zeroed);
+        out.push((n.spec.module_id.clone(), status_label(ms, "wall", &ps, prov, now_unix)));
+    }
+    out
+}
+
+/// The live broker's clock: the plane's own impure `now_unix` under `streams-net`; without it
+/// (a broker that cannot exist there, but the match must stay total) the newest attempt stamp —
+/// an injected-clock answer, never a wall read the plane did not sanction (D11).
+#[cfg(feature = "streams")]
+fn broker_now(bp: &sparq_host_wasm::sources::BrokerProvider) -> i64 {
+    #[cfg(feature = "streams-net")]
+    {
+        let _ = bp;
+        sparq_streams::fetch::now_unix()
+    }
+    #[cfg(not(feature = "streams-net"))]
+    {
+        use sparq_host_wasm::sources::StreamProvider;
+        let reg = bp.registry();
+        bp.broker()
+            .lock()
+            .map(|b| reg.streams().iter().filter_map(|d| b.last_attempt(&d.id)).max().unwrap_or(0))
+            .unwrap_or(0)
+    }
+}
 
 /// Per-frame inputs the host (window or headless driver) supplies.
 pub struct FrameInput<'a> {
@@ -341,12 +543,69 @@ impl ShellUi {
             }
             (prov, b)
         };
+        // The overrides store (WO-020 INC6 D18): loaded ONCE here (control thread, filesystem
+        // legal — the paint path never touches a disk), with a malformed file arriving as
+        // words in the launch log and an empty store (§6.3: the app never dies because a data
+        // file died). The stream registry loads beside it so the STREAMS tab has its rows even
+        // when no fixture set was ever recorded.
+        #[cfg(feature = "streams")]
+        let (overrides, streams_registry) = {
+            let (store, words) = sparq_streams::store::Overrides::load_default();
+            if let Some(w) = words {
+                log.push(format!("streams: {w}"));
+            }
+            match sparq_streams::Registry::load() {
+                Ok(r) => (store, Some(r)),
+                Err(e) => {
+                    log.push(format!(
+                        "streams: the registry failed to load ({e}) — the STREAMS tab stays empty"
+                    ));
+                    (store, None)
+                },
+            }
+        };
+        // The live stream plane (WO-020 INC6 S4, D17b) is built by `start_live_streams` — an
+        // EXPLICIT door the window host calls at launch, never `new()` itself: the headless
+        // audit shares this constructor and must stay hermetic even in a `streams-net` build
+        // (a gate that spends the operator's NASA quota per run is a gate nobody trusts). The
+        // sandbox shell therefore stays AT REST on the fixtures, in words — which is exactly
+        // what D20 rules the tab must say.
+        #[cfg(all(feature = "streams", not(feature = "streams-net")))]
+        let broker_provider: Option<sparq_host_wasm::sources::BrokerProvider> = None;
+        #[cfg(feature = "streams-net")]
+        let broker_provider: Option<sparq_host_wasm::sources::BrokerProvider> = None;
+        #[cfg(feature = "streams-net")]
+        let streams_driver: Option<crate::ui::streams_driver::StreamsDriver> = None;
+        #[cfg(feature = "streams-net")]
+        let streams_driver_handle: Option<std::thread::JoinHandle<()>> = None;
         Self {
             atrest,
             #[cfg(feature = "streams")]
             replay,
             #[cfg(feature = "streams")]
             bindings,
+            #[cfg(feature = "streams")]
+            overrides,
+            #[cfg(feature = "streams")]
+            streams_registry,
+            #[cfg(feature = "streams")]
+            streams_entry: None,
+            #[cfg(feature = "streams")]
+            streams_scroll: 0.0,
+            #[cfg(feature = "streams")]
+            streams_list_rect: None,
+            #[cfg(feature = "streams")]
+            broker_provider,
+            #[cfg(feature = "streams-net")]
+            streams_driver,
+            #[cfg(feature = "streams-net")]
+            streams_driver_handle,
+            live_displays: std::collections::HashMap::new(),
+            live_surfaces: crate::ui::live_display::LiveSurfaces::new(),
+            pending_displays: std::collections::HashMap::new(),
+            display_pacer: crate::ui::live_display::DisplayPacer::new(),
+            display_memo: std::collections::HashMap::new(),
+            paced_lod: None,
             state: ShellState::default(),
             theme: ThemeChoice::PhosphorDark,
             recognizer: GestureRecognizer::from_tokens(),
@@ -451,6 +710,17 @@ impl ShellUi {
                     self.scroll_library(delta.y);
                     continue;
                 }
+                // The STREAMS tab owns pans over the dock (the library's rule: a gesture OVER
+                // a surface belongs to that surface) — the wheel scrolls the stream rows, not
+                // the camera (WO-020 INC6 D20).
+                #[cfg(feature = "streams")]
+                if self.state.dock_tab == STREAMS_TAB
+                    && !self.state.dock_collapsed
+                    && layout.dock.is_some_and(|d| d.contains(*center))
+                {
+                    self.scroll_streams(delta.y);
+                    continue;
+                }
             }
             if self.route_to_canvas(*intent, &layout) {
                 for ev in self.canvas.on_intent(
@@ -462,6 +732,11 @@ impl ShellUi {
                 ) {
                     if let CanvasEvent::RenderWav = ev {
                         self.render_canvas_to_wav();
+                    } else if let CanvasEvent::RateField(node) = ev {
+                        // The card's RATE field (S5, D20's second door): the canvas routed the
+                        // tap; the shell owns the entry over its store.
+                        self.open_card_rate_field(node);
+                        self.push_log(ev.message());
                     } else {
                         self.push_log(ev.message());
                     }
@@ -502,6 +777,49 @@ impl ShellUi {
             }
         }
 
+        // 3d. the STREAMS tab's field key feed (WO-020 INC6 D18/D20): the same input-event
+        //     idiom — typed characters and Backspace go to the focused field; Enter commits
+        //     through the store's doors (the cadence floor refuses in words and keeps the old
+        //     value; a key commit persists masked and logs STATE words, never the value);
+        //     Escape cancels. The KEY field echoes bullets as you type — the mask is not only
+        //     for the committed row (D20: masked).
+        #[cfg(feature = "streams")]
+        if self.streams_entry.is_some() {
+            let kb = Self::read_keys(ui);
+            if kb.escape {
+                let words = self.streams_entry.as_ref().map(|f| self.streams_field_name(f));
+                self.streams_entry = None;
+                self.push_log(format!(
+                    "streams: {} cancelled — the store keeps what it had",
+                    words.unwrap_or_else(|| "field".to_string())
+                ));
+            } else {
+                if !kb.text.is_empty() {
+                    if let Some(f) = self.streams_entry.as_mut() {
+                        if f.fresh {
+                            f.entry = sparq_ui::canvas::entry::TextEntry::new(&kb.text);
+                            f.fresh = false;
+                        } else {
+                            f.entry.insert(&kb.text);
+                        }
+                    }
+                }
+                for _ in 0..kb.backs {
+                    if let Some(f) = self.streams_entry.as_mut() {
+                        if f.fresh {
+                            f.entry = sparq_ui::canvas::entry::TextEntry::new("");
+                            f.fresh = false;
+                        } else {
+                            f.entry.backspace();
+                        }
+                    }
+                }
+                if kb.enter {
+                    self.commit_streams_field();
+                }
+            }
+        }
+
         // 4. Recompute the shell layout so this frame's toggles are reflected in what we draw and
         //    in `last_layout` (step 2's layout predates the intents, and exists only to give
         //    routing a canvas rect). Then recompute the canvas layout from the current graph +
@@ -515,6 +833,11 @@ impl ShellUi {
         if self.canvas.wire_straight {
             self.canvas_layout.make_wires_straight();
         }
+
+        // 4b. the live display plane's tick (WO-020 INC6 S4, D17c/D19): paced draws at the
+        //     band's actual px, after this frame's layout is final and before the painter reads
+        //     the live shelf. A no-op while no instance is registered (every sandbox shell).
+        self.tick_live_displays(input.now_ms);
 
         // 5. the inspector geometry for the CURRENT selection: exactly one node selected and the
         //    panel open, else None (multi-select inspects nothing in v0 — a param edit needs one
@@ -813,6 +1136,16 @@ impl ShellUi {
         self.registry.iter().find(|r| r.id == id).map(|r| r.rect)
     }
 
+    /// The AUDIT element registered under `id` in the last drawn frame — the audit-side twin of
+    /// [`Self::rect_of`] (which reads the activation registry): what the layout audit measured,
+    /// queried by the same id the audit rows quote (`canvas/resize/3`, `canvas/port/0/1`, …).
+    /// The smoke suite reads it to prove a command surface is registered at its declared touch
+    /// class — the WO-020 INC6 acceptance's "the audit registers the handle at the touch floor".
+    #[must_use]
+    pub fn audit_element(&self, id: &str) -> Option<&InteractiveElement> {
+        self.audit_elements.iter().find(|e| e.id == id)
+    }
+
     /// The canvas layout computed in the last drawn frame. Synthetic-input drivers (the headless
     /// smoke suite) read node and port screen positions from it to aim gestures at the exact
     /// pixels the user would touch, without duplicating the layout arithmetic.
@@ -955,6 +1288,529 @@ impl ShellUi {
         let n = self.library_items().len() as f32;
         let max_scroll = (n * step_h - list.height()).max(0.0);
         self.library_scroll = (self.library_scroll - delta_y).clamp(0.0, max_scroll);
+    }
+
+    /// The STREAMS rows' scroll (the library's idiom): clamped against the region the rows
+    /// actually live in and the registry's row count — measured, not guessed (WO-020 INC6 D20).
+    #[cfg(feature = "streams")]
+    fn scroll_streams(&mut self, delta_y: f32) {
+        let row_h = LAYOUT_TOUCH_ROW_HEIGHT_LIST as f32;
+        let n = self.streams_registry.as_ref().map_or(0.0, |r| r.len() as f32);
+        let region_h =
+            self.streams_list_rect.map(|r| r.height()).unwrap_or(LAYOUT_SHELL_DOCK_HEIGHT as f32);
+        let max_scroll = (n * row_h - region_h).max(0.0);
+        self.streams_scroll = (self.streams_scroll - delta_y).clamp(0.0, max_scroll);
+    }
+
+    /// Focus a STREAMS-tab field (D20). The cadence field pre-fills with the value it would
+    /// replace (direct manipulation: what you see is what you edit); the KEY field starts
+    /// EMPTY and echoes bullets — a committed key is never re-shown, not even masked, because
+    /// the mask's last-4 is a reading, not an editing surface. A KEY field whose env var is
+    /// set refuses in words: the field is disabled WITH those words (D20 — the precedence is
+    /// visible, not a mystery), and a row that needs no key says so too.
+    #[cfg(feature = "streams")]
+    fn focus_streams_field(&mut self, row: usize, kind: StreamsFieldKind) {
+        // The row's facts, copied out before any &mut self call (one borrow at a time).
+        let Some((id, reg_cadence, key_env)) = self
+            .streams_registry
+            .as_ref()
+            .and_then(|r| r.streams().get(row))
+            .map(|d| (d.id.clone(), d.cadence_s, d.key_env.clone()))
+        else {
+            return;
+        };
+        self.library_focus = false;
+        match kind {
+            StreamsFieldKind::Cadence => {
+                let cur = self.overrides.cadence_s(&id).unwrap_or(reg_cadence);
+                self.streams_entry = Some(StreamsField {
+                    target: StreamsFieldTarget::TabRow,
+                    row,
+                    kind,
+                    entry: sparq_ui::canvas::entry::TextEntry::new(&cur.to_string()),
+                    fresh: true,
+                });
+                self.push_log(format!(
+                    "streams: cadence field {id} — type whole seconds (floor {} s, ruling O-3); Enter commits, Escape cancels, empty clears the override",
+                    sparq_streams::store::CADENCE_FLOOR_S
+                ));
+            },
+            StreamsFieldKind::Key => {
+                let Some(var) = key_env else {
+                    self.push_log(format!("streams: {id} needs no key — nothing to type"));
+                    return;
+                };
+                if std::env::var(&var).is_ok_and(|v| !v.trim().is_empty()) {
+                    self.push_log(format!(
+                        "streams: the KEY field for {id} is DISABLED — SET (env); the env var wins over the file (ruling O-4)"
+                    ));
+                    return;
+                }
+                self.streams_entry = Some(StreamsField {
+                    target: StreamsFieldTarget::TabRow,
+                    row,
+                    kind,
+                    entry: sparq_ui::canvas::entry::TextEntry::new(""),
+                    fresh: true,
+                });
+                self.push_log(format!(
+                    "streams: KEY field {id} — typed echoes masked; Enter persists it to the overrides store (ruling O-4). The value never rides a log, a patch or an at-rest artefact"
+                ));
+            },
+        }
+    }
+
+    /// The focused field's name, in words (the cancel/commit log lines).
+    #[cfg(feature = "streams")]
+    fn streams_field_name(&self, f: &StreamsField) -> String {
+        match f.target {
+            StreamsFieldTarget::Card(node) => match self.card_rate_stream(node) {
+                Some((cell, stream)) => {
+                    format!("the card's RATE field (CELL {cell:02} → {stream})")
+                },
+                None => "the card's RATE field".to_string(),
+            },
+            StreamsFieldTarget::TabRow => {
+                let id = self
+                    .streams_registry
+                    .as_ref()
+                    .and_then(|r| r.streams().get(f.row))
+                    .map(|d| d.id.clone())
+                    .unwrap_or_else(|| "?".to_string());
+                match f.kind {
+                    StreamsFieldKind::Cadence => format!("the cadence field {id}"),
+                    StreamsFieldKind::Key => format!("the KEY field {id}"),
+                }
+            },
+        }
+    }
+
+    /// The stream a card's RATE field GOVERNS (D20: the words name it): the SELECTED cell's
+    /// bound stream — the cell enum's option value IS the registry id (the manifest
+    /// generator's own vocabulary). `None` when the panel binds no stream (the OFF option, or
+    /// a spec without the cell params) — the field then has nothing to govern and says so.
+    #[cfg(feature = "streams")]
+    fn card_rate_stream(&self, node: sparq_ui::canvas::model::NodeId) -> Option<(u32, String)> {
+        let n = self.graph.node(node)?;
+        let sc = n.spec.params.iter().position(|p| p.id == "selected_cell")?;
+        let sel = n.param_value(sc)?.round().max(0.0) as u32;
+        let cell_id = format!("cell_{:02}", sel + 1);
+        let cp = n.spec.params.iter().position(|p| p.id == cell_id)?;
+        let v = n.param_value(cp)?.round().max(0.0) as usize;
+        let (value, _label) = n.spec.params[cp].options.get(v)?;
+        if value.is_empty() {
+            return None; // the OFF option: no stream, no rate to govern
+        }
+        Some((sel + 1, value.clone()))
+    }
+
+    /// How many of the card's panels currently ride `stream` — the shared-feed truth O-2
+    /// wants SAID ("panels sharing a feed share its rate — the broker's truth, in words").
+    #[cfg(feature = "streams")]
+    fn panels_on_stream(&self, node: sparq_ui::canvas::model::NodeId, stream: &str) -> usize {
+        let Some(n) = self.graph.node(node) else { return 0 };
+        n.spec
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.id.starts_with("cell_"))
+            .filter(|(pi, p)| {
+                let v =
+                    n.param_value(*pi).map(|v| v.round().max(0.0) as usize).unwrap_or(usize::MAX);
+                p.options.get(v).is_some_and(|(val, _)| val == stream)
+            })
+            .count()
+    }
+
+    /// Focus a card's RATE field (D20's second door): the same entry mechanics as the tab's
+    /// cadence field, over the SAME store row — one store, two doors.
+    #[cfg(feature = "streams")]
+    fn open_card_rate_field(&mut self, node: sparq_ui::canvas::model::NodeId) {
+        let Some((cell_no, stream)) = self.card_rate_stream(node) else {
+            self.push_log(
+                "streams: that panel binds no stream right now — its RATE field has nothing to govern (the CELL dropdown picks one)"
+                    .to_string(),
+            );
+            return;
+        };
+        let reg_cad =
+            self.streams_registry.as_ref().and_then(|r| r.get(&stream)).map(|d| d.cadence_s);
+        let Some(reg_cad) = reg_cad else {
+            self.push_log(format!(
+                "streams: `{stream}` is not in the registry — the RATE field refuses in words rather than govern nothing"
+            ));
+            return;
+        };
+        let cur = self.overrides.cadence_s(&stream).unwrap_or(reg_cad);
+        self.library_focus = false;
+        self.streams_entry = Some(StreamsField {
+            target: StreamsFieldTarget::Card(node),
+            row: usize::MAX,
+            kind: StreamsFieldKind::Cadence,
+            entry: sparq_ui::canvas::entry::TextEntry::new(&cur.to_string()),
+            fresh: true,
+        });
+        self.push_log(format!(
+            "streams: the card's RATE field — CELL {cell_no:02} rides `{stream}`; type whole seconds (floor {} s, ruling O-3), Enter commits. It writes the SAME override the tab does: panels sharing `{stream}` share its rate",
+            sparq_streams::store::CADENCE_FLOOR_S
+        ));
+    }
+
+    /// The RATE field tap without a stream plane: the row is reserved geometry, and the shell
+    /// says in words what is missing — never a silent no, never a pretend field.
+    #[cfg(not(feature = "streams"))]
+    fn open_card_rate_field(&mut self, _node: sparq_ui::canvas::model::NodeId) {
+        self.push_log(
+            "RATE — this build carries no stream plane (the `streams` feature): the row is reserved, in words"
+                .to_string(),
+        );
+    }
+
+    /// The card RATE rows' content, per frame (the painter invents nothing — S5/D20).
+    #[cfg(feature = "streams")]
+    fn rate_rows(
+        &self,
+    ) -> std::collections::HashMap<sparq_ui::canvas::model::NodeId, crate::ui::canvas_ui::RateRowInfo>
+    {
+        use crate::ui::canvas_ui::RateRowInfo;
+        let mut out = std::collections::HashMap::new();
+        for n in self.graph.nodes() {
+            if n.spec.instrument_face().is_none() {
+                continue;
+            }
+            let focused = self
+                .streams_entry
+                .as_ref()
+                .is_some_and(|f| f.target == StreamsFieldTarget::Card(n.id));
+            let info = match self.card_rate_stream(n.id) {
+                Some((cell_no, stream)) => {
+                    let reg_cad = self
+                        .streams_registry
+                        .as_ref()
+                        .and_then(|r| r.get(&stream))
+                        .map(|d| d.cadence_s);
+                    let ovr = self.overrides.cadence_s(&stream);
+                    let eff = ovr.or(reg_cad).unwrap_or(0);
+                    let shared = self.panels_on_stream(n.id, &stream);
+                    let field_words = match (ovr, reg_cad) {
+                        (Some(o), Some(r)) if o != r => format!("{o} s  (registry {r} s)"),
+                        _ => format!("{eff} s"),
+                    };
+                    RateRowInfo {
+                        words: format!(
+                            "RATE · CELL {cell_no:02} → {stream}: {eff} s — {shared} panel(s) ride this feed and share its rate (the broker's truth)"
+                        ),
+                        field_words,
+                        editable: reg_cad.is_some(),
+                        focused,
+                    }
+                },
+                None => RateRowInfo {
+                    words:
+                        "RATE — this panel binds no stream right now (the CELL dropdown picks one)"
+                            .to_string(),
+                    field_words: String::new(),
+                    editable: false,
+                    focused,
+                },
+            };
+            out.insert(n.id, info);
+        }
+        out
+    }
+
+    /// Enter on the focused STREAMS field: the commit through the store's doors (D18). The
+    /// cadence floor refuses in words and keeps the old value; a key persists to the file and
+    /// the log carries the STATE words + the mask — never the value. The save is immediate
+    /// (write-on-edit, control thread); a store that cannot save says so, and the edit stays
+    /// in memory for this session.
+    #[cfg(feature = "streams")]
+    fn commit_streams_field(&mut self) {
+        let Some(f) = self.streams_entry.take() else { return };
+        let name = self.streams_field_name(&f);
+        let text = f.entry.text().trim().to_string();
+        // The registry clone releases the borrow before the &mut self calls below (a commit
+        // is a rare control-thread event; the clone is 23 rows).
+        let Some(reg) = self.streams_registry.clone() else { return };
+        // The stream this commit governs — resolved at COMMIT time (the selected cell may have
+        // moved while the field was focused; the field always writes the stream its panel
+        // rides NOW, and the log line names it).
+        let governed = match f.target {
+            StreamsFieldTarget::TabRow => reg.streams().get(f.row).map(|d| d.id.clone()),
+            StreamsFieldTarget::Card(node) => self.card_rate_stream(node).map(|(_, sid)| sid),
+        };
+        let Some(stream_id) = governed else {
+            self.push_log(format!(
+                "streams: {name} governs no stream right now — nothing was written"
+            ));
+            return;
+        };
+        let Some(def) = reg.get(&stream_id) else {
+            self.push_log(format!(
+                "streams: `{stream_id}` is not in the registry — nothing was written"
+            ));
+            return;
+        };
+        if matches!(f.target, StreamsFieldTarget::Card(_))
+            && matches!(f.kind, StreamsFieldKind::Key)
+        {
+            // Unreachable by construction (the card row has no KEY field); refused in words
+            // anyway, because a silent no is the one thing this shell does not do.
+            self.push_log(
+                "streams: the card's RATE row carries no KEY field — keys live on the STREAMS tab (ruling O-2's doors)"
+                    .to_string(),
+            );
+            return;
+        }
+        match f.kind {
+            StreamsFieldKind::Cadence => {
+                let secs = if text.is_empty() {
+                    None
+                } else {
+                    match text.parse::<u32>() {
+                        Ok(v) => Some(v),
+                        Err(_) => {
+                            self.push_log(format!(
+                                "streams: '{text}' is not a whole number of seconds — {name} keeps its old value"
+                            ));
+                            return;
+                        },
+                    }
+                };
+                match self.overrides.set_cadence(&stream_id, secs) {
+                    Ok(()) => {
+                        if let Err(e) = self.overrides.save() {
+                            self.push_log(format!("streams: the store did NOT save: {e}"));
+                        }
+                        // The driver paces on the new floor from its next wait, not the next
+                        // restart (D18's "written on edit", all the way down).
+                        #[cfg(feature = "streams-net")]
+                        if let Some(d) = self.streams_driver.as_ref() {
+                            if let Err(e) =
+                                d.apply_cadence(&stream_id, self.overrides.cadence_s(&stream_id))
+                            {
+                                self.push_log(format!(
+                                    "streams: the driver refused the cadence: {e}"
+                                ));
+                            }
+                        }
+                        self.push_log(match self.overrides.cadence_s(&stream_id) {
+                            Some(eff) => format!(
+                                "streams: cadence {stream_id} → {eff} s (the store is written; BOTH doors read it — the tab's row and every card panel riding this feed)"
+                            ),
+                            None => format!(
+                                "streams: the cadence override for {stream_id} is cleared — the registry's {} s governs",
+                                def.cadence_s
+                            ),
+                        });
+                    },
+                    Err(words) => self.push_log(format!("streams: {words}")),
+                }
+            },
+            StreamsFieldKind::Key => {
+                self.overrides.set_key(&stream_id, (!text.is_empty()).then_some(text));
+                if let Err(e) = self.overrides.save() {
+                    self.push_log(format!("streams: the store did NOT save: {e}"));
+                }
+                // A key changes what is FETCHABLE: wake the driver so a KEY NEEDED stream's
+                // first poll does not wait out the old wait slice (D18's write-on-edit).
+                #[cfg(feature = "streams-net")]
+                if let Some(d) = self.streams_driver.as_ref() {
+                    d.wake();
+                }
+                // The log line is the STATE words + the mask (D18's redaction: the value
+                // exists in the file and inside Request::url, and nowhere else).
+                let words = sparq_streams::store::key_words(
+                    def,
+                    &reg,
+                    |k| std::env::var(k).ok(),
+                    &self.overrides,
+                );
+                let mask = self
+                    .overrides
+                    .masked_key_for_env(&reg, def.key_env.as_deref().unwrap_or(""))
+                    .map(|m| format!(" ({m})"))
+                    .unwrap_or_default();
+                self.push_log(format!(
+                    "streams: the key for {stream_id} committed — the state is {words}{mask}"
+                ));
+            },
+        }
+    }
+
+    /// Headless-driver doors (the `rename_set_text` / `library_entry` idiom — keys are an
+    /// input-event feed, not a gesture, and the headless host has no toolkit key events):
+    /// set the focused STREAMS field's buffer, commit it, and ask whether one is focused.
+    #[cfg(feature = "streams")]
+    pub fn streams_field_set_text(&mut self, text: &str) {
+        if let Some(f) = self.streams_entry.as_mut() {
+            f.entry = sparq_ui::canvas::entry::TextEntry::new(text);
+            f.fresh = false;
+        }
+    }
+
+    /// Enter on the focused STREAMS field (the headless twin of the key feed's commit).
+    #[cfg(feature = "streams")]
+    pub fn streams_field_commit(&mut self) {
+        self.commit_streams_field();
+    }
+
+    /// Whether a STREAMS-tab field holds the focus.
+    #[cfg(feature = "streams")]
+    #[must_use]
+    pub fn streams_field_focused(&self) -> bool {
+        self.streams_entry.is_some()
+    }
+
+    /// The live stream plane's launch door (WO-020 INC6 S4, D17b — `streams-net` only): build
+    /// the broker stack (the checked-in registry, the last-good cache seeding the relaunch, the
+    /// driver composed with the overrides store so file keys and cadences govern from the first
+    /// poll), start the control-plane thread, and swap the provider the tab and the §5.2 label
+    /// read. ANY refusal leaves the shell AT REST on the replay fixtures, in words — a
+    /// half-live plane is never shown as live (§6.3). Called by the WINDOW host at launch;
+    /// never by `new()` (the headless audit shares that constructor and must stay hermetic —
+    /// a gate that spends the operator's API quota per run is a gate nobody trusts).
+    #[cfg(feature = "streams-net")]
+    pub fn start_live_streams(&mut self) {
+        if self.streams_driver.is_some() {
+            self.push_log("streams: the driver is already running".to_string());
+            return;
+        }
+        match crate::ui::streams_driver::launch_live(&self.overrides) {
+            Ok((driver, provider)) => {
+                let handle = driver.start();
+                self.streams_driver = Some(driver);
+                self.streams_driver_handle = Some(handle);
+                self.broker_provider = Some(provider);
+                self.push_log(
+                    "streams: the driver thread is polling on cadence (the overrides store composed; env wins over it) — the STREAMS tab reads LIVE"
+                        .to_string(),
+                );
+            },
+            Err(words) => self.push_log(format!(
+                "streams: the live plane refused ({words}) — the shell stays AT REST on the fixtures, in words"
+            )),
+        }
+    }
+
+    /// One tick of the live display plane (D17c/D19), called by `frame()` after the canvas
+    /// layout is final: for every instrument node with a live instance, diff the edit memo
+    /// (params/size — a change forces the draw, D19), watch the LOD (a transition forces every
+    /// instance), ask the pacer, and draw at the band's ACTUAL px with the shell's animation
+    /// clock. Successes land on the live shelf (the band switch reads it); failures skip the
+    /// frame, count, and at five consecutive bypass the instance with §3's words — the audio
+    /// instance untouched (decision D's isolation). A no-op while no instance is registered
+    /// (every sandbox shell: the bands stay at rest, honestly).
+    #[cfg(feature = "ui")]
+    fn tick_live_displays(&mut self, now_ms: u64) {
+        if self.live_displays.is_empty() && self.pending_displays.is_empty() {
+            return;
+        }
+        use crate::ui::live_display::{DisplayFrame, DisplayLod, LiveSurface, BYPASS_WORDS};
+        // The attach pass (D17a→D17c): a launch-loaded instance joins the FIRST node of its
+        // module on the canvas — the executor adopts the audio half through the registry's
+        // factory; the UI thread owns this display half (decision D's isolation).
+        if !self.pending_displays.is_empty() {
+            let mut attached: Vec<(sparq_ui::canvas::model::NodeId, String)> = Vec::new();
+            for n in self.graph.nodes() {
+                if self.live_displays.contains_key(&n.id) {
+                    continue;
+                }
+                if let Some(inst) = self.pending_displays.remove(&n.spec.module_id) {
+                    self.live_displays.insert(n.id, inst);
+                    attached.push((n.id, n.spec.module_id.clone()));
+                }
+            }
+            for (id, module) in attached {
+                self.push_log(format!(
+                    "instrument display attached: {module} node {id} (the paced draw runs at the D19 token, {} Hz — a {} ms period)",
+                    sparq_ui::tokens::LAYOUT_CANVAS_INSTRUMENT_DISPLAY_HZ,
+                    self.display_pacer.period_ms()
+                ));
+            }
+        }
+        if self.live_displays.is_empty() {
+            return;
+        }
+        let time_sec = now_ms as f64 / 1000.0;
+        let lod = self.canvas.camera.lod();
+        if self.paced_lod != Some(lod) {
+            if self.paced_lod.is_some() {
+                self.display_pacer.note_lod_change();
+            }
+            self.paced_lod = Some(lod);
+        }
+        let dlod = match lod {
+            Lod::Full => DisplayLod::Full,
+            Lod::Simplified => DisplayLod::Simplified,
+            Lod::Dot => DisplayLod::Dot,
+        };
+        // The facts pass: band px, module id, display id, and the edit diff (read-only borrows).
+        let mut jobs = Vec::new();
+        for nl in &self.canvas_layout.nodes {
+            let Some(node) = self.graph.node(nl.id) else { continue };
+            let Some(inst) = self.live_displays.get(&nl.id) else { continue };
+            let Some(band) = node.spec.instrument_band(node.size) else { continue };
+            let sig = (node.effective_params(), node.size);
+            match self.display_memo.get(&nl.id) {
+                Some(prev) if *prev == sig => {},
+                Some(_) => self.display_pacer.note_edit(nl.id),
+                None => {}, // the first sight of a node: due() draws it anyway
+            }
+            self.display_memo.insert(nl.id, sig);
+            if !self.display_pacer.due(nl.id, now_ms) {
+                continue;
+            }
+            jobs.push((
+                nl.id,
+                node.spec.module_id.clone(),
+                DisplayFrame {
+                    display_id: inst.display_id().to_string(),
+                    width_px: band.x.max(1.0) as u32,
+                    height_px: band.y.max(1.0) as u32,
+                    lod: dlod,
+                    time_sec,
+                },
+            ));
+        }
+        // The draw pass.
+        for (id, module, frame) in jobs {
+            let Some(inst) = self.live_displays.get_mut(&id) else { continue };
+            let (w, h) = (frame.width_px as f32, frame.height_px as f32);
+            match inst.draw(&frame) {
+                Ok(items) => {
+                    self.display_pacer.record(id, true, now_ms);
+                    self.live_surfaces
+                        .insert(&module, LiveSurface { items, w, h, drawn_ms: now_ms });
+                },
+                Err(words) => {
+                    self.display_pacer.record(id, false, now_ms);
+                    self.push_log(format!(
+                        "instrument display {module}: the draw skipped — {words}"
+                    ));
+                    if self.display_pacer.bypassed(id) {
+                        self.live_surfaces.remove(&module);
+                        self.push_log(format!("instrument display {module}: {BYPASS_WORDS}"));
+                    }
+                },
+            }
+        }
+        // Nodes that left the canvas drop their instance, pace and memo (the graph is the
+        // truth; a deleted card leaves no ghost on the shelf).
+        let gone: Vec<sparq_ui::canvas::model::NodeId> = self
+            .live_displays
+            .keys()
+            .copied()
+            .filter(|id| self.graph.node(*id).is_none())
+            .collect();
+        for id in gone {
+            if let Some(inst) = self.live_displays.remove(&id) {
+                let _ = inst;
+            }
+            self.display_pacer.forget(id);
+            self.display_memo.remove(&id);
+        }
+        self.display_memo.retain(|id, _| self.graph.node(*id).is_some());
     }
 
     /// Whether a point probes the response plot: inside this frame's plot well AND the well has
@@ -1120,6 +1976,10 @@ impl ShellUi {
                     self.push_log(format!("dock: {name} tab"));
                 }
             },
+            #[cfg(feature = "streams")]
+            Action::StreamsCadence(row) => self.focus_streams_field(row, StreamsFieldKind::Cadence),
+            #[cfg(feature = "streams")]
+            Action::StreamsKey(row) => self.focus_streams_field(row, StreamsFieldKind::Key),
             Action::ToggleLibrary => {
                 self.state.library_collapsed = !self.state.library_collapsed;
                 self.push_log(format!(
@@ -1250,7 +2110,7 @@ impl ShellUi {
         }
     }
 
-    fn push_log(&mut self, line: String) {
+    pub(crate) fn push_log(&mut self, line: String) {
         self.log.push(line);
         if self.log.len() > LOG_LINES {
             let excess = self.log.len() - LOG_LINES;
@@ -1676,19 +2536,38 @@ impl ShellUi {
             // negotiated truth, owned here so the borrow of `live` ends before the toolbar.
             let main_info = self.live.as_ref().map(|s| s.driver_lines());
             // WO-020 §5.2: the instrument toolbar's status label is HOST words — refreshed per
-            // frame from the provider's windows (fixture-fed here; the broker on device, INC5).
+            // frame from the provider's windows. The provider the sentence reads is the LIVE
+            // one when the driver runs (S4's swap — D17b), the replay fixtures at rest (D20:
+            // the honest source, never a frozen lie).
             #[cfg(feature = "streams")]
-            if let Some(prov) = self.replay.as_ref() {
-                use sparq_host_wasm::sources::status_label;
-                use sparq_module_api::params::ParamSet;
-                for n in self.graph.nodes() {
-                    let Some(ms) = self.bindings.get(&n.spec.module_id) else { continue };
-                    let vals: Vec<f32> = n.param_values.clone();
-                    let ps = ParamSet::new(0, &vals).unwrap_or_else(ParamSet::zeroed);
-                    let words = status_label(ms, "wall", &ps, prov, prov.now());
-                    self.atrest.set_status(&n.spec.module_id, words);
+            {
+                let pairs = if let Some(bp) = self.broker_provider.as_ref() {
+                    status_words_for(&self.graph, &self.bindings, bp, broker_now(bp))
+                } else if let Some(rp) = self.replay.as_ref() {
+                    status_words_for(&self.graph, &self.bindings, rp, rp.now())
+                } else {
+                    Vec::new()
+                };
+                for (id, words) in pairs {
+                    self.atrest.set_status(&id, words);
                 }
             }
+            // The live display plane's shelf + the bypass list (S4/D17c): the painter reads
+            // LIVE where the instance carries it, AT REST otherwise, and the bypassed
+            // instances' bands say §3's words over the fallback.
+            let bypassed: Vec<sparq_ui::canvas::model::NodeId> = self
+                .live_displays
+                .keys()
+                .filter(|id| self.display_pacer.bypassed(**id))
+                .copied()
+                .collect();
+            // The RATE rows' content (S5/D20): the shell's per-frame compute — the words name
+            // the governed stream and the shared-feed truth; without the stream plane the map
+            // is empty and the painter's own at-rest sentence fills the reserved row.
+            #[cfg(feature = "streams")]
+            let rates = self.rate_rows();
+            #[cfg(not(feature = "streams"))]
+            let rates = std::collections::HashMap::new();
             canvas_ui::draw(
                 p,
                 pal,
@@ -1704,6 +2583,9 @@ impl ShellUi {
                 main_info.as_ref(),
                 self.hover,
                 &self.atrest,
+                &self.live_surfaces,
+                &bypassed,
+                &rates,
                 &mut self.audit_elements,
             );
             // The wire-encoding legend (increment 3, the mockup's floating box): top-right of
@@ -2229,6 +3111,331 @@ impl ShellUi {
                 );
                 y += line_h;
             }
+        }
+
+        // The STREAMS tab's content (WO-020 INC6 D20, ruling O-2): the stream plane's window.
+        #[cfg(feature = "streams")]
+        if self.state.dock_tab == STREAMS_TAB {
+            self.draw_streams_tab(p, dock, pal);
+        }
+    }
+
+    /// The STREAMS tab (WO-020 INC6 D20): one row per registry stream — LED + word status (the
+    /// provider's own derivation at its clock; with no driver thread this is the REPLAY
+    /// provider's fixture statuses and the header SAYS `AT REST — fixtures`, never a frozen
+    /// lie), the last-fetch age in words, the cadence (the override if set, the registry value
+    /// dimmed beside it; an editable field, floor 10 s — ruling O-3), and the key state + KEY
+    /// field (masked `••••last4`; typing writes the store — ruling O-4; an env-set key shows
+    /// `SET (env)` and the field is disabled WITH those words, unregistered — the precedence is
+    /// visible, not a mystery). The card's per-panel RATE field (S5) writes the same store:
+    /// one truth, two doors.
+    #[cfg(feature = "streams")]
+    fn draw_streams_tab(&mut self, p: &Painter, dock: Rect, pal: &Palette) {
+        use sparq_host_wasm::sources::StreamProvider;
+        let hb = LAYOUT_SHELL_PANEL_HEADER_HEIGHT as f32;
+        let pad = LAYOUT_SPACE_PADDING_PANEL as f32;
+        let gap = LAYOUT_SPACE_2 as f32;
+        let row_h = LAYOUT_TOUCH_ROW_HEIGHT_LIST as f32;
+        let font = font_xs();
+        let char_w = LAYOUT_SPACE_2 as f32;
+
+        // The header's honesty (D20): the LIVE rows read the driver's broker mirror; with no
+        // driver thread the rows are the REPLAY provider's fixture statuses, and the header
+        // SAYS which — never a frozen lie in either direction.
+        let header = if self.broker_provider.is_some() {
+            "LIVE — the driver thread polls on cadence (the rows are the broker's own mirror)"
+        } else if self.replay.is_some() {
+            "AT REST — fixtures (no driver thread in this build; the live rows land with it)"
+        } else {
+            "AT REST — no fixtures recorded (the windows stay empty until a record or a device run)"
+        };
+        p.text(
+            egui::pos2(dock.min.x + pad, dock.min.y + hb + gap + font.size * 0.5),
+            Align2::LEFT_CENTER,
+            header,
+            font.clone(),
+            pal.text_secondary,
+        );
+
+        let Some(reg) = self.streams_registry.clone() else {
+            p.text(
+                egui::pos2(dock.min.x + pad, dock.min.y + hb + gap * 3.0 + font.size),
+                Align2::LEFT_CENTER,
+                "the stream registry did not load — the tab stays empty, in words",
+                font,
+                pal.text_disabled,
+            );
+            return;
+        };
+
+        // The rows' region and its measured scroll clamp (the library's idiom).
+        let caption_y = dock.min.y + hb + gap * 2.0 + font.size;
+        let list = Rect::new(
+            Vec2::new(dock.min.x + pad, caption_y + font.size + gap),
+            Vec2::new(dock.max.x - pad, dock.max.y - gap),
+        );
+        self.streams_list_rect = Some(list);
+        let max_scroll = ((reg.len() as f32) * row_h - list.height()).max(0.0);
+        self.streams_scroll = self.streams_scroll.clamp(0.0, max_scroll);
+        let first = (self.streams_scroll / row_h).floor() as usize;
+        let capacity = ((list.height() / row_h).floor() as usize).max(1);
+
+        // The column captions (the header's vocabulary, dim).
+        let w = list.width();
+        let x_status = list.min.x + w * 0.22;
+        let x_age = list.min.x + w * 0.34;
+        let x_cad = list.min.x + w * 0.44;
+        let x_key = list.min.x + w * 0.60;
+        let cad_w = w * 0.13;
+        let key_w = w * 0.16;
+        for (x, word) in [
+            (list.min.x, "STREAM"),
+            (x_status, "STATUS"),
+            (x_age, "AGE"),
+            (x_cad, "CADENCE"),
+            (x_key, "KEY"),
+        ] {
+            p.text(
+                egui::pos2(x, caption_y + font.size * 0.5),
+                Align2::LEFT_CENTER,
+                word,
+                font.clone(),
+                pal.text_tertiary,
+            );
+        }
+
+        let env = |k: &str| std::env::var(k).ok();
+        let focused = self.streams_entry.as_ref().map(|f| (f.row, f.kind));
+        let mut drawn = 0usize;
+        for (i, def) in reg.streams().iter().enumerate().skip(first) {
+            if drawn > capacity {
+                break;
+            }
+            let y = list.min.y + i as f32 * row_h - self.streams_scroll;
+            if y + row_h < list.min.y {
+                continue;
+            }
+            if y > list.max.y {
+                break;
+            }
+            drawn += 1;
+            let cy = y + row_h * 0.5;
+            let row_rect = Rect::new(Vec2::new(list.min.x, y), Vec2::new(list.max.x, y + row_h));
+
+            // The key's STATE words (D18/D20) — store-aware, env-winning.
+            let kwords = sparq_streams::store::key_words(def, &reg, env, &self.overrides);
+            let key_needed = kwords == "KEY NEEDED";
+            // The status: KEY NEEDED is its own axis (window.rs's rule); else the provider's
+            // derivation at its clock — the replay's fixture statuses at rest (D20).
+            // The provider the row reads (D17b's swap): the driver's broker first — the LIVE
+            // mirror — the replay fixtures second, nothing third (words, never a frozen lie).
+            let (st, win) = if let Some(bp) = self.broker_provider.as_ref() {
+                let now = broker_now(bp);
+                (bp.status(&def.id, now), bp.window(&def.id))
+            } else if let Some(rp) = self.replay.as_ref() {
+                (rp.status(&def.id, rp.now()), rp.window(&def.id))
+            } else {
+                (sparq_streams::StreamStatus::Offline, None)
+            };
+            let (status_word, led) = if key_needed {
+                ("KEY NEEDED".to_string(), pal.error)
+            } else {
+                let led = match st {
+                    sparq_streams::StreamStatus::Live => pal.data,
+                    sparq_streams::StreamStatus::Stale => pal.warning,
+                    sparq_streams::StreamStatus::Offline => pal.text_disabled,
+                };
+                (st.as_words().to_string(), led)
+            };
+            // The age in words (D20) — the provider's window stamp against its clock.
+            let age = win
+                .as_ref()
+                .and_then(|w| w.last_fetch_unix())
+                .map(|f| {
+                    let now = self
+                        .broker_provider
+                        .as_ref()
+                        .map(broker_now)
+                        .or_else(|| self.replay.as_ref().map(|rp| rp.now()))
+                        .unwrap_or(0);
+                    age_words(now - f)
+                })
+                .unwrap_or_else(|| "—".to_string());
+
+            p.text(
+                egui::pos2(list.min.x, cy),
+                Align2::LEFT_CENTER,
+                def.id.clone(),
+                font.clone(),
+                pal.text_primary,
+            );
+            p.circle_filled(egui::pos2(x_status - gap - 4.0, cy), LAYOUT_SPACE_1 as f32, led);
+            p.text(
+                egui::pos2(x_status, cy),
+                Align2::LEFT_CENTER,
+                status_word,
+                font.clone(),
+                pal.text_secondary,
+            );
+            p.text(
+                egui::pos2(x_age, cy),
+                Align2::LEFT_CENTER,
+                age,
+                font.clone(),
+                pal.text_secondary,
+            );
+
+            // The cadence field: the override bright with the registry value dimmed beside it
+            // (D20), or the registry value alone. The whole cell is the touch target (44 px —
+            // the row's own floor, class S, registered like every command surface).
+            let eff = self.overrides.cadence_s(&def.id).unwrap_or(def.cadence_s);
+            let cad_cell =
+                Rect::new(Vec2::new(x_cad, y), Vec2::new(x_cad + cad_w - gap, y + row_h));
+            let cad_focused = focused == Some((i, StreamsFieldKind::Cadence));
+            self.draw_streams_field(p, pal, cad_cell, cad_focused, || {
+                if cad_focused {
+                    self.streams_entry
+                        .as_ref()
+                        .map_or(String::new(), |f| f.entry.text().to_string())
+                } else if self.overrides.cadence_s(&def.id).is_some() {
+                    format!("{eff} s  (registry {r} s)", r = def.cadence_s)
+                } else {
+                    format!("{eff} s")
+                }
+            });
+            self.registry.push(Registered {
+                id: format!("dock/streams/cadence/{i}"),
+                rect: cad_cell,
+                class: TouchClass::S,
+                action: Action::StreamsCadence(i),
+            });
+            self.audit_elements.push(InteractiveElement {
+                id: format!("dock/streams/cadence/{i}"),
+                class: TouchClass::S,
+                rect: cad_cell,
+                dense_allowed: false,
+            });
+
+            // The KEY column: the state words, then the field — masked, and DISABLED (drawn in
+            // words, kept out of the registry and the audit — the shell's disabled-control
+            // convention) when the env var governs or no key is needed.
+            p.text(
+                egui::pos2(x_key, cy),
+                Align2::LEFT_CENTER,
+                kwords,
+                font.clone(),
+                pal.text_secondary,
+            );
+            let env_set = kwords == "SET (env)";
+            let field_x = x_key + 13.0 * char_w;
+            let key_cell = Rect::new(
+                Vec2::new(field_x, y),
+                Vec2::new((field_x + key_w).min(list.max.x), y + row_h),
+            );
+            if def.key_env.is_some() {
+                let key_focused = focused == Some((i, StreamsFieldKind::Key));
+                let disabled = env_set;
+                self.draw_streams_field(p, pal, key_cell, key_focused, || {
+                    if key_focused {
+                        // The bullet echo: the mask is not only for the committed row (D20).
+                        "•".repeat(
+                            self.streams_entry
+                                .as_ref()
+                                .map_or(0, |f| f.entry.text().chars().count()),
+                        )
+                    } else if disabled {
+                        "SET (env) — disabled".to_string()
+                    } else {
+                        self.overrides
+                            .masked_key_for_env(&reg, def.key_env.as_deref().unwrap_or(""))
+                            .unwrap_or_else(|| "[ add key ]".to_string())
+                    }
+                });
+                if !disabled {
+                    // A live field is a touch target: registered AND audited.
+                    self.audit_elements.push(InteractiveElement {
+                        id: format!("dock/streams/key/{i}"),
+                        class: TouchClass::S,
+                        rect: key_cell,
+                        dense_allowed: false,
+                    });
+                }
+                // Registered either way: a tap on the DISABLED field refuses in words (the
+                // menu row's convention — a disabled control is drawn honestly, kept out of
+                // the audit, and never silently inert).
+                self.registry.push(Registered {
+                    id: format!("dock/streams/key/{i}"),
+                    rect: key_cell,
+                    class: TouchClass::S,
+                    action: Action::StreamsKey(i),
+                });
+            }
+            // A hairline under the row (the table's own vocabulary, faint).
+            if drawn > 1 {
+                p.line_segment(
+                    [egui::pos2(row_rect.min.x, y), egui::pos2(row_rect.max.x, y)],
+                    pal.hairline(pal.hairline_faint, LAYOUT_STROKE_HAIRLINE as f32),
+                );
+            }
+        }
+        // The scroll's honesty: hidden rows are named, never implied.
+        let hidden = (reg.len() as f32 * row_h - list.height()).max(0.0);
+        if hidden > 0.5 {
+            p.text(
+                egui::pos2(list.max.x, dock.max.y - gap * 0.5),
+                Align2::RIGHT_BOTTOM,
+                format!("{} row(s) below — the wheel scrolls", (hidden / row_h).ceil() as usize),
+                font,
+                pal.text_disabled,
+            );
+        }
+    }
+
+    /// One STREAMS-tab field cell: the inset box, its words, and — when focused — the selection
+    /// accent border + the caret block (the library search's focus idiom: focus is a state, and
+    /// states wear redundant encoding).
+    #[cfg(feature = "streams")]
+    fn draw_streams_field(
+        &self,
+        p: &Painter,
+        pal: &Palette,
+        cell: Rect,
+        focused: bool,
+        words: impl FnOnce() -> String,
+    ) {
+        let e = LAYOUT_SPACE_1 as f32;
+        let inset = Rect::new(
+            Vec2::new(cell.min.x + e, cell.min.y + e),
+            Vec2::new(cell.max.x - e, cell.max.y - e),
+        );
+        p.rect_filled(egui_rect(inset), LAYOUT_CORNER_MICRO as u8, pal.ground_inset);
+        let border = if focused {
+            Stroke::new(LAYOUT_STROKE_EMPHASIS as f32, pal.selected)
+        } else {
+            pal.hairline(pal.hairline_regular, LAYOUT_STROKE_HAIRLINE as f32)
+        };
+        p.rect_stroke(
+            egui_rect(inset),
+            LAYOUT_CORNER_MICRO as u8,
+            border,
+            egui::StrokeKind::Middle,
+        );
+        let text = words();
+        let tx = inset.min.x + LAYOUT_SPACE_1 as f32;
+        p.text(
+            egui::pos2(tx, inset.center().y),
+            Align2::LEFT_CENTER,
+            text.clone(),
+            font_xs(),
+            if focused { pal.text_primary } else { pal.text_secondary },
+        );
+        if focused {
+            let caret_x = tx + text.chars().count() as f32 * LAYOUT_SPACE_2 as f32;
+            let caret = egui::Rect::from_min_size(
+                egui::pos2(caret_x, inset.center().y - LAYOUT_SPACE_2 as f32),
+                egui::vec2(LAYOUT_SPACE_1 as f32, LAYOUT_SPACE_4 as f32),
+            );
+            p.rect_filled(caret, LAYOUT_CORNER_NONE as u8, pal.text_primary);
         }
     }
 

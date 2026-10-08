@@ -6,7 +6,162 @@ next. Updated at the end of every session (and mid-session when state changes). 
 history see `PHASE0-WORKORDERS.md` §2.1 (status table) and its build-log sections — read **by line
 range**, never whole (see `RESUME.md` §1 for why).
 
-**Last updated:** 2026-10-06, continuation session (same sandbox) — **WO-020 INC3 CLOSED: the
+**Last updated:** 2026-10-08, the INC6 session 9 (fresh sandbox on the re-published main
+`b2445d6` — the operator's r8-seal re-publish; the recovery note is `WO020-STATE.md`'s INC6
+section, first paragraph) — **WO-020 INC6 slices S1–S5 CLOSED — the work order's SANDBOX work
+is COMPLETE: the resizable instrument card (ruling O-1, plan D15), the typed panel band (plan
+D16), the overrides store + the STREAMS dock tab (rulings O-2/O-3/O-4, plan D18/D20), the live
+plane's host-side seams + the device-first launch/driver (plan D17/D19), and the card's RATE
+row + convergence (D20's second door). S4's wasmtime half is DEVICE-FIRST-COMPILE with
+`scripts/test008.bat` as its run sheet; what remains of INC6 is the DEVICE round**. Landed (full
+record in `WO020-STATE.md`'s INC6 section): `Node.size: Option<Vec2>` + `Op::ResizeNode` (ONE
+undo per drag carrying the gesture's original `from`; the clamp lives in the op constructor —
+band ≥ 480×248, ≤ the declared face, NaN sanitised, a no-change release records nothing); the
+HALF-face default (the Observatory's default card **1120×728** / band **1088×560**; the
+declared maximum 2208×1288 stays reachable through a resize and keeps the D6/R3 coverage rule
+at 97.5%); the corner handle (bottom-right of the SELECTED instrument card, class-L capture,
+painted in tokens, registered `canvas/resize/{id}`, offered only while drawn — never at Dot
+LOD, never covered); the 8-px snap on commit; FIT/FOCUS/the marquee/the layout pass all read
+the size like any card; the at-rest wall scales into the resized band (the INC4 painter's
+existing uniform scale); `ShellUi::audit_element` (the audit-side twin of `rect_of`);
+`docs/formats/project.md`'s reserved `size = [w, h]` node line; the audit rows re-cut for O-1
++ smokes **55/56** through the real recogniser (corner drag → one undo → three-finger restore;
+SPAWN+FOCUS frames the 16-cell wall in a 1920×1080 viewport at a Full-LOD zoom ≤ 1 — the O-1
+acceptance, measured). **Gates:** root `cargo test --workspace` **1047/0** (the r8 baseline
+1034 + 13 new); `-p sparq-app --features ui` **45/1** (THE known sandbox-only env red,
+`ui::live::…level_follows`); streams(+net) **96/0**; observatory **124/0** + goldens 6/6;
+fmt/clippy `-D warnings` CLEAN (workspace, ui, streams-net cells); `ui --audit` **PASS (0
+failures, 71 rows, was 64)**; the python gates green except `token_audit`'s standing §18
+mockup red (14 groups/298 — the IDENTICAL set, zero new). Proven failable by three injections
+(no-snap / no-registration / full-face-default), each reverted byte-identical. One targeted
+clippy allow recorded with measured provenance (`ConnectOutcome`'s `large_enum_variant`: the
+ruled `Node.size` grew `Node` 184→200 B, three bytes past the lint's threshold; boxing the
+public `Op` was judged the disproportionate patch — the numbers and the reasoning are in
+STATE). MUST-NOT-MOVE surfaces untouched (WIT, `modules/`, the stamp, fixtures, goldens).
+S2 landed on top (full record in `WO020-STATE.md`'s INC6 section): the manifest's 27
+`[[ui.panel.widgets]]` TYPED into `InstrumentDisplay.widgets` (18 enum_select / 5 toggles /
+3 sliders / 1 status label; param ids + D7 gates resolved to indices at parse; an unresolvable
+or unseen-kind widget DROPS — the host paints no control it cannot route); the band paints at
+Full LOD (enum chips open §8.4's EXISTING picker, toggles flip through the param door, sliders
+ride the param-row idiom — every control an undoable `SetParam`, the live ledger hears it);
+hidden cells are not painted, not touchable, not registered; the at-rest card says in words
+"params edit; the wall re-renders live when the loader runs" (never a frozen lie); the audit
+registers every routed cell (`canvas/panel/{node}/{widget}`, class S = D16's given 44-px floor;
+the declared M rides along as data — an M-sized band would be a D6 movement, flagged for S5,
+NOT decided). **Defect #100 found + fixed + ledger-rowed**: manifest-parsed enums carried a
+zeroed range, so every picker selection clamped to "no change" (the discovery door never caught
+up with §8.4); an enum's domain is now its option-index range, regression-pinned on the shipped
+manifest. S2 gates: workspace **1054/0** (+7), audit **PASS (0 failures, 75 rows**, was 71),
+all other gates unchanged-green; two more failable injections (the D7 gate forced open → 3
+FAILs; #100's `max: 0.0` restored → 4 FAILs), reverted byte-identical. S3 landed on top (full
+record in `WO020-STATE.md`'s INC6 section): `sparq-streams/src/store.rs` — the key/cadence
+overrides store in the user-data dir (`sparq/streams.d/overrides.toml`, D18's location; the
+`SPARQ_STREAMS_OVERRIDES` env door for tests): the 10 s floor REFUSES IN WORDS and keeps the old
+value (O-3, at the setter AND at file load), env WINS over the file (O-4 — the composed closure
+feeds the fetch's existing `{KEY}` redaction unchanged), the key VALUE has no reading door (the
+mask `••••last4` + the state words `SET (env)`/`SET (file)`/`UNSET`/`KEY NEEDED`/`—` only; a
+hand-implemented masked `Debug`), a malformed file is an empty store with words, the save is
+tmp+rename+fsync, and file keys resolve per ENV VAR (one NASA key typed on any sibling row
+serves all three — the closure's rule, every sibling row shows it). The broker reads
+override-then-registry (`due` + the stale horizon follows via `Window::set_cadence`); the CLI's
+EVERY door composes through the store (list shows the effective cadence, the state words and
+the store's path); the dock's STREAMS tab is ALIVE under the `streams` feature (O-2): LED +
+word statuses (fixture-fed under an **`AT REST — fixtures`** header — never a frozen lie, D20),
+the age in words, the cadence field (override bright, registry dimmed beside it), the KEY field
+masked — and DISABLED WITH ITS WORDS when the env governs (the precedence is visible; a tap
+still refuses in words, the menu-row convention), the rows scroll under the dock's own pan, the
+fields are 44-px class-S registered touch targets, and the typing is the rename entry's
+input-event idiom (Enter commits through the store's doors, Escape cancels in words, the
+cadence pre-fill is REPLACED on first type, the key echo is bullets). S3 gates: workspace
+**1055/0**; streams(+net) **106/0/1-ignored** (+10); `-p sparq-app --features ui,streams`
+**47/1** (the known env red only); `ui --audit` **PASS in BOTH faces** (`ui` 75 rows;
+`ui,streams` **80 rows** — smoke 58's five checks: the tab alive + the honest header, the 5 s
+refusal, the honoured 10 s override (file written + reloaded), the MASKED key persistence (the
+sentinel grepped out of every log line and frame text — it rides the user-data file alone), the
+env-wins disabled field); clippy green on all five cells incl. `ui,streams`; fmt clean; the
+python gates and the observatory untouched-green. Three more failable injections (the floor
+deaf, the key leaked to the log, the precedence inverted) — each caught, each reverted
+byte-identical. The acceptance's DEVICE half (the NASA key flipping neo/epic/power from
+429/DEMO_KEY to the key's rate) needs the live driver — S4's slice and the run sheet's row,
+exactly as the plan scoped it; the sandbox proved the mechanism behind it (mock transport +
+temp-dir store). Bundles: `handoff/sparq-wo020-inc6s1/s2/s3.bundle` (+ sha256s, prerequisite
+`b2445d6`; the S3 bundle carries the whole INC6 branch — S1's recovery was proved by a
+fresh-clone fetch + ff-merge this session). S4 landed on top (full record in `WO020-STATE.md`'s
+INC6 section): the D19 token `canvas.instrument_display_hz = 15` ruled into `layout.toml`
+(additive, regenerated, the bundle round-trip green, no new token_audit violation);
+`ui/live_display.rs` — the `LiveDisplay` seam, the pacer (66 ms period; edits/LOD force the
+next frame; FIVE CONSECUTIVE overruns bypass the DISPLAY instance with §3's words, an edit
+re-arms — the audio instance untouched, decision D's isolation), the live-surface shelf and the
+band switch (LIVE where the instance carries it, AT REST otherwise — the meters' rule
+extended); the shell's per-frame tick (the launch shelf attaches to the module's first node,
+the edit diff reads the GRAPH so no future door can forget the force); `ui/streams_driver.rs` —
+the driver whose `poll_once` IS the loop body (hermetic, mock-proven: the store key reaches the
+request URL, the 10 s override paces, the words never carry the key) with the thin device
+thread (a control-plane condvar wait, never the banned sleep; `wake` on edits; `Drop` stops and
+joins); the provider swap (the tab/label read the LIVE broker mirror first — `LIVE —` header —
+the fixtures second, `AT REST — fixtures`), `start_live_streams()` an EXPLICIT window-host door
+(never `new()`: the headless audit stays hermetic even in a streams-net build); and
+`ui/instrument_launch.rs` — **DEVICE-FIRST-COMPILE** (the §8 wall): the D17a launch
+registration (load_package → the display half parks on the shelf as a `RuntimeDisplay`
+(stages.rs's own budget_call/call_draw idiom, D13's interchange into the at-rest parser) and
+the audio half registers through the registry's factory door — the factory RELOADS per
+instantiation, a `LoadRefused` Failed-module covers the exception; PLAY's #58 lifts
+STRUCTURALLY), desk-checked call by call against the vendored API, with **`scripts/test008.bat`
+as its run sheet** (launch words → PLAY → the living wall → the watchdog injection on a
+max_fuel=100000 copy → the STREAMS tab LIVE + the NASA-key flip = S3's device half + the
+on-device redaction findstr; DO NOT CANCEL rides in its header). S4 gates: workspace
+**1061/0**; `-p sparq-app --features ui,streams` **56/1** (the known env red only; carries the
+driver's 3 hermetic tests + the seam's 7); streams(+net) **106/0/1-ignored**; `ui --audit`
+**PASS in both faces** (`ui` 79 rows; `ui,streams` **84 rows** — smoke 59's four: the attach +
+the 15 Hz pace, the band's actual px + a resize reaching the guest, the edit force, the
+five-overrun bypass); clippy green on SIX cells (incl. `ui-window,streams,streams-net`); the
+python gates green — `check_text_io` caught test008.bat's unescaped echo parens (defect #69's
+gate earning its keep; fixed); observatory 124/0 untouched. Three more injections (the pacer
+always-due, the bypass threshold 5→50, the driver's env door skipping the store) — each
+caught, each reverted byte-identical. A near-miss is recorded in STATE's S4 judgment calls
+(a scratch file's `rm -rf` took the checked-in `probe_alloc.rs` with it — caught by
+`git status`, restored byte-exact, zero trace). **The S4 acceptance rows [B]/[D]/[E] are
+DEVICE-PENDING and ride the next run-sheet round with session 8's outstanding gates.bat re-run
+and [G]/[I] eyes.** S5 landed on top (full record in `WO020-STATE.md`'s INC6 section): the host
+RATE row — 40 px under the guest's display on the `out/main` info band's own token and
+precedent (D16: host words in the card, never guest widgets), reserved by the LAYOUT on every
+instrument card in every build (the geometry is never feature-dependent; a build without the
+stream plane shows honest words, never a pretend field), the guest's band stopping where the
+row starts. The field is D20's SECOND DOOR to the one store: the tap routes `Hit::RateField` →
+`CanvasEvent::RateField` (the RenderWav division — the canvas routes, the shell acts), the
+entry commits through `Overrides::set_cadence` (the O-3 floor refuses in words, the save + the
+driver's re-pace ride along), and the row's WORDS NAME THE GOVERNED STREAM + the shared-feed
+truth (`RATE · CELL 07 → space.epic: 3600 s — 2 panel(s) ride this feed and share its rate`),
+resolved from the node's LIVE params per frame — moving the CELL dropdown moves the governed
+stream THE SAME FRAME (smoke-proved). The field registers in the audit with the card rows'
+dense-exception idiom. Card numbers moved, BAND numbers did not: chrome 168→208, default card
+**1120×768**, maximum **2208×1328**; S1's fit row re-cut to O-1's OWN words (the BAND fits the
+1624×740 rect at zoom 1; FOCUS frames the CARD at 0.90, Full LOD; the 16-cell wall reads
+126 px at FOCUS, 62 px at the ruled floor). The convergence sheet was RE-SHOT at Full LOD
+(`ui --svg-out … --review`, sha `56e446d3…`, 173 084 B — the half-face card, the typed band's
+chips and enum readings, the RATE row, the fixtures' `LIVE 16/16` sentence), recorded by sha +
+content grep and NOT checked into `design/mockups/` (token_audit scans `*.svg` there — a
+shell-dumped SVG would move the standing-red baseline; the wo012 precedent is a PNG, and the
+PNG re-shoot WITH THE LIVE WALL is the device round's). The mockup audit re-run: the IDENTICAL
+standing set (14 groups/298, zero new). S5 gates: workspace **1062/0**; app ui,streams
+**56/1** (the known env red only); `ui --audit` **PASS both faces** (`ui` 80 rows;
+`ui,streams` **88 rows** — the RATE-geometry row + smoke 60's three checks); clippy green on
+all six cells; fmt clean; python gates green; observatory 124/0 untouched. Three more
+injections (K1 the words unnamed, K2 the resolution dead → all three smoke-60 checks, K3 the
+card formula drops the row) — each caught, each reverted byte-identical; one transient 3-FAIL
+run mid-sequence was traced to the pre-hardening smoke's FOCUS framing dependency and the smoke
+is now deterministic by construction (explicit camera at the dense floor's exact edge, measured
+Full-LOD precondition) — the event and the remedy are recorded in STATE's S5 judgment calls.
+S2's touch-class flag is CARRIED TO THE OPERATOR (the manifest declares M; the band gives D16's
+44; an M-sized band is a D6 movement — not decided here). Bundles:
+`handoff/sparq-wo020-inc6s1..s5.bundle` (+ sha256s, prerequisite `b2445d6`; the S5 bundle
+carries the whole INC6 branch). **Next: the DEVICE round — `scripts/test007.bat`'s
+uninterrupted gates re-run (session 8's [K]) + `scripts/test008.bat` (the S4 launch words,
+PLAY #58 gone, the living wall, the watchdog injection, the STREAMS tab LIVE + the NASA-key
+flip = S3's device half, the redaction findstr) + the [G]/[I] eyes + the convergence PNG
+re-shoot — or operator rulings on the carried flags.**
+
+**Previous update:** 2026-10-06, continuation session (same sandbox) — **WO-020 INC3 CLOSED: the
 Observatory's guest source project, the five-file package, and the wasm component, built and
 measured in the sandbox**. Operator scope: "continue with wo20 build" → the next open increment per
 `WO020-STATE.md` (INC1+INC2 already closed). Landed (full record in `WO020-STATE.md`):
@@ -2019,6 +2174,23 @@ default** (that deletion is gated on this device run — do not do it early).
   each — the warm-up fixed the comparison), and stage 5 passed inside the re-baselined class
   (cold draw 12 680 530, worst block 9 260 of 32 000 000; memory 1 245 184 B / 3 211 264 B of
   64 MB).**
+- **#100 — REMEDIED (INC6 S2 sandbox session, 2026-10-08; found by building the typed panel
+  band): a manifest-parsed `enum` param arrived with a ZEROED range (`min: 0, max: 0`), so
+  every picker selection or gate edit on it clamped to 0 — "no change".** `param_descs`'
+  non-numeric arm zeroed the range back when enums were refuse-only in v0 (the ParamDesc doc's
+  own words); WO-020 INC4 §8.4 then made enums settable through the dropdown picker — and the
+  picker's own interact test hand-built its enum with `max = options.len()−1` and a comment
+  naming exactly this domain ("the slider maths clamps to this, so a picker selection outside
+  it would read as 'no change'"), while the DISCOVERY door never caught up. Invisible until S2:
+  the first surface to route manifest-parsed enums through the picker was the Observatory's
+  band (CELL/STREAM/LAYOUT chips) — and `selected_cell` could never leave 0, so the wall could
+  never swap cells. Fixed at the source (`param_descs`: an enum's domain IS its option-index
+  range, `0..=options.len()−1`; Text/Blob stay zeroed — refuse-only, no editor); the ParamDesc
+  doc corrected. Regression-pinned three ways: the model test on the SHIPPED manifest
+  (`selected_cell` 0..=15, `layout` 0..=4, its default 4 in-domain), the band's picker-route
+  interact test, and smoke 57's CELL-chip row. Injection-proved: restoring `max: 0.0` fails all
+  three + the audit row. **No device impact yet — nothing on SATURN routes a manifest-parsed
+  enum through an editor until INC6 lands there; the fix rides the S2 seal.**
 - #69 — `build.bat` cmd-parser death: probe ships, culprit statement not yet named (stays open)
 - compat-matrix mirror in `port.rs` vs `docs/api/compat-matrix.toml` — **re-worded (contract
   v1):** the drift gate pins the two together; full deletion waits on restructuring the table's

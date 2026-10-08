@@ -191,6 +191,14 @@ fn run_list() -> u8 {
             return 1;
         },
     };
+    // The overrides store (WO-020 INC6 D18): the list reads THROUGH it — the cadence shown is
+    // the one a poll would actually pace on, and the KEY column names the governing source
+    // (env wins over the file, and the words say which — the precedence is visible). A
+    // malformed store is words on stdout and an empty store, never a crash (§6.3).
+    let (store, store_words) = sparq_streams::store::Overrides::load_default();
+    if let Some(w) = store_words {
+        println!("sparq streams list: {w}");
+    }
     let env = |k: &str| std::env::var(k).ok();
     println!(
         "sparq streams — the registry ({} streams, crates/sparq-streams/streams.toml)",
@@ -200,32 +208,50 @@ fn run_list() -> u8 {
     println!();
     println!("STREAM ID            DOM   CAD  VIEW             SCHEMA                   KEY");
     for def in reg.streams() {
-        let key = match def.key_state(env) {
-            sparq_streams::KeyState::NotNeeded => "—".to_string(),
-            sparq_streams::KeyState::Ready => "key set".to_string(),
-            sparq_streams::KeyState::UsingFallback(fb) => format!("{fb} (fallback)"),
-            sparq_streams::KeyState::KeyNeeded => "KEY NEEDED".to_string(),
+        let key = sparq_streams::store::key_words(def, &reg, env, &store).to_string();
+        let cadence = match store.cadence_s(&def.id) {
+            Some(o) => format!("{o}s*"),
+            None => format!("{}s", def.cadence_s),
         };
         println!(
-            "{:<20} {:<4} {:>4}s  {:<16} {:<24} {}",
-            def.id, def.domain, def.cadence_s, def.view, def.schema, key
+            "{:<20} {:<4} {:>4}  {:<16} {:<24} {}",
+            def.id, def.domain, cadence, def.view, def.schema, key
         );
     }
     println!();
     for d in reg.domains() {
         println!("  {d}: {} stream(s)", reg.by_domain(d).len());
     }
+    let overridden: Vec<String> = reg
+        .streams()
+        .iter()
+        .filter_map(|s| {
+            store.cadence_s(&s.id).map(|o| format!("{} {o}s (registry {}s)", s.id, s.cadence_s))
+        })
+        .collect();
+    if !overridden.is_empty() {
+        println!("\n  * cadence overrides from the user-data store: {}", overridden.join("; "));
+    }
+    println!(
+        "\n  overrides store: {} ({} row(s)) — keys persist there in plain text (ruling O-4);",
+        store.path().display(),
+        store.len()
+    );
+    println!(
+        "  env vars WIN over it; UNSET = running on the row's declared fallback (NASA's DEMO_KEY)."
+    );
     let needed: Vec<&str> = reg
         .streams()
         .iter()
-        .filter(|s| matches!(s.key_state(env), sparq_streams::KeyState::KeyNeeded))
+        .filter(|s| sparq_streams::store::key_words(s, &reg, env, &store) == "KEY NEEDED")
         .map(|s| s.id.as_str())
         .collect();
     if needed.is_empty() {
         println!("\n  every stream is fetchable (keys present or not needed).");
     } else {
         println!("\n  KEY NEEDED (not fetched, in words — plan D14): {}", needed.join(", "));
-        println!("  fix: set the env var named in streams.toml (e.g. SPARQ_FIRMS_KEY, free registration).");
+        println!("  fix: set the env var named in streams.toml (e.g. SPARQ_FIRMS_KEY, free registration),");
+        println!("       or type the key into the shell's STREAMS tab (it persists to the store).");
     }
     0
 }
@@ -308,7 +334,13 @@ fn run_probe_static() -> u8 {
             return 1;
         },
     };
-    let env = |k: &str| std::env::var(k).ok();
+    // The env door is the STORE-composed closure (D18): a file key makes a stream fetchable
+    // exactly like an env key — one store, every door.
+    let (store, store_words) = sparq_streams::store::Overrides::load_default();
+    if let Some(w) = store_words {
+        println!("sparq streams probe: {w}");
+    }
+    let env = store.env_closure(&reg);
     println!(
         "sparq streams probe — the fetch plan ({} streams; add --live to hit the network)",
         reg.len()
@@ -316,7 +348,7 @@ fn run_probe_static() -> u8 {
     println!("STREAM ID            DOM  CADENCE  KEY          ENDPOINT (template)");
     let mut needed = 0usize;
     for def in reg.streams() {
-        let key = match def.key_state(env) {
+        let key = match def.key_state(&env) {
             sparq_streams::KeyState::NotNeeded => "—".to_string(),
             sparq_streams::KeyState::Ready => "key set".to_string(),
             sparq_streams::KeyState::UsingFallback(fb) => format!("{fb} (fallback)"),
@@ -351,7 +383,11 @@ fn run_probe_live() -> u8 {
     };
     let transport = fetch::HttpTransport::new(std::time::Duration::from_secs(20));
     let now = fetch::now_unix();
-    let env = |k: &str| std::env::var(k).ok();
+    let (store, store_words) = sparq_streams::store::Overrides::load_default();
+    if let Some(w) = store_words {
+        println!("sparq streams probe --live: {w}");
+    }
+    let env = store.env_closure(&reg);
     println!("sparq streams probe --live — {} endpoints at {}", reg.len(), utc_stamp_i64(now));
     println!("  one request per stream, {POLITE_DELAY_MS} ms apart; 429/5xx retried once (the recorder's policy)");
     println!();
@@ -361,7 +397,7 @@ fn run_probe_live() -> u8 {
         if i > 0 {
             fetch::sleep_millis(POLITE_DELAY_MS);
         }
-        match fetch::fetch_raw(&reg, &def.id, &transport, now, env, fetch::sleep_millis) {
+        match fetch::fetch_raw(&reg, &def.id, &transport, now, &env, fetch::sleep_millis) {
             Err(e) => {
                 refused += 1;
                 println!(
@@ -416,7 +452,13 @@ fn fetch_cmd(id: &str, out: Option<&str>) -> u8 {
     };
     let transport = fetch::HttpTransport::new(std::time::Duration::from_secs(20));
     let now = fetch::now_unix();
-    let env = |k: &str| std::env::var(k).ok();
+    // The store-composed env door (D18): a file key rides the fetch exactly like an env key,
+    // and the fetch's own redaction covers it (the value lives in Request::url alone).
+    let (store, store_words) = sparq_streams::store::Overrides::load_default();
+    if let Some(w) = store_words {
+        eprintln!("sparq streams: {w}");
+    }
+    let env = store.env_closure(&reg);
     let raw = match fetch::fetch_raw(&reg, id, &transport, now, env, fetch::sleep_millis) {
         Ok(r) => r,
         Err(e) => {
@@ -476,7 +518,13 @@ fn tail_cmd(id: &str) -> u8 {
     };
     let transport = fetch::HttpTransport::new(std::time::Duration::from_secs(20));
     let now = fetch::now_unix();
-    let env = |k: &str| std::env::var(k).ok();
+    // The store-composed env door (D18): a file key rides the fetch exactly like an env key,
+    // and the fetch's own redaction covers it (the value lives in Request::url alone).
+    let (store, store_words) = sparq_streams::store::Overrides::load_default();
+    if let Some(w) = store_words {
+        eprintln!("sparq streams: {w}");
+    }
+    let env = store.env_closure(&reg);
     let raw = match fetch::fetch_raw(&reg, id, &transport, now, env, fetch::sleep_millis) {
         Ok(r) => r,
         Err(e) => {

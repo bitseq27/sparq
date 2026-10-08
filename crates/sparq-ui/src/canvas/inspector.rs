@@ -371,6 +371,15 @@ pub fn value_text(desc: &ParamDesc, value: f32) -> String {
             Some(u) => format!("{:.0} {u}", value.round()),
             None => format!("{:.0}", value.round()),
         },
+        // An enum READS as its chosen option's label (WO-020 INC6 D16: the band's dropdown
+        // chips and the inspector's row show the choice, the picker's rows show the same
+        // words — one vocabulary, every surface). The value IS the option index (§8.4); an
+        // out-of-range index cannot occur (the manifest's default is validated, the picker
+        // and the op both clamp to the domain) — the dash is the honest fallback anyway.
+        ParamKind::Enum => match desc.options.get(value.round().max(0.0) as usize) {
+            Some((_, label)) => label.clone(),
+            None => "—".to_string(),
+        },
         k => format!("{k:?} · v1"),
     }
 }
@@ -543,6 +552,21 @@ mod tests {
         d.unit = None;
         assert_eq!(value_text(&d, 0.0), "OFF");
         assert_eq!(value_text(&d, 1.0), "ON");
+    }
+
+    #[test]
+    fn enum_value_text_reads_the_chosen_option_s_label() {
+        // WO-020 INC6 D16: the band's dropdown chips and the inspector's row show the CHOICE —
+        // one vocabulary with the picker's rows, never the kind's name.
+        let mut d = desc("cell", ParamKind::Enum, 0.0, 2.0, 0.0);
+        d.options = vec![
+            ("a".to_string(), "Aurora".to_string()),
+            ("q".to_string(), "Quakes".to_string()),
+            ("k".to_string(), "Kp storm line".to_string()),
+        ];
+        assert_eq!(value_text(&d, 1.0), "Quakes");
+        assert_eq!(value_text(&d, 2.4), "Kp storm line", "the value rounds to its option index");
+        assert_eq!(value_text(&d, 9.0), "—", "outside the domain: the honest dash");
     }
 
     #[test]
@@ -732,6 +756,7 @@ mod tests {
             id: 0,
             spec,
             pos: Vec2::ZERO,
+            size: None,
             flags: Default::default(),
             custom_name: None,
             param_values: Vec::new(),

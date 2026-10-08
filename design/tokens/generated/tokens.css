@@ -227,6 +227,7 @@
   --sparq-layout-canvas-lod-levels: 3;
   --sparq-layout-canvas-lod-1-below-zoom: 0.6;
   --sparq-layout-canvas-lod-2-below-zoom: 0.35;
+  --sparq-layout-canvas-instrument-display-hz: 15;
   --sparq-layout-canvas-wire-style: bezier-horizontal;
   --sparq-layout-canvas-wire-crossing-policy: no bridges; crossings are drawn plain (data-ink);
   --sparq-layout-breakpoint-tablet-min-w: 1280;

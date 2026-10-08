@@ -1,4 +1,105 @@
-# Sync manifest — WO-020 INC5 r8: the session-8 records + the INC6 commission (2026-10-07)
+# Sync manifest — WO-020 INC6 "the live instrument": S1–S5 sandbox half + the device round (2026-10-08)
+
+**Current bundle: `sparq-update-2026-10-08-wo020-inc6.zip` (a FULL-TREE pack, 495 entries —
+overlays any tree at or after the r7 pack, which is what the device runs today; r8's documents
+delta rides inside; built on the published main `b2445d6` + the 15 INC6 slice commits + this
+delivery's documents commit).** Excluded by the standing rule: `.git/`, `target/`,
+`Cargo.lock`, `logs/`, `*.wav`, `handoff/`, and `SYNC-STAMP.txt` — **the stamp does NOT ride
+and did not move from the sandbox**: after applying AT THE REPO ROOT, overwriting, re-run
+`python tools\sync_check.py --write --sync sparq-wo020-inc6-2026-10-08` on the machine that
+will own the tree. Until then `build.bat` and test007/test008's `[0]` name the mismatch in
+words — EXPECTED, and `sync_check` against the device's r7-era stamp is red on exactly
+**13 file(s) differ** (12 SIZE rows — the six `sparq-app` UI/streams files, the five
+`sparq-ui/canvas` files, `scripts/test007.bat` — plus the src fingerprint
+`106f/3202925B` vs the stamp's `103f/2948000B`) **+ 4 EXTRA warnings** (the new
+`instrument_launch.rs`, `live_display.rs`, `streams_driver.rs`, `test008.bat`) — that list is
+the definitive answer to "did the sync land"; the re-stamp clears it. The zip's sha256 is in
+the delivery message and in `handoff/sha256sums-wo020-inc6.txt`. **Provenance:** sandbox
+`main` off the published `b2445d6`; durable history in
+`handoff/sparq-wo020-inc6-delivery.bundle` (`b2445d6..HEAD` at the artefacts seal — it carries
+the whole INC6 branch INCLUDING the committed zip copy + sums; prerequisite: any clone of the
+published main; `.sha256` sidecar; supersedes the five slice bundles for recovery, which stay
+committed as the slice records); packer `handoff/make_pack_wo020.py` — **RECONSTRUCTED A SECOND
+TIME this session** (the original was lost in the re-publication, session 8's reconstruction
+was never committed; this one IS, the r8 artefacts lesson — its header declares it), all ten
+gates ran green at the pack: clean tree, 495 == argv == this manifest, namelist 32 == argv ==
+this manifest, MUST-NOT-MOVE unmoved vs `b2445d6`, the r2 stamp-name rule, entry-by-entry
+zip↔tree hashes, the component `4b29a5ae…`/206 316 B asserted inside, the must-ship set
+present.
+
+**What it carries — BEHAVIOUR (unlike r8, which was records-only): the whole INC6 sandbox
+half, slices S1–S5, each sealed + injection-proved in session 9** (full record:
+`WO020-STATE.md`'s INC6 section). **S1** the resizable instrument card (O-1/D15): `Node.size`
++ `Op::ResizeNode` (ONE undo per drag), the HALF-face default (the Observatory's card, after
+S5, 1120×768; band 1088×560), the class-L corner handle (`canvas/resize/{id}` in the audit),
+the 480×248…declared-face clamp in the op constructor, the 8-px snap, FIT/FOCUS/marquee
+reading the size, the at-rest wall scaling into the band. **S2** the typed panel band (D16):
+the manifest's 27 `[[ui.panel.widgets]]` typed into `InstrumentDisplay.widgets`, painted at
+Full LOD on the 44-px floor, enums through the EXISTING picker, toggles/sliders through the
+undoable param door — **defect #100 found and fixed on the way** (manifest-parsed enums'
+zeroed range). **S3** the overrides store + the STREAMS dock tab (O-2/O-3/O-4, D18/D20):
+`sparq-streams/src/store.rs` (user-data TOML; the 10 s floor refuses in words and keeps the
+old value; env wins over the file; the key has NO reading door — mask + state words only;
+atomic save), the broker reading override-then-registry, the dock tab's honest rows. **S4**
+the live plane's seams (D17/D19): the D19 token `instrument_display_hz = 15`, the `LiveDisplay`
+seam + pacer (edits force; five consecutive overruns bypass with §3's words), the driver's
+hermetic `poll_once` + the thin device thread, the provider swap (LIVE vs `AT REST —
+fixtures`), and the **DEVICE-FIRST-COMPILE** launch registration (`instrument_launch`:
+load_package → the display shelf + the registry's factory door — PLAY's #58 lifts
+structurally; desk-checked call by call against the vendored API; the 1 GB sandbox refuses
+wasmtime categorically, so THAT cell first compiles on the device — `scripts/test008.bat` is
+its run sheet). **S5** the card's RATE row + convergence (D20's second door): the host row
+writing the SAME per-stream override the tab does, its words naming the governed stream + the
+shared-feed truth, following the CELL dropdown the same frame; chrome 168→208 (default card
+1120×768, maximum 2208×1328 — the O-1 BAND numbers untouched); the convergence sheet re-shot
+at Full LOD (sha `56e446d3…`, recorded in STATE; the PNG re-shoot WITH THE LIVE WALL is the
+device round's). **Gates at the S5 seal (recorded, not invented):** workspace **1062/0**;
+`sparq-app --features ui,streams` **56/1** (THE known sandbox-only env red,
+`ui::live::…level_follows` — device/MSVC runs it green); streams(+net) **106/0**; observatory
+**124/0** + goldens 6/6; `ui --audit` **PASS both faces** (`ui` 80 rows; `ui,streams` **88
+rows**); fmt/clippy `-D warnings` green on six cells; fifteen injection proofs across S1–S5,
+each reverted byte-identical. Python gates re-run in THIS delivery session: `check_text_io`
+clean, `token_gen --check` rc 0, `unsafe_audit` clean, `module_docs --check` 24/24,
+`token_audit` at its standing §18 mockup red (14 groups/298 — the IDENTICAL set, zero new),
+`sync_check` the expected pre-re-stamp red named above. MUST-NOT-MOVE surfaces unmoved vs
+`b2445d6` (the WIT, `modules/`, the stamp, the fixtures, `instruments/`, `instruments-src/`,
+the mockups); the component ships byte-pinned: `instruments/observatory/observatory.wasm`
+sha256 `4b29a5ae22ce67ddd7873d21ae4095ded570614dea6d0c697d1637edafa1050b`, 206 316 B, asserted
+inside the pack by the packer.
+
+**Namelist** (32 paths vs the published main `b2445d6` — 27 M / 5 A; the pack carries the whole
+tree, this names what moved; `handoff/` artefacts do not ride): **A** —
+`crates/sparq-app/src/ui/instrument_launch.rs` · `crates/sparq-app/src/ui/live_display.rs` ·
+`crates/sparq-app/src/ui/streams_driver.rs` · `crates/sparq-streams/src/store.rs` ·
+`scripts/test008.bat` (the S4 run sheet). **M (code, 15)** — `crates/sparq-app/src/streams.rs`
+· `crates/sparq-app/src/ui/{canvas_ui,headless,mod,shell_ui,window}.rs` ·
+`crates/sparq-streams/src/{broker,cache,lib,window}.rs` ·
+`crates/sparq-ui/src/canvas/{connect,inspector,interact,layout,model}.rs`. **M (tokens, 6)** —
+`design/tokens/layout.toml` (the D19 row) + the five generated faces. **M (records/docs, 5)** —
+`WO020-STATE.md` · `CHECKLIST.md` · `RESUME.md` · `SYNC.md` · `docs/formats/project.md` (the
+reserved `size` line). **M (scripts, 1)** — `scripts/test007.bat` (the [0] remedy + the [L]
+re-stamp now name THIS delivery's stamp — the r8 echo-words precedent; found stale in this
+session's prep, [L] would otherwise have re-stamped the device `sparq-wo020-inc5r3-<date>`).
+
+**THE ASK — the DEVICE round (this pack exists for it):** apply at the repo root → re-stamp
+`sparq-wo020-inc6-2026-10-08` → build (FIRST BUILD IS LONG, wasmtime compiles on SATURN —
+session 2 proved it) → then: **(1)** `scripts\test007.bat` — the uninterrupted **[K]**
+`gates.bat` re-run (session 8's row was CANCELLED, not failed: every `[FAIL]` was exit
+`0xc000013a` = Ctrl+C, zero real failures; **DO NOT CANCEL** — the debug rebuild + wasmtime's
+debug compile is long, not hung); **(2)** `scripts\test008.bat` — the S4 device half (the
+launch words, PLAY with the Observatory — #58 gone, the living wall, the fuel-watchdog
+injection on a max_fuel=100000 copy, the STREAMS tab LIVE + the NASA-key flip = S3's device
+half, the on-device redaction findstr; send back `logs\test008.log` + the digest + the E/F/H
+screenshots); **(3)** the **[G]/[I]** eyes (airplane-mode words, the token re-theme) with
+screenshots; **(4)** the convergence **PNG** re-shoot with the live wall (the wo012
+precedent); **(5)** operator rulings on the two carried flags: the manifest's declared
+touch_class **M** vs the band's given 44-px **S** floor (an M-sized band is a D6 movement —
+card +24 px), and the one-display-instance-per-module limit (a second node of a module stays
+at rest, in words).
+
+---
+
+## Previous bundle — WO-020 INC5 r8: the session-8 records + the INC6 commission (2026-10-07)
 
 **Current bundle: `sparq-update-2026-10-07-wo020-inc5r8.zip` (a FULL-TREE pack, 489 entries —
 overlays any tree at or after the r7 pack; built on the published main `7ed2e08` + the

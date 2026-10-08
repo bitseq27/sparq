@@ -124,6 +124,20 @@ impl Window {
         Self { kind, cadence_s: cadence_s.max(1), records: VecDeque::new(), last_fetch_unix: None }
     }
 
+    /// Re-sets the poll cadence — the stale horizon FOLLOWS (WO-020 INC6 D18: when a stream's
+    /// cadence override lands, its freshness words must age against the cadence it is actually
+    /// polled on, not the registry's default; a 10 s poller goes STALE at 30 s, honestly).
+    /// Records and stamps are untouched — the override changes the ruler, not the data.
+    pub fn set_cadence(&mut self, cadence_s: u32) {
+        self.cadence_s = cadence_s.max(1);
+    }
+
+    /// The cadence this window's stale horizon reads against.
+    #[must_use]
+    pub fn cadence_s(&self) -> u32 {
+        self.cadence_s
+    }
+
     /// Builds the right window for a registry stream: kind from its schema, cadence from its row. An
     /// unrecognised schema (impossible for a loaded registry, which validates schemas) falls back to
     /// the smallest kind rather than panicking — a library that panics on its own data cannot be
@@ -346,5 +360,19 @@ mod tests {
         assert_eq!(w.status(1002), StreamStatus::Live);
         assert_eq!(w.status(1003), StreamStatus::Stale);
         assert_eq!(w.status(1010), StreamStatus::Offline);
+    }
+
+    #[test]
+    fn set_cadence_moves_the_stale_horizon_not_the_data() {
+        // WO-020 INC6 D18: a cadence override re-tunes the freshness ruler — a 60 s poller
+        // overridden to 10 s goes STALE at 30 s and OFFLINE at 100 s, honestly, and its
+        // records/stamps are untouched (the ruler changes, not the history).
+        let mut w = Window::new(WindowKind::Timeseries, 60);
+        w.mark_fetched(1000);
+        assert_eq!(w.status(1200), StreamStatus::Stale, "3×60 = 180 < 200 < 600");
+        w.set_cadence(10);
+        assert_eq!(w.cadence_s(), 10);
+        assert_eq!(w.status(1200), StreamStatus::Offline, "the same age against 10×10 = 100");
+        assert_eq!(w.last_fetch_unix(), Some(1000), "the stamp is data, not ruler");
     }
 }

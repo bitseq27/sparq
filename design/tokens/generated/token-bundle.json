@@ -2191,6 +2191,7 @@
       "layout.canvas.grid_dot_radius": 1,
       "layout.canvas.grid_major": 256,
       "layout.canvas.grid_minor": 32,
+      "layout.canvas.instrument_display_hz": 15,
       "layout.canvas.lod_1_below_zoom": 0.6,
       "layout.canvas.lod_2_below_zoom": 0.35,
       "layout.canvas.lod_levels": 3,
@@ -2402,7 +2403,7 @@
     },
     "version": "0.1.0"
   },
-  "payload_sha256": "6c383b583013ff774a2115c7461d6a70dcf5cc73a2cfcf371aed657d8ee0858a",
+  "payload_sha256": "bec5b09d1470f600fcfaa0941f351432fe8b4e0323d18f9ecf7db2856d93b867",
   "version": {
     "major": 0,
     "minor": 1,

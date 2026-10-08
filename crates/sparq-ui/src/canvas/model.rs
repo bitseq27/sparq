@@ -68,10 +68,12 @@ pub struct NodeFlags {
 ///
 /// Numeric kinds (`Float`, `Int`) are guaranteed by manifest validation to carry `unit`, `min`,
 /// `max` and an in-range `default`; the defensive `unwrap_or`s in [`param_descs`] only cover the
-/// impossible-so-it-is-documented case. `Bool` maps onto `[0, 1]`. The non-numeric kinds
-/// (`Enum`, `Text`, `Blob`) keep zeroed ranges and are **not editable in v0** — the inspector
-/// shows them greyed with the reason, because inventing an options editor before the manifest
-/// schema grows `options[]` would be a lie the user could act on.
+/// impossible-so-it-is-documented case. `Bool` maps onto `[0, 1]`. An `Enum`'s domain is its
+/// option-INDEX range (`0..=options.len()−1`) — its editor is the dropdown picker (WO-020 INC4
+/// §8.4; defect #100 was this range arriving zeroed from the discovery door, which clamped every
+/// picker selection to "no change"). `Text`/`Blob` keep zeroed ranges and are **not editable in
+/// v0** — the inspector shows them greyed with the reason, because inventing an editor for them
+/// before the manifest schema grows their vocabulary would be a lie the user could act on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParamDesc {
     /// Stable id, unique within the module.
@@ -150,8 +152,17 @@ pub fn param_descs(m: &ValidatedManifest) -> Vec<ParamDesc> {
                     name,
                     kind,
                     unit: None,
+                    // An ENUM's domain is its option-index range (0..=len−1) — the picker's
+                    // selection and the slider maths both clamp to this (defect #100: the
+                    // zeroed range pre-dated §8.4 making enums settable, so every manifest-
+                    // parsed enum selection clamped to "no change"). Text/Blob stay zeroed:
+                    // they are refuse-only in v0 (no editor exists).
                     min: 0.0,
-                    max: 0.0,
+                    max: if matches!(kind, ParamKind::Enum) {
+                        p.options.len().saturating_sub(1) as f64
+                    } else {
+                        0.0
+                    },
                     default: p.default.unwrap_or(0.0),
                     // The enum's rows (value, label) in order — the picker's data (§8.4).
                     options: if matches!(kind, ParamKind::Enum) {
@@ -196,7 +207,7 @@ pub struct NodeSpec {
 /// `ui.displays[0].min_size` plus the panel band's row count. The card is the display plus chrome
 /// (gutter each side, header, panel band, NO port band — a port-less instrument has none); the
 /// numbers are token-derived in [`super::layout::node_size`], never remembered here.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct InstrumentDisplay {
     /// The display's declared minimum width, logical px.
     pub min_w: f32,
@@ -205,6 +216,135 @@ pub struct InstrumentDisplay {
     /// The panel widget band's row count (distinct `y` values in `ui.panel.widgets`; 0 when the
     /// manifest declares no panel — the band then costs nothing).
     pub panel_rows: u32,
+    /// The TYPED panel widgets (WO-020 INC6 D16): the manifest's `[[ui.panel.widgets]]` rows in
+    /// declaration order, param ids resolved to [`NodeSpec::params`] indices at parse time. The
+    /// host paints exactly this list and routes nothing else — an instrument's face is its
+    /// package's (ADR-010's runtime-token rule). A widget the host cannot honestly paint (an
+    /// unknown kind, a control whose param does not resolve, a gate that cannot be evaluated)
+    /// is DROPPED at parse: the band's row count still counts the manifest's declared rows, so
+    /// the reservation never lies about the package's intent, and the host never invents a
+    /// control. The shipped Observatory manifest drops nothing (all 27 resolve).
+    pub widgets: Vec<PanelWidget>,
+}
+
+/// A declared panel widget's kind (WO-020 INC6 D16) — how the host routes its press: enums
+/// open the EXISTING dropdown picker (§8.4's sheet), toggles flip through [`Op::SetParam`],
+/// sliders ride the param-row drag, and the label is a READING (the host-side status word's
+/// slot), never a control. The manifest's vocabulary is key-checked-only by the validator
+/// (decode.rs's own words: typed here, in the host that paints it); a kind this enum does not
+/// name is dropped at parse — the host paints no control it cannot route, and inventing
+/// semantics for an unseen kind would be a guess dressed as a widget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelWidgetKind {
+    /// A dropdown: the tap opens the picker over the param's options.
+    EnumSelect,
+    /// A binary flip (the operator ruling 2026-10-01's toggle rule: a tap flips, it never maps).
+    Toggle,
+    /// A continuous value: tap-to-set and drag through the param row's own mapping.
+    Slider,
+    /// The host-side status label — a reading, not a control (no param, never registered, never
+    /// touchable). Its content is the stream provider's sentence live, and the at-rest words
+    /// when no loader runs (D16/S2: refuse-in-words, never a frozen lie).
+    Label,
+}
+
+impl PanelWidgetKind {
+    /// The manifest's spelling → the typed kind. Unknown spellings answer `None` (the parse
+    /// drops the widget — see [`InstrumentDisplay::widgets`]).
+    #[must_use]
+    pub fn parse(word: &str) -> Option<Self> {
+        match word {
+            "enum_select" => Some(Self::EnumSelect),
+            "toggle" => Some(Self::Toggle),
+            "slider" => Some(Self::Slider),
+            "label" => Some(Self::Label),
+            _ => None,
+        }
+    }
+}
+
+/// One typed `[[ui.panel.widgets]]` row (WO-020 INC6 D16). The grid geometry is the
+/// manifest's own (x/y/w/h in the panel's column/row units — the Observatory's generator lays
+/// its §5.2 toolbar out on them); the host maps the units into the reserved band.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanelWidget {
+    /// The control's kind (the press's routing).
+    pub kind: PanelWidgetKind,
+    /// The param this widget edits, resolved to its [`NodeSpec::params`] index. `None` ONLY on
+    /// the status label — every routed control carries its param (an unresolvable one was
+    /// dropped at parse, never painted as a dead control).
+    pub param: Option<usize>,
+    /// Grid column offset (manifest units).
+    pub x: u32,
+    /// Grid row (manifest units) — the band's rows, 44 px + the 16 px gaps (D6's formula).
+    pub y: u32,
+    /// Width in grid columns.
+    pub w: u32,
+    /// Height in grid rows.
+    pub h: u32,
+    /// The touch class AS DECLARED — data, kept honestly. The band the host gives is D16's
+    /// 44-px floor (D6's formula, which the O-1 card numbers ride); the audit registers what
+    /// is GIVEN (the param-row idiom), never the declaration the host does not serve.
+    pub touch_class: crate::audit::TouchClass,
+    /// The visibility gate (plan D7 — v1: ONE equality on ONE param): painted and touchable
+    /// only while param `gate.0`'s value equals `gate.1` (± 0.5 — an enum's value IS its
+    /// option index). Resolved at parse; an unresolvable gate drops the widget (a gate that
+    /// cannot be evaluated cannot be honestly shown — decode.rs's "never a silently-ignored
+    /// widget that never shows", honoured by not painting it at all).
+    pub visible_if: Option<(usize, f32)>,
+}
+
+/// The instrument band's ruled floor (WO-020 INC6 D15): below 480×248 world px the wall is
+/// words, not data. A declared face SMALLER than the floor (none ships; the Observatory's is
+/// 2176×1120) clamps to its own face instead — the declared maximum always governs (O-1).
+pub const INSTRUMENT_BAND_MIN: Vec2 = Vec2::new(480.0, 248.0);
+
+impl NodeSpec {
+    /// The declared display face (D6): `Some(min_w × min_h)` for an instrument spec that
+    /// declares one, `None` for backbone modules and face-less instruments.
+    #[must_use]
+    pub fn instrument_face(&self) -> Option<Vec2> {
+        let d = self.display.as_ref()?;
+        (self.layer == sparq_module_api::manifest::Layer::Instrument)
+            .then_some(Vec2::new(d.min_w, d.min_h))
+    }
+
+    /// The default band (WO-020 INC6, ruling O-1): HALF the declared face — 1088×560 at the
+    /// Observatory's 2176×1120, the band that fits a 1080p viewport at zoom 1. `None` for
+    /// non-instruments.
+    #[must_use]
+    pub fn instrument_band_default(&self) -> Option<Vec2> {
+        let face = self.instrument_face()?;
+        Some(Vec2::new(face.x / 2.0, face.y / 2.0))
+    }
+
+    /// A requested band clamped into the ruled window (WO-020 INC6 D15): ≥
+    /// [`INSTRUMENT_BAND_MIN`] (or the face itself, when a smaller face ships), ≤ the declared
+    /// face — the guest never renders above its declared face (O-1). A non-finite component
+    /// sanitises to the default band (`WireTrim::sanitised`'s discipline: NaN reaches neither
+    /// the layout nor the history). `None` for non-instruments.
+    #[must_use]
+    pub fn instrument_band_clamp(&self, want: Vec2) -> Option<Vec2> {
+        let face = self.instrument_face()?;
+        let default = self.instrument_band_default()?;
+        if !want.x.is_finite() || !want.y.is_finite() {
+            return Some(default);
+        }
+        let lo_x = INSTRUMENT_BAND_MIN.x.min(face.x);
+        let lo_y = INSTRUMENT_BAND_MIN.y.min(face.y);
+        Some(Vec2::new(want.x.clamp(lo_x, face.x), want.y.clamp(lo_y, face.y)))
+    }
+
+    /// The EFFECTIVE band of a node's size override: the override clamped into the ruled
+    /// window, or the half-face default when `size` is `None` (the layout's default for the
+    /// spec, D15). `None` for non-instruments.
+    #[must_use]
+    pub fn instrument_band(&self, size: Option<Vec2>) -> Option<Vec2> {
+        match size {
+            Some(v) => self.instrument_band_clamp(v),
+            None => self.instrument_band_default(),
+        }
+    }
 }
 
 impl NodeSpec {
@@ -277,19 +417,67 @@ impl NodeSpec {
         }
         let w = min[0].as_f64()? as f32;
         let h = min[1].as_f64()? as f32;
-        let rows = ui
-            .get("panel")
-            .and_then(Value::as_table)
-            .and_then(|p| p.tables("widgets"))
-            .map(|ws| {
-                let mut ys: Vec<i64> =
-                    ws.iter().filter_map(|w| w.get("y").and_then(Value::as_i64)).collect();
-                ys.sort_unstable();
-                ys.dedup();
-                ys.len() as u32
+        let panel = ui.get("panel").and_then(Value::as_table);
+        let declared = panel.and_then(|p| p.tables("widgets")).unwrap_or_default();
+        let rows = {
+            let mut ys: Vec<i64> =
+                declared.iter().filter_map(|w| w.get("y").and_then(Value::as_i64)).collect();
+            ys.sort_unstable();
+            ys.dedup();
+            ys.len() as u32
+        };
+        // The typed widget list (WO-020 INC6 D16): declaration order, param ids resolved
+        // against the spec's params (which `from_manifest` already validated), gates resolved
+        // the same way. What cannot be resolved cannot be honestly painted or routed, so it is
+        // dropped — the row count above still carries the manifest's declared rows, and the
+        // host invents nothing (see `InstrumentDisplay::widgets`).
+        let param_at = |id: &str| spec.params.iter().position(|d| d.id == id);
+        let widgets: Vec<PanelWidget> = declared
+            .iter()
+            .filter_map(|w| {
+                let kind = PanelWidgetKind::parse(w.get("kind").and_then(Value::as_str)?)?;
+                let param_id = w.get("param").and_then(Value::as_str);
+                // The label is the one widget with no param; every CONTROL whose param does
+                // not resolve drops (a dead control is a lie with a hit-test).
+                let param = match (kind, param_id) {
+                    (PanelWidgetKind::Label, _) => None,
+                    (_, Some(id)) => Some(param_at(id)?),
+                    (_, None) => return None,
+                };
+                let visible_if = match w.get("visible_if").and_then(Value::as_table) {
+                    Some(g) => {
+                        let gid = g.get("param").and_then(Value::as_str)?;
+                        let eq = g.get("equals").and_then(Value::as_f64)? as f32;
+                        Some((param_at(gid)?, eq))
+                    },
+                    None => None,
+                };
+                let unit = |key: &str, fallback: u32| {
+                    w.get(key)
+                        .and_then(Value::as_i64)
+                        .filter(|v| *v >= 0)
+                        .map_or(fallback, |v| v as u32)
+                };
+                let touch_class = match w.get("touch_class").and_then(Value::as_str) {
+                    Some("S") => crate::audit::TouchClass::S,
+                    Some("M") => crate::audit::TouchClass::M,
+                    Some("L") => crate::audit::TouchClass::L,
+                    Some("XL") => crate::audit::TouchClass::XL,
+                    _ => crate::audit::TouchClass::S, // undeclared: the band's own floor
+                };
+                Some(PanelWidget {
+                    kind,
+                    param,
+                    x: unit("x", 0),
+                    y: unit("y", 0),
+                    w: unit("w", 1).max(1),
+                    h: unit("h", 1).max(1),
+                    touch_class,
+                    visible_if,
+                })
             })
-            .unwrap_or(0);
-        spec.display = Some(InstrumentDisplay { min_w: w, min_h: h, panel_rows: rows });
+            .collect();
+        spec.display = Some(InstrumentDisplay { min_w: w, min_h: h, panel_rows: rows, widgets });
         Some(spec)
     }
 
@@ -326,6 +514,16 @@ pub struct Node {
     pub spec: NodeSpec,
     /// Top-left corner in **world** px, always on the snap grid after a committed move.
     pub pos: Vec2,
+    /// The instrument card's display-BAND size override (WO-020 INC6, ruling O-1 / plan D15),
+    /// world px: `Some` = the user-resized band, `None` = the layout's default for the spec
+    /// (an instrument defaults to HALF its declared face). The card is the band plus the D6
+    /// chrome, so this field sizes the card exactly as D6 computes it. Instruments only — a
+    /// backbone card's size is its spec's, never state. The ruled window (≥ 480×248, ≤ the
+    /// declared `min_size`) is enforced by [`NodeSpec::instrument_band_clamp`] and lives in
+    /// [`Graph::op_resize_node`], never in a gesture; [`Op::ResizeNode`] makes it undoable.
+    /// No patch format exists yet, so there is nothing to migrate: `docs/formats/project.md`
+    /// carries the reserved optional `size = [w, h]` node line.
+    pub size: Option<Vec2>,
     /// Performance flags.
     pub flags: NodeFlags,
     /// A user rename (increment 2 supplies the text entry; the field exists so [`Op::Rename`] is
@@ -510,6 +708,19 @@ pub enum Op {
         /// New trim (`None` = the node was removed and the wire runs clean again).
         to: Option<WireTrim>,
     },
+    /// Resize one instrument node's display band (WO-020 INC6 D15): `from`/`to` are the
+    /// [`Node::size`] overrides (`None` = the layout's default band — the undo of a first
+    /// resize carries `to: None` back to the default). The values are already clamped by
+    /// [`Graph::op_resize_node`] (the [`Op::SetParam`] discipline), so history never carries
+    /// an out-of-window size. ONE op per drag — the cable-node precedent, one undo per gesture.
+    ResizeNode {
+        /// Which node.
+        id: NodeId,
+        /// Previous size override.
+        from: Option<Vec2>,
+        /// New size override (`None` = back to the layout's default band).
+        to: Option<Vec2>,
+    },
     /// A group of ops applied and undone as one unit.
     Batch(Vec<Op>),
 }
@@ -537,6 +748,7 @@ impl Op {
                 Self::SetParam { node: *node, index: *index, from: *to, to: *from }
             },
             Self::SetTrim { wire, from, to } => Self::SetTrim { wire: *wire, from: *to, to: *from },
+            Self::ResizeNode { id, from, to } => Self::ResizeNode { id: *id, from: *to, to: *from },
             Self::Batch(ops) => Self::Batch(ops.iter().rev().map(Op::inverse).collect()),
         }
     }
@@ -554,6 +766,7 @@ impl Op {
             Self::Rename { .. } => "rename",
             Self::SetParam { .. } => "param",
             Self::SetTrim { .. } => "wire trim",
+            Self::ResizeNode { .. } => "resize",
             Self::Batch(_) => "batch",
         }
     }
@@ -764,8 +977,15 @@ impl Graph {
     pub fn op_add_node(&mut self, spec: NodeSpec, pos: Vec2) -> Op {
         let id = self.alloc_node();
         let param_values = Node::default_param_values(&spec);
-        let node =
-            Node { id, spec, pos, flags: NodeFlags::default(), custom_name: None, param_values };
+        let node = Node {
+            id,
+            spec,
+            pos,
+            size: None,
+            flags: NodeFlags::default(),
+            custom_name: None,
+            param_values,
+        };
         self.apply(&Op::AddNode(node.clone()));
         Op::AddNode(node)
     }
@@ -889,6 +1109,31 @@ impl Graph {
         Some(op)
     }
 
+    /// Build and apply an instrument-card resize (WO-020 INC6 D15), or `None` when there is
+    /// nothing to record: no such node, the node is not an instrument (it has no band to
+    /// size), or the clamped request has the same EFFECTIVE band as the current override
+    /// (re-grabbing the handle and releasing it where the card already rests is not an edit —
+    /// the [`Graph::op_move_node`] discipline).
+    ///
+    /// The clamp lives HERE, not in the gesture layer, so every path that can change a card
+    /// size (the corner drag, a driver call, a future scene loader) obeys the same ruled
+    /// window — band ≥ 480×248, ≤ the declared face — and the [`Op::ResizeNode`] in history
+    /// never carries an out-of-window size (the [`Graph::op_set_param`] discipline).
+    pub fn op_resize_node(&mut self, id: NodeId, to: Option<Vec2>) -> Option<Op> {
+        let node = self.node(id)?;
+        let from = node.size;
+        // `to: None` means "back to the layout's default band" — representable (the undo of a
+        // first resize); `Some` clamps into the ruled window. A non-instrument has no band, so
+        // every clamp is `None` and the comparison below refuses it without a word wasted.
+        let to = to.and_then(|v| node.spec.instrument_band_clamp(v));
+        if node.spec.instrument_band(to) == node.spec.instrument_band(from) {
+            return None;
+        }
+        let op = Op::ResizeNode { id, from, to };
+        self.apply(&op);
+        Some(op)
+    }
+
     // ------------------------------------------------------------ the structural mutator
 
     /// Apply an op to the graph **without validation** — the low-level mutator that both the
@@ -950,6 +1195,11 @@ impl Graph {
             Op::SetTrim { wire, to, .. } => {
                 if let Some(w) = self.wires.iter_mut().find(|w| w.id == *wire) {
                     w.trim = *to;
+                }
+            },
+            Op::ResizeNode { id, to, .. } => {
+                if let Some(n) = self.node_mut(*id) {
+                    n.size = *to;
                 }
             },
             Op::Batch(ops) => {
@@ -1318,6 +1568,7 @@ mod tests {
             id: 0,
             spec: sine_with_params(),
             pos: Vec2::ZERO,
+            size: None,
             flags: NodeFlags::default(),
             custom_name: None,
             param_values: Vec::new(),
@@ -1478,6 +1729,178 @@ mod tests {
             g.wire(wid).unwrap().trim,
             Some(WireTrim { amp: 0.5, offset: 0.25 }),
             "the restored wire carries its trim record"
+        );
+    }
+
+    // ------------------------------------------------- the resizable instrument card (INC6 D15)
+
+    /// The Observatory's shape: a 2176×1120 declared face, a two-row panel band.
+    fn obs_spec() -> NodeSpec {
+        gain().with_display(InstrumentDisplay {
+            min_w: 2176.0,
+            min_h: 1120.0,
+            panel_rows: 2,
+            widgets: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn a_fresh_node_carries_no_size_and_the_default_band_is_half_the_face() {
+        let mut g = Graph::new();
+        let id = match g.op_add_node(obs_spec(), Vec2::ZERO) {
+            Op::AddNode(n) => n.id,
+            _ => unreachable!(),
+        };
+        assert_eq!(g.node(id).unwrap().size, None, "None = the layout's default (D15)");
+        assert_eq!(
+            g.node(id).unwrap().spec.instrument_band_default(),
+            Some(Vec2::new(1088.0, 560.0)),
+            "O-1's half-face default at the Observatory's numbers"
+        );
+    }
+
+    #[test]
+    fn a_resize_records_one_op_and_undo_returns_the_size_the_finger_found() {
+        let mut g = Graph::new();
+        let id = match g.op_add_node(obs_spec(), Vec2::ZERO) {
+            Op::AddNode(n) => n.id,
+            _ => unreachable!(),
+        };
+        let op = g.op_resize_node(id, Some(Vec2::new(1600.0, 800.0))).expect("an edit");
+        assert_eq!(op, Op::ResizeNode { id, from: None, to: Some(Vec2::new(1600.0, 800.0)) });
+        assert_eq!(g.node(id).unwrap().size, Some(Vec2::new(1600.0, 800.0)));
+        let mut h = UndoStack::new();
+        h.push(op);
+        h.undo(&mut g);
+        assert_eq!(g.node(id).unwrap().size, None, "undo returns the card to its default band");
+        h.redo(&mut g);
+        assert_eq!(g.node(id).unwrap().size, Some(Vec2::new(1600.0, 800.0)), "redo re-resizes");
+    }
+
+    #[test]
+    fn the_clamp_lives_in_the_op_constructor() {
+        // Above the face: the declared maximum governs (O-1 — the guest never renders above
+        // its declared face). Below the floor: 480×248 (D15 — below that the wall is words).
+        let mut g = Graph::new();
+        let id = match g.op_add_node(obs_spec(), Vec2::ZERO) {
+            Op::AddNode(n) => n.id,
+            _ => unreachable!(),
+        };
+        g.op_resize_node(id, Some(Vec2::new(4000.0, 3000.0))).unwrap();
+        assert_eq!(
+            g.node(id).unwrap().size,
+            Some(Vec2::new(2176.0, 1120.0)),
+            "clamped to the face"
+        );
+        g.op_resize_node(id, Some(Vec2::new(10.0, 10.0))).unwrap();
+        assert_eq!(
+            g.node(id).unwrap().size,
+            Some(INSTRUMENT_BAND_MIN),
+            "clamped to the ruled floor"
+        );
+        // A non-finite request sanitises to the default band (NaN reaches neither the layout
+        // nor the history — the WireTrim discipline).
+        g.op_resize_node(id, Some(Vec2::new(f32::NAN, 800.0))).unwrap();
+        assert_eq!(g.node(id).unwrap().size, Some(Vec2::new(1088.0, 560.0)));
+    }
+
+    #[test]
+    fn a_release_at_the_effective_start_records_nothing() {
+        // The op_move_node discipline: an explicit size whose EFFECTIVE band equals the
+        // current one is not an edit — the drag that ends where it began leaves no undo step.
+        let mut g = Graph::new();
+        let id = match g.op_add_node(obs_spec(), Vec2::ZERO) {
+            Op::AddNode(n) => n.id,
+            _ => unreachable!(),
+        };
+        assert!(
+            g.op_resize_node(id, Some(Vec2::new(1088.0, 560.0))).is_none(),
+            "the default band stated explicitly is not a change"
+        );
+        assert_eq!(g.node(id).unwrap().size, None, "and it does not even materialise the field");
+        // A backbone node has no band to size: refused without a word wasted (the handle is
+        // never offered there — the layout's job).
+        let back = match g.op_add_node(gain(), Vec2::new(0.0, 2000.0)) {
+            Op::AddNode(n) => n.id,
+            _ => unreachable!(),
+        };
+        assert!(g.op_resize_node(back, Some(Vec2::new(900.0, 900.0))).is_none());
+        assert!(g.op_resize_node(999, Some(Vec2::new(900.0, 900.0))).is_none(), "no such node");
+    }
+
+    #[test]
+    fn the_resize_op_inverts_to_its_exact_data() {
+        let op = Op::ResizeNode { id: 7, from: None, to: Some(Vec2::new(1600.0, 800.0)) };
+        assert_eq!(
+            op.inverse(),
+            Op::ResizeNode { id: 7, from: Some(Vec2::new(1600.0, 800.0)), to: None },
+            "the undo of a first resize carries the card back to its default band"
+        );
+        assert_eq!(op.label(), "resize", "the shell's explain-yourself log reads it");
+    }
+
+    // ------------------------------------------- the typed panel band (WO-020 INC6 D16)
+
+    #[test]
+    fn the_typed_panel_widgets_parse_from_the_shipped_manifest() {
+        // The subject is the CHECKED-IN package manifest — the same bytes the validator and
+        // the sizing tests read, so the widget inventory cannot drift from what ships.
+        let toml = include_str!("../../../../instruments/observatory/sparqmod.toml");
+        let spec = NodeSpec::from_manifest_text(toml).expect("the shipped manifest parses");
+        let d = spec.display.as_ref().expect("the display face is parsed");
+        assert_eq!(d.panel_rows, 2, "§5.2's two toolbar rows");
+        assert_eq!(d.widgets.len(), 27, "every declared widget is typed");
+        let count = |k: PanelWidgetKind| d.widgets.iter().filter(|w| w.kind == k).count();
+        assert_eq!(
+            count(PanelWidgetKind::EnumSelect),
+            18,
+            "CELL + the sixteen gated STREAM pickers + LAYOUT (D7: one visible at a time)"
+        );
+        assert_eq!(count(PanelWidgetKind::Toggle), 5, "SOLO / FULL / TICKER / GRID / PAUSE");
+        assert_eq!(count(PanelWidgetKind::Slider), 3, "history / ticker_speed / intensity");
+        assert_eq!(count(PanelWidgetKind::Label), 1, "the host-side status word's slot");
+        // The label is the ONE widget with no param — a reading, never a control.
+        let label = d.widgets.iter().find(|w| w.kind == PanelWidgetKind::Label).unwrap();
+        assert_eq!(label.param, None);
+        // Every routed widget resolved its param — no dead control exists (a control whose
+        // param does not resolve was dropped at parse, never painted as a lie with a hit-test).
+        let param_of = |id: &str| spec.params.iter().position(|p| p.id == id).unwrap();
+        assert!(d
+            .widgets
+            .iter()
+            .filter(|w| w.kind != PanelWidgetKind::Label)
+            .all(|w| w.param.is_some()));
+        assert_eq!(
+            d.widgets.iter().find(|w| w.param == Some(param_of("cell_02"))).unwrap().visible_if,
+            Some((param_of("selected_cell"), 1.0)),
+            "the D7 gate: cell_02 shows exactly while selected_cell == 1"
+        );
+        assert_eq!(
+            d.widgets.iter().find(|w| w.param == Some(param_of("solo"))).unwrap().kind,
+            PanelWidgetKind::Toggle
+        );
+        // The declared touch classes ride along as DATA (the band the host gives is D16's
+        // 44-px floor; the declaration is kept, never silently re-read).
+        assert!(d.widgets.iter().all(|w| w.touch_class == crate::audit::TouchClass::M));
+        // Defect #100's regression: a manifest-parsed enum's domain is its option-index range
+        // — without it every picker selection on this spec clamped to "no change".
+        let sc = &spec.params[param_of("selected_cell")];
+        assert_eq!((sc.min, sc.max), (0.0, 15.0), "16 options → indices 0..=15");
+        let layout_p = &spec.params[param_of("layout")];
+        assert_eq!((layout_p.min, layout_p.max), (0.0, 4.0), "5 layout options");
+        assert_eq!(layout_p.default, 4.0, "the default 4×4 wall sits inside the domain");
+    }
+
+    #[test]
+    fn the_widget_kind_vocabulary_is_the_four_declared_spellings() {
+        assert_eq!(PanelWidgetKind::parse("enum_select"), Some(PanelWidgetKind::EnumSelect));
+        assert_eq!(PanelWidgetKind::parse("toggle"), Some(PanelWidgetKind::Toggle));
+        assert_eq!(PanelWidgetKind::parse("slider"), Some(PanelWidgetKind::Slider));
+        assert_eq!(PanelWidgetKind::parse("label"), Some(PanelWidgetKind::Label));
+        assert_eq!(
+            PanelWidgetKind::parse("button"),
+            None,
+            "an unseen kind is dropped, never guessed at (D16: the host paints no control it cannot route)"
         );
     }
 }

@@ -46,7 +46,7 @@ python tools\sync_check.py
 if errorlevel 1 (
     echo.
     echo  TEST007 REFUSED: the tree does not match SYNC-STAMP.txt. Re-stamp first:
-    echo      python tools\sync_check.py --write --sync sparq-wo020-inc5r8-2026-10-07
+    echo      python tools\sync_check.py --write --sync sparq-wo020-inc6-2026-10-08
     echo  ^(or, for a deliberate local edit: scripts\build.bat --skip-sync-check^)
     exit /b 1
 )
@@ -124,7 +124,7 @@ if errorlevel 1 set FAILED=!FAILED! K-gates
 
 echo.
 echo === [L] re-stamp ==============================================================
-python tools\sync_check.py --write --sync sparq-wo020-inc5r3-%date:~-4%%date:~3,2%%date:~0,2%
+python tools\sync_check.py --write --sync sparq-wo020-inc6-2026-10-08
 if errorlevel 1 set FAILED=!FAILED! L-stamp
 
 echo.

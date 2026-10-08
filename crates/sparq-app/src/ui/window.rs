@@ -79,6 +79,20 @@ impl ShellApp {
         adapter::apply_style(&ctx, theme);
         let mut shell = ShellUi::new();
         shell.theme = theme;
+        // The live stream plane's launch door (WO-020 INC6 S4, D17b): the WINDOW host is the
+        // launch — the headless audit shares `ShellUi::new` and must stay hermetic even in a
+        // `streams-net` build (a gate that spends the operator's API quota is a gate nobody
+        // trusts). A refusal arrives as words in the shell's log and the fixtures keep the
+        // wall honest at rest.
+        #[cfg(feature = "streams-net")]
+        shell.start_live_streams();
+        // The instrument launch registration (WO-020 INC6 S4, D17a — `instrument-host`,
+        // device-first-compile): every discovered package that loads joins the registry, so
+        // the executor adopts it like any module and PLAY's refusal (#58) lifts; a package
+        // that refuses to load is WORDS in the log and an absent browser row, never a
+        // half-instrument.
+        #[cfg(feature = "instrument-host")]
+        crate::ui::instrument_launch::register_discovered(&mut shell);
         Self {
             ctx,
             egui_winit: None,

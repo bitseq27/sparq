@@ -33,6 +33,7 @@ project.sparq
 Requirement (WO-011): two versions of a project diff legibly in code review. Therefore the graph is stored as a deterministic, ordered textual structure — stable key order, one node/edge per logical line, ids sorted canonically, no timestamps or random ordering inside the part. Binary blobs (automation curve data, large tables) are separate parts referenced by hash so the diff stays readable.
 
 Nodes carry: `id, module (id@version), position (grid units), params (id → value or automation ref), port connections, voice config, bypass/mute/lock flags, colour class override (never a literal colour — a token name)`.
+Nodes MAY carry an optional `size = [w, h]` line (RESERVED, WO-020 INC6 D15): the instrument card's display-band size in world px, clamped to the ruled window (≥ 480×248, ≤ the manifest's declared `min_size`; the canvas snap grid on commit). Absent = the layout's default for the spec (an instrument defaults to HALF its declared face, ruling O-1). Instruments only — a backbone card's size is its spec's, never state. The in-memory model carries this today (`Node.size`, undoable via `Op::ResizeNode`); the line is cut into the format now so the container lands with the door already open.
 Edges carry: `from (node.port), to (node.port), kind (audio|cv|event|data|gpu|atom), delay edge flag (unit_delay|block_delay), compensate flag`.
 
 ## Related formats

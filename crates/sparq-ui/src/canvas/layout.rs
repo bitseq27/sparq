@@ -9,14 +9,14 @@
 //! **world** px (a node is the same patch object however far you've zoomed).
 
 use crate::canvas::camera::{Camera, Lod};
-use crate::canvas::model::{Graph, Node, NodeSpec, PortRef, WireId, WireTrim};
+use crate::canvas::model::{Graph, InstrumentDisplay, Node, NodeSpec, PortRef, WireId, WireTrim};
 use crate::geom::{Rect, Vec2};
 use crate::tokens::{
     LAYOUT_CANVAS_NODE_HEADER_HEIGHT, LAYOUT_CANVAS_NODE_INFO_HEIGHT, LAYOUT_CANVAS_NODE_PARAM_ROW,
     LAYOUT_CANVAS_NODE_PARAM_ROWS_MAX, LAYOUT_CANVAS_NODE_PORT_OFFSET, LAYOUT_CANVAS_NODE_PORT_ROW,
     LAYOUT_CANVAS_NODE_WELL_HEIGHT, LAYOUT_CANVAS_NODE_WELL_HEIGHT_SCOPE,
     LAYOUT_CANVAS_NODE_WIDTH_DEFAULT, LAYOUT_SPACE_1, LAYOUT_SPACE_2,
-    LAYOUT_TOUCH_PORT_CAPTURE_RADIUS, LAYOUT_TOUCH_WIRE_HIT_WIDTH,
+    LAYOUT_TOUCH_PORT_CAPTURE_RADIUS, LAYOUT_TOUCH_TARGET_L, LAYOUT_TOUCH_WIRE_HIT_WIDTH,
 };
 use sparq_module_api::manifest::Port;
 use sparq_module_api::port::Direction;
@@ -113,8 +113,54 @@ pub struct NodeLayout {
     pub key_cells: Vec<Rect>,
     /// Which param the keyboard edits (`util/quant`'s `custom-mask`); `None` elsewhere.
     pub key_param: Option<usize>,
+    /// The instrument card's host RATE row (WO-020 INC6 S5, D20's second door), screen px:
+    /// `Some` on every instrument card — the row is HOST furniture (the info band's
+    /// precedent), reserved by the layout so the card's geometry never depends on a feature
+    /// flag; what fills it (the RATE field + the governed stream's words, or the at-rest
+    /// sentence) is the painter's, from the shell's per-frame data.
+    pub rate_band: Option<Rect>,
+    /// The RATE row's editable field box, screen px (the row's right end — the field is the
+    /// second door to the SAME per-stream override the STREAMS tab writes, D20). Geometry
+    /// lives here so the hit-test and the painter read one rect; whether the field is
+    /// editABLE is the shell's (a build without the stream plane says so in words).
+    pub rate_field: Option<Rect>,
+    /// The instrument card's laid-out panel widgets (WO-020 INC6 D16), in declaration order —
+    /// hidden ones included with `visible: false` (one list the painter, the hit-test and the
+    /// audit all read). Empty for every non-instrument node and for instruments whose manifest
+    /// declares no widgets.
+    pub panel_widgets: Vec<PanelWidgetLayout>,
+    /// The resize handle's corner point, screen px (WO-020 INC6 D15): `Some` on an INSTRUMENT
+    /// card — its bottom-right corner, where the selected card's handle sits. Computed for
+    /// every instrument regardless of selection; the gesture layer offers the grab only while
+    /// the node is selected (the handle is drawn only then — what is not drawn is not
+    /// touchable), and the painter reads this same field, so the hit and the draw cannot
+    /// drift apart.
+    pub resize_corner: Option<Vec2>,
     /// Ports, inputs then outputs, in spec order within each direction.
     pub ports: Vec<PortLayout>,
+}
+
+/// One laid-out panel widget of an instrument card (WO-020 INC6 D16): the cell the host paints
+/// and the gesture path routes, computed from the manifest's grid units inside the reserved
+/// band. Every declared widget gets a layout entry — hidden ones too, with `visible: false` —
+/// so the painter, the hit-test and the audit all read ONE list and cannot drift (a hidden
+/// widget is neither painted nor touchable: the D7 gate, the "what is not drawn is not
+/// touchable" ruling).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanelWidgetLayout {
+    /// Index into the spec's declared widget list (`InstrumentDisplay::widgets`).
+    pub widget: usize,
+    /// The param this widget edits; `None` only on the status LABEL (a reading, never a
+    /// control — never registered in the audit, never hit).
+    pub param: Option<usize>,
+    /// Whether the D7 gate shows it at the node's CURRENT param values.
+    pub visible: bool,
+    /// The cell rect, screen px — the touch target and the painted chip.
+    pub rect: Rect,
+    /// The slider's x-mapping span, screen px (the param-row idiom: the cell minus the token
+    /// padding, in the cell's lower half). For every other kind it is the cell itself — the
+    /// routing ignores it there.
+    pub track: Rect,
 }
 
 /// One inline parameter row on a node card: which parameter, its band, and the slider track the
@@ -260,7 +306,7 @@ pub fn node_bands(spec: &NodeSpec) -> (f32, Option<f32>, f32) {
     // param band is the manifest's panel-widget rows (the toolbar), not the backbone's inline
     // param rows — the wall's 26 params live in the inspector + the dropdown picker (§8.4).
     if spec.layer == sparq_module_api::manifest::Layer::Instrument {
-        if let Some(d) = spec.display {
+        if let Some(d) = spec.display.as_ref() {
             let param_h = instrument_panel_band(d.panel_rows);
             return (param_h, Some(d.min_h), param_h + d.min_h);
         }
@@ -308,16 +354,39 @@ pub fn instrument_panel_band(rows: u32) -> f32 {
 /// lays out against. `None` for non-instrument nodes (their body is the well band, not a display).
 #[must_use]
 pub fn instrument_display_band(card: Rect, spec: &NodeSpec) -> Option<Rect> {
-    let d = spec.display?;
+    let d = spec.display.as_ref()?;
     if spec.layer != sparq_module_api::manifest::Layer::Instrument {
         return None;
     }
     let gutter = crate::tokens::LAYOUT_SPACE_GUTTER as f32;
     let header = crate::tokens::LAYOUT_CANVAS_NODE_HEADER_HEIGHT as f32;
     let y = card.min.y + gutter + header + instrument_panel_band(d.panel_rows);
+    // The available height stops above the host RATE row and the bottom gutter (S5): the
+    // guest's display never grows into the host's furniture.
+    let avail_h = (card.max.y - gutter - instrument_rate_band()) - y;
     Some(Rect::from_min_size(
         Vec2::new(card.min.x + gutter, y),
-        Vec2::new(d.min_w.min(card.width() - 2.0 * gutter), d.min_h.min((card.max.y - gutter) - y)),
+        Vec2::new(d.min_w.min(card.width() - 2.0 * gutter), d.min_h.min(avail_h)),
+    ))
+}
+
+/// The rect of an instrument card's host RATE row (WO-020 INC6 S5, D16/D20): under the
+/// display band, above the bottom gutter, gutter-inset — the `out/main` info band's placement
+/// precedent, on the wall card. `None` for non-instruments. Screen px, like every band here.
+#[must_use]
+pub fn instrument_rate_row(card: Rect, spec: &NodeSpec) -> Option<Rect> {
+    // The instrument check is the display-face check (the D6 pairing): a face declares the
+    // card, the card carries the host row.
+    spec.display.as_ref()?;
+    if spec.layer != sparq_module_api::manifest::Layer::Instrument {
+        return None;
+    }
+    let gutter = crate::tokens::LAYOUT_SPACE_GUTTER as f32;
+    let h = instrument_rate_band();
+    let y = card.max.y - gutter - h;
+    Some(Rect::from_min_size(
+        Vec2::new(card.min.x + gutter, y),
+        Vec2::new(card.width() - 2.0 * gutter, h),
     ))
 }
 
@@ -331,20 +400,32 @@ pub const MULT_WIDTH_FACTOR: f32 = 0.25;
 /// shorter side clears the class-L minimum — the audit property the original size was chosen for.
 #[must_use]
 pub fn node_size(spec: &NodeSpec) -> Vec2 {
-    // WO-020 plan D6: an instrument's card is its DISPLAY plus chrome — the wall-class ceiling
-    // (`node_width_instrument_max`) governs, not the backbone's 480. card = min_size + gutter each
-    // side + header + panel band (rows × the 44 touch floor + the 16 gaps) + gutter top/bottom; the
-    // port band is absent because a port-less instrument has no ports (D5). The formula reproduces
-    // the plan's numbers: 2176×1120 + chrome = 2208×1288.
-    if spec.layer == sparq_module_api::manifest::Layer::Instrument {
-        if let Some(d) = spec.display {
-            let gutter = crate::tokens::LAYOUT_SPACE_GUTTER as f32;
-            let header = crate::tokens::LAYOUT_CANVAS_NODE_HEADER_HEIGHT as f32;
-            let w = (d.min_w + 2.0 * gutter)
-                .min(crate::tokens::LAYOUT_CANVAS_NODE_WIDTH_INSTRUMENT_MAX as f32);
-            let h = d.min_h + header + instrument_panel_band(d.panel_rows) + 2.0 * gutter;
-            return Vec2::new(w, h);
-        }
+    card_size(spec, None)
+}
+
+/// The card's world size for a NODE (WO-020 INC6 D15): the spec's default card, or — for an
+/// instrument carrying a [`Node::size`] override — the card of its own resized band. FIT,
+/// FOCUS, the marquee and the layout pass all read THIS, so a resized card is framed and
+/// hit-tested like any other card.
+#[must_use]
+pub fn node_card_size(n: &Node) -> Vec2 {
+    card_size(&n.spec, n.size)
+}
+
+/// The card size for a spec plus a size override (D15): an instrument's card is its EFFECTIVE
+/// band plus chrome; everything else is the backbone anatomy.
+fn card_size(spec: &NodeSpec, size: Option<Vec2>) -> Vec2 {
+    // WO-020 plan D6 + INC6 ruling O-1 + S5's host row: an instrument's card is its DISPLAY
+    // BAND plus chrome — the wall-class ceiling (`node_width_instrument_max`) governs, not the
+    // backbone's 480. card = band + gutter each side + header + panel band (rows × the 44 touch
+    // floor + the 16 gaps) + the host RATE row (S5/D16, the info band's precedent) + gutter
+    // top/bottom; the port band is absent because a port-less instrument has no ports (D5).
+    // The DEFAULT band is HALF the declared face (O-1: 1088×560 at the Observatory's
+    // 2176×1120 — a card of 1120×768 whose BAND fits a 1080p canvas rect at zoom 1, O-1's own
+    // words); an explicit override resizes up to the declared face: 2176×1120 + chrome =
+    // 2208×1328.
+    if let (Some(d), Some(band)) = (spec.display.as_ref(), spec.instrument_band(size)) {
+        return instrument_card(d, band);
     }
     let inputs = spec.inputs().count();
     let outputs = spec.outputs().count();
@@ -362,6 +443,32 @@ pub fn node_size(spec: &NodeSpec) -> Vec2 {
         + well_h.unwrap_or(0.0)
         + info_band_height(spec).unwrap_or(0.0)
         + rows as f32 * LAYOUT_CANVAS_NODE_PORT_ROW as f32;
+    Vec2::new(w, h)
+}
+
+/// The host RATE row's height (WO-020 INC6 S5, D16/D20): the `out/main` driver-info band's own
+/// token — the host furniture rides that band's precedent exactly ("host words in the card,
+/// never guest widgets"), one row under the guest's display, above the bottom gutter.
+#[must_use]
+pub fn instrument_rate_band() -> f32 {
+    crate::tokens::LAYOUT_CANVAS_NODE_INFO_HEIGHT as f32
+}
+
+/// The instrument card for a band: the D6 chrome around the band, capped at the wall-class
+/// width ceiling (the cap bites only on hypothetical faces wider than 2368 px — the
+/// Observatory's 2176 + gutters = 2208 stays under it). S5 grows the chrome by the host RATE
+/// row (D16: below the guest's rows, the info band's precedent) — the BAND numbers O-1 rules
+/// are untouched; the card is band + chrome, as it has always been.
+fn instrument_card(d: &InstrumentDisplay, band: Vec2) -> Vec2 {
+    let gutter = crate::tokens::LAYOUT_SPACE_GUTTER as f32;
+    let header = crate::tokens::LAYOUT_CANVAS_NODE_HEADER_HEIGHT as f32;
+    let w =
+        (band.x + 2.0 * gutter).min(crate::tokens::LAYOUT_CANVAS_NODE_WIDTH_INSTRUMENT_MAX as f32);
+    let h = band.y
+        + header
+        + instrument_panel_band(d.panel_rows)
+        + instrument_rate_band()
+        + 2.0 * gutter;
     Vec2::new(w, h)
 }
 
@@ -431,9 +538,13 @@ fn layout_node(
     view: Rect,
     port_world: &mut Vec<(PortRef, Vec2, Direction, SignalClass)>,
 ) -> NodeLayout {
-    let size = node_size(&n.spec);
+    let size = node_card_size(n);
     let world = Rect::from_min_size(n.pos, size);
     let screen = Rect::new(camera.to_screen(world.min, view), camera.to_screen(world.max, view));
+    // The resize handle's corner (INC6 D15): the instrument card's bottom-right, in screen px.
+    // Selection is NOT read here — the layout computes, the gesture layer and the painter both
+    // gate on it, from this one point.
+    let resize_corner = n.spec.instrument_face().map(|_| screen.max);
     let header_h = camera.screen_len(LAYOUT_CANVAS_NODE_HEADER_HEIGHT as f32);
     let header_screen = Rect::new(screen.min, Vec2::new(screen.max.x, screen.min.y + header_h));
 
@@ -478,7 +589,8 @@ fn layout_node(
         (overflow, Rect::new(camera.to_screen(r.min, view), camera.to_screen(r.max, view)))
     });
     let well_band = if is_instrument {
-        // The display band: exactly the declared min_size area inside the gutters (D6).
+        // The display band: the card's EFFECTIVE band area inside the gutters — the declared
+        // min_size at the top of the ruled window, the resized/default band below it (D6/D15).
         instrument_display_band(Rect::from_min_size(n.pos, size), &n.spec)
             .map(|r| Rect::new(camera.to_screen(r.min, view), camera.to_screen(r.max, view)))
     } else {
@@ -487,6 +599,61 @@ fn layout_node(
             let r = Rect::new(Vec2::new(n.pos.x, y0), Vec2::new(n.pos.x + size.x, y0 + wh));
             Rect::new(camera.to_screen(r.min, view), camera.to_screen(r.max, view))
         })
+    };
+    // The host RATE row (S5): the info band's placement precedent, under the display band —
+    // and its field box at the row's right end (the second door to the per-stream override).
+    let rate_band_world = instrument_rate_row(Rect::from_min_size(n.pos, size), &n.spec);
+    let rate_band = rate_band_world
+        .map(|r| Rect::new(camera.to_screen(r.min, view), camera.to_screen(r.max, view)));
+    let rate_field = rate_band_world.map(|r| {
+        let w = RATE_FIELD_W.min(r.width() * 0.5);
+        let fr = Rect::new(Vec2::new(r.max.x - w, r.min.y), r.max);
+        Rect::new(camera.to_screen(fr.min, view), camera.to_screen(fr.max, view))
+    });
+    // The typed panel widgets (WO-020 INC6 D16): the manifest's grid units mapped into the
+    // reserved band — rows at D16's 44 px floor with the 16 px gaps (D6's formula, which the
+    // band's own height already carries), columns proportional across the band's width. The
+    // gate (D7) is evaluated against the node's CURRENT param values, so one list serves the
+    // painter, the hit-test and the audit with the same truth.
+    let panel_widgets = match (is_instrument, n.spec.display.as_ref()) {
+        (true, Some(d)) if !d.widgets.is_empty() => {
+            let gutter = crate::tokens::LAYOUT_SPACE_GUTTER as f32;
+            let row_h = crate::tokens::LAYOUT_TOUCH_TARGET_S as f32;
+            let gap = crate::tokens::LAYOUT_SPACE_4 as f32;
+            let pitch = row_h + gap;
+            let band_left = n.pos.x + gutter;
+            let band_top = n.pos.y + gutter + header;
+            let band_w = (size.x - 2.0 * gutter).max(1.0);
+            let cols = d.widgets.iter().map(|w| w.x + w.w).max().unwrap_or(1).max(1) as f32;
+            let cell_w = band_w / cols;
+            let pad = LAYOUT_SPACE_2 as f32;
+            d.widgets
+                .iter()
+                .enumerate()
+                .map(|(i, w)| {
+                    let visible = match w.visible_if {
+                        Some((gi, eq)) => n.param_value(gi).is_some_and(|v| (v - eq).abs() < 0.5),
+                        None => true,
+                    };
+                    let x0 = band_left + w.x as f32 * cell_w;
+                    let y0 = band_top + w.y as f32 * pitch;
+                    let cw = w.w as f32 * cell_w;
+                    let ch = w.h as f32 * row_h + w.h.saturating_sub(1) as f32 * gap;
+                    let to_screen_rect = |r: Rect| {
+                        Rect::new(camera.to_screen(r.min, view), camera.to_screen(r.max, view))
+                    };
+                    let rect =
+                        to_screen_rect(Rect::new(Vec2::new(x0, y0), Vec2::new(x0 + cw, y0 + ch)));
+                    // The slider's mapping span: the param-row's proportions inside the cell.
+                    let track = to_screen_rect(Rect::new(
+                        Vec2::new(x0 + pad, y0 + ch * 0.55),
+                        Vec2::new(x0 + cw - pad, y0 + ch - pad * 0.5),
+                    ));
+                    PanelWidgetLayout { widget: i, param: w.param, visible, rect, track }
+                })
+                .collect()
+        },
+        _ => Vec::new(),
     };
     // The out/main driver-info band (operator ruling 2026-10-01): under the well, above the
     // port band — the permanent node's window onto the negotiated device truth.
@@ -634,6 +801,10 @@ fn layout_node(
         step_param,
         key_cells,
         key_param,
+        rate_band,
+        rate_field,
+        panel_widgets,
+        resize_corner,
         ports,
     }
 }
@@ -759,6 +930,11 @@ pub enum Hit {
     /// round 4 D11) — the key under the finger flips that class's membership in the CUSTOM
     /// scale through the param door; a preset scale refuses in words.
     Key(crate::canvas::model::NodeId, usize),
+    /// The instrument card's host RATE field (WO-020 INC6 S5, D20's second door): the tap
+    /// opens the field's entry — the canvas core emits
+    /// [`super::interact::CanvasEvent::RateField`] and the SHELL owns the store it writes
+    /// (the RenderWav division of labour: the canvas routes, the shell acts).
+    RateField(crate::canvas::model::NodeId),
     /// A node body.
     Node(crate::canvas::model::NodeId),
     /// A wire.
@@ -785,6 +961,45 @@ impl CanvasLayout {
             w.trim_point = arc_midpoint(&w.points);
         }
     }
+}
+
+/// The RATE field's box width, world px (WO-020 INC6 S5): room for "3600 s (registry 1800 s)"
+/// at the xs font — the field is the row's right end, the words own the rest of the row.
+pub const RATE_FIELD_W: f32 = 200.0;
+
+/// The resize handle's capture radius, screen px (WO-020 INC6 D15): HALF the class-L touch
+/// target, so the capture circle's bounding box measures exactly the class-L floor (72 px) —
+/// the port capture's idiom (a finger is finger-sized regardless of zoom), at the handle's
+/// ruled class ("a corner handle, class L touch target").
+pub const RESIZE_CAPTURE_RADIUS: f32 = LAYOUT_TOUCH_TARGET_L as f32 / 2.0;
+
+/// The instrument card whose resize handle `pos_screen` grabs, if any (WO-020 INC6 D15).
+/// The gesture layer asks this BEFORE [`hit_test`], so the visible handle outranks its own
+/// card body's move-drag — a drawn handle beats the furniture under it (the cable node's
+/// ranking). The grab is offered exactly where the handle is DRAWN: only while the node is
+/// `selected` (the handle grows on the selected card), never at [`Lod::Dot`] (the card is a
+/// dot there), and never under a card drawn later (COVERED IS UNTOUCHABLE — the hit-test's
+/// own ruling; the owner's body under the point is fine, the handle sits on its corner).
+#[must_use]
+pub fn resize_handle_at(
+    layout: &CanvasLayout,
+    pos_screen: Vec2,
+    lod: Lod,
+    selected: impl Fn(crate::canvas::model::NodeId) -> bool,
+) -> Option<crate::canvas::model::NodeId> {
+    if lod == Lod::Dot {
+        return None;
+    }
+    // The topmost candidate within the capture radius, in paint order (later draws on top).
+    let (idx, id) = layout.nodes.iter().enumerate().rev().find_map(|(i, n)| {
+        let corner = n.resize_corner?;
+        (corner.distance(pos_screen) <= RESIZE_CAPTURE_RADIUS && selected(n.id))
+            .then_some((i, n.id))
+    })?;
+    // A card drawn LATER buries the corner exactly like it buries a port or a cable node.
+    let covered_by_later =
+        layout.nodes.iter().enumerate().skip(idx + 1).any(|(_, n)| n.screen.contains(pos_screen));
+    (!covered_by_later).then_some(id)
 }
 
 /// Hit-test a screen point against a computed layout. `lod` gates port and wire-end hits: at
@@ -885,6 +1100,27 @@ pub fn hit_test(layout: &CanvasLayout, pos_screen: Vec2, lod: Lod) -> Hit {
             for (k, cell) in n.key_cells.iter().enumerate() {
                 if cell.contains(pos_screen) {
                     return Hit::Key(n.id, k);
+                }
+            }
+            // The instrument's typed panel widgets (WO-020 INC6 D16): a VISIBLE widget cell
+            // under the finger routes as the param row it edits — enums open the picker,
+            // toggles flip, sliders map x — through the EXISTING `Hit::Param` door, so every
+            // rule the card rows already carry (tap-to-set, one undo per gesture, the binary
+            // flip, the picker's sheet) holds on the band unchanged. A hidden widget (the D7
+            // gate) is not painted, so it is not touchable; the status LABEL has no param and
+            // is a reading, never a hit.
+            for pw in &n.panel_widgets {
+                if let (true, Some(pi)) = (pw.visible, pw.param) {
+                    if pw.rect.contains(pos_screen) {
+                        return Hit::Param(n.id, pi, pw.track);
+                    }
+                }
+            }
+            // The host RATE field (S5): the tap opens the entry — Full LOD only (it is text +
+            // box; the Simplified contract is no-text, and what is not drawn is not touchable).
+            if let Some(rf) = n.rate_field {
+                if rf.contains(pos_screen) {
+                    return Hit::RateField(n.id);
                 }
             }
             for pr in &n.param_rows {
@@ -1467,34 +1703,76 @@ mod tests {
 
 #[cfg(test)]
 mod instrument_sizing_tests {
-    //! WO-020 INC4 §8.2/D6: the instrument card is its display plus chrome — the numbers the plan
-    //! declares, reproduced by formula (2208 × 1288 at the Observatory's min_size).
+    //! WO-020 INC4 §8.2/D6 + INC6 ruling O-1 / plan D15: the instrument card is its display
+    //! BAND plus chrome. The DEFAULT band is HALF the declared face (O-1: the 1088×560 band,
+    //! a 1120×728 card at the Observatory's 2176×1120 — the card that fits a 1080p canvas rect
+    //! at zoom 1); an explicit resize up to the declared face reproduces the D6 numbers
+    //! (2208 × 1288). The formula, not the memory, is the record.
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
-    use crate::canvas::model::InstrumentDisplay;
+    use crate::canvas::model::{InstrumentDisplay, NodeId, Op};
 
     fn obs_spec() -> NodeSpec {
-        NodeSpec::new("dat/observatory", "The Observatory", vec![])
-            .with_display(InstrumentDisplay { min_w: 2176.0, min_h: 1120.0, panel_rows: 2 })
+        NodeSpec::new("dat/observatory", "The Observatory", vec![]).with_display(
+            InstrumentDisplay { min_w: 2176.0, min_h: 1120.0, panel_rows: 2, widgets: Vec::new() },
+        )
+    }
+
+    /// A roomy canvas view for the layout pass (this module's own — `mod tests`' helper is
+    /// private to it).
+    fn view() -> Rect {
+        Rect::from_min_size(Vec2::ZERO, Vec2::new(4096.0, 4096.0))
+    }
+
+    /// A graph carrying one Observatory node, and its id.
+    fn obs_node() -> (Graph, NodeId) {
+        let mut g = Graph::new();
+        let op = g.op_add_node(obs_spec(), Vec2::ZERO);
+        let id = match op {
+            Op::AddNode(n) => n.id,
+            _ => unreachable!("op_add_node returns AddNode"),
+        };
+        (g, id)
     }
 
     #[test]
-    fn the_d6_card_numbers_are_reproduced() {
+    fn the_default_card_is_half_the_face_and_the_declared_maximum_reproduces_d6() {
+        // O-1's default: the half band 1088×560 + the D6 chrome = a 1120×728 card.
         let size = node_size(&obs_spec());
-        assert_eq!(size.x, 2208.0, "2176 + 2×16 gutter (D6)");
-        assert_eq!(size.y, 1288.0, "1120 + 32 header + 104 panel band + 32 gutter (D6)");
+        assert_eq!(size.x, 1120.0, "1088 (half of 2176) + 2×16 gutter (O-1/D15)");
+        assert_eq!(
+            size.y, 768.0,
+            "560 (half of 1120) + 32 header + 104 panel band + 40 host RATE row (S5) + 32 gutter"
+        );
+        // Resized to the declared face, the D6 numbers return exactly: the manifest's
+        // 2176×1120 stays the declared maximum (O-1), and the chrome rides the size (D15).
+        let (mut g, id) = obs_node();
+        g.op_resize_node(id, Some(Vec2::new(2176.0, 1120.0))).unwrap();
+        let full = node_card_size(g.node(id).unwrap());
+        assert_eq!(full.x, 2208.0, "2176 + 2×16 gutter (D6)");
+        assert_eq!(full.y, 1328.0, "1120 + 32 header + 104 panel band + 40 rate row + 32 gutter");
     }
 
     #[test]
     fn the_card_ceiling_governs_not_the_backbone_grid() {
-        // A hypothetical wider display clamps at node_width_instrument_max (2400), never at the
-        // backbone's 480 — the wall class is a different animal (layout.toml's own words).
+        // A hypothetical wider display, resized to its face, clamps at
+        // node_width_instrument_max (2400), never at the backbone's 480 — the wall class is a
+        // different animal (layout.toml's own words).
         let wide = NodeSpec::new("dat/x", "X", vec![]).with_display(InstrumentDisplay {
             min_w: 4000.0,
             min_h: 100.0,
             panel_rows: 0,
+            widgets: Vec::new(),
         });
-        assert_eq!(node_size(&wide).x, 2400.0);
+        let mut g = Graph::new();
+        let id = match g.op_add_node(wide.clone(), Vec2::ZERO) {
+            Op::AddNode(n) => n.id,
+            _ => unreachable!(),
+        };
+        g.op_resize_node(id, Some(Vec2::new(4000.0, 100.0))).unwrap();
+        assert_eq!(node_card_size(g.node(id).unwrap()).x, 2400.0);
+        // The half-face default of the same wide spec stays under the ceiling on its own.
+        assert_eq!(node_size(&wide).x, 2032.0, "2000 (half of 4000) + 2×16 gutter");
         // And a backbone spec is untouched by the instrument path.
         let back = NodeSpec::new("sparq/util/gain", "Gain", vec![]);
         assert!(node_size(&back).x < 500.0, "backbone cards keep the token width");
@@ -1508,17 +1786,148 @@ mod instrument_sizing_tests {
     }
 
     #[test]
-    fn the_display_band_is_the_declared_min_size_inside_the_card() {
+    fn the_host_rate_row_sits_under_the_display_band() {
+        // S5/D16: the host furniture rides the out/main info band's precedent — under the
+        // guest's display, above the bottom gutter, gutter-inset — and the guest's band never
+        // grows into it (the display's available height stops where the host row starts).
+        let spec = obs_spec();
+        let card = Rect::from_min_size(Vec2::new(100.0, 50.0), node_size(&spec));
+        let row = instrument_rate_row(card, &spec).expect("an instrument card carries the row");
+        assert_eq!(row.height(), 40.0, "the info band's own token (the precedent D16 names)");
+        assert_eq!(row.min.x, 116.0, "gutter-inset");
+        assert_eq!(row.max.y, card.max.y - 16.0, "one gutter above the card's bottom");
+        let band = instrument_display_band(card, &spec).unwrap();
+        assert!(
+            (band.max.y - row.min.y).abs() < 1e-3,
+            "the display stops where the host row starts"
+        );
+        assert_eq!((band.width(), band.height()), (1088.0, 560.0), "the O-1 default band, intact");
+        // A backbone card grows no host row.
+        assert!(instrument_rate_row(card, &NodeSpec::new("sparq/util/gain", "G", vec![])).is_none());
+    }
+
+    #[test]
+    fn the_display_band_is_the_effective_band_inside_the_card() {
+        // The default card carries the half band, gutter-inset (O-1).
         let card = Rect::from_min_size(Vec2::new(100.0, 50.0), node_size(&obs_spec()));
         let band =
             instrument_display_band(card, &obs_spec()).expect("an instrument card has a band");
-        assert_eq!(band.width(), 2176.0, "the band is exactly the display width");
-        assert_eq!(band.height(), 1120.0, "…and height");
+        assert_eq!(band.width(), 1088.0, "the default band is half the declared width");
+        assert_eq!(band.height(), 560.0, "…and half the declared height");
         assert_eq!(band.min.x, 116.0, "one gutter in from the card edge");
+        // Resized to the declared face, the band IS the declared min_size (D6's old promise,
+        // now at the top of the ruled window instead of by default).
+        let (mut g, id) = obs_node();
+        g.op_resize_node(id, Some(Vec2::new(2176.0, 1120.0))).unwrap();
+        let full_card = Rect::from_min_size(Vec2::ZERO, node_card_size(g.node(id).unwrap()));
+        let full = instrument_display_band(full_card, &obs_spec()).unwrap();
+        assert_eq!((full.width(), full.height()), (2176.0, 1120.0));
         // A backbone node has no band.
         assert!(
             instrument_display_band(card, &NodeSpec::new("sparq/util/gain", "G", vec![])).is_none()
         );
+    }
+
+    #[test]
+    fn the_resize_corner_exists_on_instrument_cards_only() {
+        // D15's affordance anchor: the layout computes the bottom-right corner for every
+        // instrument card regardless of selection; backbone cards have no handle to offer.
+        let mut g = Graph::new();
+        let obs = match g.op_add_node(obs_spec(), Vec2::ZERO) {
+            Op::AddNode(n) => n.id,
+            _ => unreachable!(),
+        };
+        let gain = match g
+            .op_add_node(NodeSpec::new("sparq/util/gain", "Gain", vec![]), Vec2::new(0.0, 2000.0))
+        {
+            Op::AddNode(n) => n.id,
+            _ => unreachable!(),
+        };
+        let cam = Camera::new();
+        let l = compute(&g, &cam, view());
+        let nl_obs = l.nodes.iter().find(|n| n.id == obs).unwrap();
+        let nl_gain = l.nodes.iter().find(|n| n.id == gain).unwrap();
+        assert_eq!(nl_obs.resize_corner, Some(nl_obs.screen.max), "the card's bottom-right");
+        assert_eq!(nl_gain.resize_corner, None, "a backbone card grows no handle");
+    }
+
+    #[test]
+    fn the_typed_widgets_lay_out_in_the_band_and_the_gate_reads_the_params() {
+        // D16: the manifest's grid units map into the reserved band — rows at the 44 px floor
+        // with the 16 px gaps (D6's formula), columns proportional across the band — and the
+        // D7 gate is evaluated against the node's CURRENT param values, per frame.
+        let toml = include_str!("../../../../instruments/observatory/sparqmod.toml");
+        let spec = NodeSpec::from_manifest_text(toml).unwrap();
+        let param_of = |id: &str| spec.params.iter().position(|p| p.id == id).unwrap();
+        let mut g = Graph::new();
+        let id = match g.op_add_node(spec.clone(), Vec2::ZERO) {
+            Op::AddNode(n) => n.id,
+            _ => unreachable!(),
+        };
+        let cam = Camera::new(); // zoom 1, origin 0: screen == world inside view()
+        let l = compute(&g, &cam, view());
+        let nl = l.nodes.iter().find(|n| n.id == id).unwrap();
+        assert_eq!(nl.panel_widgets.len(), 27, "every declared widget gets a cell");
+        // The default selected_cell = 0 shows cell_01 and hides the other fifteen pickers:
+        // 27 − 15 = 12 visible (D7: one STREAM picker at a time, reading as one dropdown).
+        let vis =
+            |pi: usize| nl.panel_widgets.iter().find(|w| w.param == Some(pi)).map(|w| w.visible);
+        assert_eq!(nl.panel_widgets.iter().filter(|w| w.visible).count(), 12);
+        assert_eq!(vis(param_of("cell_01")), Some(true));
+        assert_eq!(vis(param_of("cell_02")), Some(false), "the gate hides it at default");
+        // Geometry: the band starts one gutter + one header in; row 0 is 44 tall; row 1 sits
+        // a 60 px pitch below; the 17-unit row spans the 1088 band → 64 px columns.
+        let w0 = &nl.panel_widgets[0]; // selected_cell: x0 y0 w2
+        assert!((w0.rect.min.y - 48.0).abs() < 1e-3, "gutter 16 + header 32");
+        assert!((w0.rect.height() - 44.0).abs() < 1e-3, "D16's touch floor");
+        assert!((w0.rect.width() - 128.0).abs() < 1e-3, "2 × 64 px columns");
+        let hist = nl.panel_widgets.iter().find(|w| w.param == Some(param_of("history"))).unwrap();
+        assert!((hist.rect.min.y - 108.0).abs() < 1e-3, "row 1 = 48 + the 60 px pitch");
+        assert!((hist.rect.width() - 384.0).abs() < 1e-3, "6 × 64 px columns");
+        assert!(hist.track.width() < hist.rect.width(), "the slider's track insets like the rows'");
+
+        // The hit-test routes a VISIBLE cell as the param row it edits — enums, toggles and
+        // sliders all through the existing Hit::Param door — and a HIDDEN one is not touchable
+        // (what is not drawn is not touchable), falling through to the card body.
+        let cell_mid = |pi: usize| {
+            nl.panel_widgets.iter().find(|w| w.param == Some(pi)).map(|w| w.rect.center())
+        };
+        let track_of = |pi: usize| {
+            nl.panel_widgets.iter().find(|w| w.param == Some(pi)).map(|w| w.track).unwrap()
+        };
+        assert_eq!(
+            hit_test(&l, cell_mid(param_of("selected_cell")).unwrap(), Lod::Full),
+            Hit::Param(id, param_of("selected_cell"), w0.track),
+            "the CELL dropdown routes to its param"
+        );
+        assert_eq!(
+            hit_test(&l, cell_mid(param_of("solo")).unwrap(), Lod::Full),
+            Hit::Param(id, param_of("solo"), track_of(param_of("solo"))),
+            "the SOLO toggle routes to its param"
+        );
+        match hit_test(&l, cell_mid(param_of("cell_02")).unwrap(), Lod::Full) {
+            Hit::Param(_, pi, _) => {
+                assert_ne!(pi, param_of("cell_02"), "a hidden picker must not route")
+            },
+            Hit::Node(n) => assert_eq!(n, id, "the hidden picker is body, not control"),
+            other => unreachable!("{other:?}"),
+        };
+        // The status LABEL is a reading: its cell is never a param hit — the body answers.
+        let label_cell = nl.panel_widgets.iter().find(|w| w.param.is_none()).unwrap();
+        assert!(
+            !matches!(hit_test(&l, label_cell.rect.center(), Lod::Full), Hit::Param(..)),
+            "the label routes to no control"
+        );
+
+        // Flip the gate's param and the visibility follows on the next pass (one truth, per
+        // frame — the picker's cell swap re-renders within a frame, S4's acceptance seeded).
+        g.op_set_param(id, param_of("selected_cell"), 3.0).unwrap();
+        let l2 = compute(&g, &cam, view());
+        let nl2 = l2.nodes.iter().find(|n| n.id == id).unwrap();
+        let vis2 =
+            |pi: usize| nl2.panel_widgets.iter().find(|w| w.param == Some(pi)).map(|w| w.visible);
+        assert_eq!(vis2(param_of("cell_04")), Some(true), "selected_cell 3 shows cell_04");
+        assert_eq!(vis2(param_of("cell_01")), Some(false), "…and hides cell_01");
     }
 
     #[test]
@@ -1541,9 +1950,18 @@ mod instrument_sizing_tests {
         let toml = include_str!("../../../../instruments/observatory/sparqmod.toml");
         let spec = NodeSpec::from_manifest_text(toml).expect("the shipped manifest parses");
         assert_eq!(spec.layer, sparq_module_api::manifest::Layer::Instrument);
-        let d = spec.display.expect("the display face is parsed");
+        let d = spec.display.as_ref().expect("the display face is parsed");
         assert_eq!((d.min_w, d.min_h, d.panel_rows), (2176.0, 1120.0, 2), "§5.1/§5.2 numbers");
-        assert_eq!(node_size(&spec), Vec2::new(2208.0, 1288.0), "the D6 card");
+        assert_eq!(
+            node_size(&spec),
+            Vec2::new(1120.0, 768.0),
+            "the O-1 default card: half face + the S5 host row"
+        );
+        assert_eq!(
+            spec.instrument_band_default(),
+            Some(Vec2::new(1088.0, 560.0)),
+            "the O-1 default band"
+        );
         // A bad manifest never spawns.
         assert!(NodeSpec::from_manifest_text("[identity]\n").is_none());
     }

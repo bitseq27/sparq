@@ -66,6 +66,11 @@ pub struct Broker {
     last_attempt: HashMap<String, i64>,
     words: HashMap<String, String>,
     cache: Option<Cache>,
+    /// Per-stream cadence overrides, seconds (WO-020 INC6 D18): `due` and the stale horizon
+    /// read them before the registry's cadence. Fed from the overrides store at launch and on
+    /// every edit (control thread); every value is ≥ the O-3 floor — the setter refuses below
+    /// it in words, and the store refuses before that.
+    cadence_overrides: HashMap<String, u32>,
 }
 
 impl Broker {
@@ -81,6 +86,7 @@ impl Broker {
             last_attempt: HashMap::new(),
             words: HashMap::new(),
             cache,
+            cadence_overrides: HashMap::new(),
         };
         b.load_last_good();
         b
@@ -119,8 +125,10 @@ impl Broker {
     }
 
     /// The streams due for a poll at `now_unix`, in registry order (the file order is the
-    /// picker's canonical order): fetchable (not KEY NEEDED) and last attempted at least
-    /// `cadence_s` ago. A never-attempted stream is due immediately.
+    /// picker's canonical order): fetchable (not KEY NEEDED) and last attempted at least one
+    /// EFFECTIVE cadence ago — the override when one is set, else the registry's (D18:
+    /// "`Broker::due` reads the override-then-registry cadence"). The floor still counts
+    /// ATTEMPTS, not successes: the anti-thundering-herd rule is untouched.
     #[must_use]
     pub fn due<F>(&self, now_unix: i64, env: F) -> Vec<String>
     where
@@ -132,10 +140,64 @@ impl Broker {
             .filter(|def| def.is_fetchable(&env))
             .filter(|def| match self.last_attempt.get(&def.id) {
                 None => true,
-                Some(last) => now_unix.saturating_sub(*last) >= i64::from(def.cadence_s),
+                Some(last) => {
+                    now_unix.saturating_sub(*last) >= i64::from(self.effective_cadence(def))
+                },
             })
             .map(|def| def.id.clone())
             .collect()
+    }
+
+    /// The cadence a stream is actually polled on: the override when set, else the registry's
+    /// (D18). The stale horizon reads the same number ([`Self::window_for`]), so the freshness
+    /// words age against the cadence that governs.
+    #[must_use]
+    pub fn effective_cadence(&self, def: &StreamDef) -> u32 {
+        self.cadence_overrides.get(&def.id).copied().unwrap_or(def.cadence_s)
+    }
+
+    /// Sets or clears one stream's cadence override — or REFUSES in words below the O-3 floor,
+    /// changing nothing (the store refuses first; this is the second door, and no door is
+    /// silent). An accepted override re-tunes the live window's stale horizon immediately.
+    ///
+    /// # Errors
+    /// The refusal sentence, when `secs` is below [`crate::store::CADENCE_FLOOR_S`].
+    pub fn set_cadence_override(
+        &mut self,
+        stream_id: &str,
+        secs: Option<u32>,
+    ) -> Result<(), String> {
+        if let Some(s) = secs {
+            if s < crate::store::CADENCE_FLOOR_S {
+                return Err(format!(
+                    "{s} s is below the {} s floor (ruling O-3) — the cadence keeps its old value",
+                    crate::store::CADENCE_FLOOR_S
+                ));
+            }
+        }
+        match secs {
+            Some(s) => {
+                self.cadence_overrides.insert(stream_id.to_string(), s);
+            },
+            None => {
+                self.cadence_overrides.remove(stream_id);
+            },
+        }
+        // Re-tune the live window (if one exists) so the freshness words follow at once —
+        // the effective cadence is computed BEFORE the mutable borrow (one truth, no clash).
+        let tuned = self.registry.get(stream_id).map(|def| self.effective_cadence(def));
+        if let (Some(w), Some(cad)) = (self.windows.get_mut(stream_id), tuned) {
+            w.set_cadence(cad);
+        }
+        Ok(())
+    }
+
+    /// The window a fetch builds for a stream: the registry's kind, the EFFECTIVE cadence
+    /// (D18 — the override rides into the stale horizon the same step it rides into `due`).
+    fn window_for(&self, def: &StreamDef) -> Window {
+        let mut w = Window::for_stream(def);
+        w.set_cadence(self.effective_cadence(def));
+        w
     }
 
     /// Polls exactly `ids` (unknown ids answer with the registry's refusal in words, never a
@@ -287,7 +349,7 @@ impl Broker {
                 }
                 w.mark_fetched(now_unix);
             } else {
-                let mut w = Window::for_stream(def);
+                let mut w = self.window_for(def);
                 taken = records.len();
                 w.extend(records);
                 w.mark_fetched(now_unix);
@@ -296,7 +358,7 @@ impl Broker {
             taken
         } else {
             // REPLACE: the payload is the whole current picture.
-            let mut w = Window::for_stream(def);
+            let mut w = self.window_for(def);
             let taken = records.len();
             w.extend(records);
             w.mark_fetched(now_unix);
@@ -334,7 +396,7 @@ impl Broker {
             }
             match crate::normalize::normalize(def, &entry.body, entry.fetched_unix) {
                 Ok(records) => {
-                    let mut w = Window::for_stream(def);
+                    let mut w = self.window_for(def);
                     w.extend(records);
                     w.mark_fetched(entry.fetched_unix);
                     self.windows.insert(def.id.clone(), w);

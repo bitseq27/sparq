@@ -253,6 +253,7 @@ pub const LAYOUT_CANVAS_ZOOM_STEP: f32 = 1.2_f32;
 pub const LAYOUT_CANVAS_LOD_LEVELS: i32 = 3_i32;
 pub const LAYOUT_CANVAS_LOD_1_BELOW_ZOOM: f32 = 0.6_f32;
 pub const LAYOUT_CANVAS_LOD_2_BELOW_ZOOM: f32 = 0.35_f32;
+pub const LAYOUT_CANVAS_INSTRUMENT_DISPLAY_HZ: i32 = 15_i32;
 pub const LAYOUT_CANVAS_WIRE_STYLE: &str = "bezier-horizontal";
 pub const LAYOUT_CANVAS_WIRE_CROSSING_POLICY: &str = "no bridges; crossings are drawn plain (data-ink)";
 pub const LAYOUT_BREAKPOINT_TABLET_MIN_W: i32 = 1280_i32;
@@ -724,6 +725,7 @@ pub const TOKEN_NUMBERS: &[(&str, f64)] = &[
     ("layout.canvas.grid_dot_radius", 1.0),
     ("layout.canvas.grid_major", 256.0),
     ("layout.canvas.grid_minor", 32.0),
+    ("layout.canvas.instrument_display_hz", 15.0),
     ("layout.canvas.lod_1_below_zoom", 0.6),
     ("layout.canvas.lod_2_below_zoom", 0.35),
     ("layout.canvas.lod_levels", 3.0),

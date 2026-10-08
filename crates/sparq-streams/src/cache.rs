@@ -208,34 +208,37 @@ impl Cache {
 /// The OS user-data directory, resolved from environment only (no platform crate): `%APPDATA%` on
 /// Windows, `~/Library/Application Support` on macOS, `$XDG_DATA_HOME` or `~/.local/share` elsewhere.
 /// Falls back to `.` when no home is discoverable — a cache with no home is a cache miss, not a crash.
-fn user_data_dir() -> PathBuf {
+pub(crate) fn user_data_dir() -> PathBuf {
+    user_data_dir_with(|k| std::env::var(k).ok())
+}
+
+/// [`user_data_dir`] over an injected environment — the plane's tests never read the real one
+/// (D11's firewall, on paths instead of clocks). The store's `default_path_with` rides this
+/// (WO-020 INC6 D18: the store sits beside the cache, so both resolve the same dir).
+pub(crate) fn user_data_dir_with<F>(env: F) -> PathBuf
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let non_empty = |k: &str| env(k).filter(|v| !v.is_empty());
     #[cfg(target_os = "windows")]
     {
-        if let Ok(d) = std::env::var("APPDATA") {
-            if !d.is_empty() {
-                return PathBuf::from(d);
-            }
+        if let Some(d) = non_empty("APPDATA") {
+            return PathBuf::from(d);
         }
     }
     #[cfg(target_os = "macos")]
     {
-        if let Ok(h) = std::env::var("HOME") {
-            if !h.is_empty() {
-                return PathBuf::from(h).join("Library").join("Application Support");
-            }
+        if let Some(h) = non_empty("HOME") {
+            return PathBuf::from(h).join("Library").join("Application Support");
         }
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        if let Ok(d) = std::env::var("XDG_DATA_HOME") {
-            if !d.is_empty() {
-                return PathBuf::from(d);
-            }
+        if let Some(d) = non_empty("XDG_DATA_HOME") {
+            return PathBuf::from(d);
         }
-        if let Ok(h) = std::env::var("HOME") {
-            if !h.is_empty() {
-                return PathBuf::from(h).join(".local").join("share");
-            }
+        if let Some(h) = non_empty("HOME") {
+            return PathBuf::from(h).join(".local").join("share");
         }
     }
     PathBuf::from(".")

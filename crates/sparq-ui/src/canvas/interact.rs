@@ -133,6 +133,19 @@ pub enum Interaction {
         /// Whether the wire carries audio (its offset stays 0 — D15).
         audio: bool,
     },
+    /// Dragging the selected instrument card's corner handle (WO-020 INC6 D15): the band
+    /// follows the finger (clamped live into the ruled window), and the release snaps to the
+    /// 8 px grid and commits ONE [`Op::ResizeNode`] — the cable-node precedent, one undo per
+    /// gesture. `orig` is the size override the gesture found (the cancel's restore data;
+    /// `None` = the card was at the layout's default band).
+    Resize {
+        /// The instrument node being resized.
+        node: NodeId,
+        /// The size override as the gesture found it.
+        orig: Option<Vec2>,
+        /// Accumulated screen delta (already fine-scaled).
+        acc_screen: Vec2,
+    },
     /// Dragging the inspector's response-plot marker (WO-012 increment 5, D3). A READ-ONLY
     /// probe: it moves no param, pushes no history, notes nothing on the live-sync ledger —
     /// the marker is display state, exactly like the camera and the scroll offset.
@@ -288,6 +301,10 @@ pub enum CanvasEvent {
     /// The user asked for a render. The canvas cannot render (it knows no executor); the shell
     /// consumes this event and does it — an intent, not an effect, all the way down.
     RenderWav,
+    /// The card's host RATE field was tapped (WO-020 INC6 S5, D20's second door): the canvas
+    /// ROUTES the tap and the SHELL owns the entry and the store it writes — the RenderWav
+    /// division of labour (an intent, not an effect). Carries the node whose field was tapped.
+    RateField(crate::canvas::model::NodeId),
     /// The module browser opened (`true`) or closed (`false`).
     Browser(bool),
     /// The browser's query changed; carries the match count (the shell's log shows the ranking
@@ -316,6 +333,9 @@ impl CanvasEvent {
             Self::Lod(l) => format!("canvas: LOD {l:?}"),
             Self::MasterSet(id) => format!("canvas: master = node {id}"),
             Self::RenderWav => "canvas: RENDER WAV requested".to_string(),
+            Self::RateField(id) => {
+                format!("canvas: the RATE field of node {id} — the shell owns the store it writes")
+            },
             Self::Browser(true) => "canvas: module browser open".to_string(),
             Self::Browser(false) => "canvas: module browser closed".to_string(),
             Self::BrowserQuery(n) => format!("canvas: browser query — {n} match(es)"),
@@ -468,8 +488,10 @@ impl CanvasState {
     /// rather than silently never reaching the audio thread.
     fn note_patch(&mut self, op: &Op) {
         match op {
-            // The engine cannot hear a pixel move or a label.
-            Op::MoveNode { .. } | Op::Rename { .. } => {},
+            // The engine cannot hear a pixel move, a band size or a label. (A resized
+            // instrument's display re-renders at the band's ACTUAL px on the UI thread —
+            // INC6 D17c/D19 — which reads `Node.size` per frame; it never rides this ledger.)
+            Op::MoveNode { .. } | Op::Rename { .. } | Op::ResizeNode { .. } => {},
             Op::SetParam { node, .. } => {
                 if !self.patch_changes.param_nodes.contains(node) {
                     self.patch_changes.param_nodes.push(*node);
@@ -1192,7 +1214,7 @@ impl CanvasState {
     }
 
     fn zoom_to_fit(&mut self, graph: &Graph, view: Rect) -> Vec<CanvasEvent> {
-        let bounds = graph.world_bounds(|n| layout::node_size(&n.spec));
+        let bounds = graph.world_bounds(layout::node_card_size);
         self.camera.zoom_to_fit(bounds, view, LAYOUT_SPACE_PADDING_SECTION as f32);
         let mut ev = vec![CanvasEvent::ZoomToFit];
         ev.extend(self.lod_events());
@@ -1207,7 +1229,7 @@ impl CanvasState {
         let Some(n) = graph.node(node) else {
             return vec![CanvasEvent::Refused("nothing to focus — the node is gone".to_string())];
         };
-        let rect = Rect::from_min_size(n.pos, layout::node_size(&n.spec));
+        let rect = Rect::from_min_size(n.pos, layout::node_card_size(n));
         self.camera.zoom_to_fit(Some(rect), view, LAYOUT_SPACE_PADDING_SECTION as f32);
         let mut ev = vec![CanvasEvent::ZoomToFit];
         ev.extend(self.lod_events());
@@ -1342,6 +1364,14 @@ impl CanvasState {
                 self.selection.clear();
                 self.selection.nodes.insert(node);
                 self.flip_key(graph, node, key)
+            },
+            Hit::RateField(node) => {
+                // The host RATE field (S5, D20's second door): the canvas routes the tap, the
+                // SHELL opens the entry over its store — the same override the STREAMS tab
+                // writes, and its words name the stream the panel's rate governs.
+                self.selection.clear();
+                self.selection.nodes.insert(node);
+                vec![CanvasEvent::Selection(1), CanvasEvent::RateField(node)]
             },
             Hit::Param(node, index, track) => {
                 // The node card's own slider (increment 6): tap-to-set, the inspector's rule —
@@ -1769,7 +1799,7 @@ impl CanvasState {
         let target = match layout::hit_test(layout, pos, lod) {
             // A long-press on a key targets its NODE (the keyboard is the node's surface,
             // the step strip's rule).
-            Hit::Node(id) | Hit::Step(id, _) | Hit::Key(id, _) => {
+            Hit::Node(id) | Hit::Step(id, _) | Hit::Key(id, _) | Hit::RateField(id) => {
                 self.selection.clear();
                 self.selection.nodes.insert(id);
                 MenuTarget::Node(id)
@@ -2215,6 +2245,31 @@ impl CanvasState {
         }
 
         let lod = self.camera.lod();
+        // The selected instrument card's resize handle (WO-020 INC6 D15) outranks the card
+        // body's move-drag: the handle is DRAWN furniture on the corner, and a visible handle
+        // beats the surface under it (the cable node's ranking). A LOCKED card refuses in
+        // words — the lock pins the card's geometry exactly like its position.
+        if let Some(id) =
+            layout::resize_handle_at(layout, pos, lod, |nid| self.selection.nodes.contains(&nid))
+        {
+            if graph.node(id).map(|n| n.flags.locked).unwrap_or(false) {
+                ev.push(CanvasEvent::Refused(
+                    "node is locked — unlock it from the long-press menu to resize it".to_string(),
+                ));
+                return ev;
+            }
+            let orig = graph.node(id).and_then(|n| n.size);
+            self.selection.clear();
+            self.selection.nodes.insert(id);
+            self.interaction = Interaction::Resize { node: id, orig, acc_screen: Vec2::ZERO };
+            ev.push(CanvasEvent::Selection(1));
+            ev.push(CanvasEvent::Note(
+                "resizing the instrument — the band follows the finger; release snaps to the \
+                 8 px grid (one undo for the whole drag)"
+                    .to_string(),
+            ));
+            return ev;
+        }
         match layout::hit_test(layout, pos, lod) {
             Hit::Step(node, step) => {
                 // A step button pressed: flips once, no continuous drag (the toggle rule's
@@ -2222,6 +2277,15 @@ impl CanvasState {
                 self.selection.clear();
                 self.selection.nodes.insert(node);
                 ev.extend(self.flip_step(graph, node, step));
+                return ev;
+            },
+            Hit::RateField(node) => {
+                // The RATE field is a tap door, not a drag (the dock field's rule — a field
+                // opens, the entry does the editing): route to the shell, start no interaction.
+                self.selection.clear();
+                self.selection.nodes.insert(node);
+                ev.push(CanvasEvent::Selection(1));
+                ev.push(CanvasEvent::RateField(node));
                 return ev;
             },
             Hit::Key(node, key) => {
@@ -2396,8 +2460,10 @@ impl CanvasState {
                 let (node, index, x, pushed) = (*node, *index, cursor_screen.x, *pushed);
                 // Geometry comes from this frame's inspector WHEN the drag lives there; a drag
                 // that started on a node card reads its track from this frame's canvas layout
-                // (increment 6). A stale layout (selection changed mid-drag) simply stops
-                // editing rather than guessing.
+                // (increment 6) — and a drag that started on an instrument's PANEL WIDGET reads
+                // the widget cell's track (WO-020 INC6 D16: the band's sliders are the param
+                // row's idiom, the mapping included). A stale layout (selection changed
+                // mid-drag) simply stops editing rather than guessing.
                 let track = self
                     .inspector
                     .as_ref()
@@ -2409,7 +2475,14 @@ impl CanvasState {
                     })
                     .or_else(|| {
                         layout.nodes.iter().find(|n| n.id == node).and_then(|n| {
-                            n.param_rows.iter().find(|r| r.index == index).map(|r| r.track)
+                            n.param_rows.iter().find(|r| r.index == index).map(|r| r.track).or_else(
+                                || {
+                                    n.panel_widgets
+                                        .iter()
+                                        .find(|w| w.param == Some(index))
+                                        .map(|w| w.track)
+                                },
+                            )
                         })
                     });
                 let desc = graph.node(node).and_then(|n| n.spec.params.get(index).cloned());
@@ -2446,6 +2519,29 @@ impl CanvasState {
                     self.set_response_marker(node, hz);
                 }
             },
+            Interaction::Resize { node, orig, acc_screen } => {
+                // The band follows the finger (world delta = the fine-scaled screen delta over
+                // the zoom), clamped live into the ruled window — the card grows under the hand
+                // and the at-rest wall scales with its band every frame (O-1). NO op mid-drag:
+                // the release commits the one entry (the move-drag discipline, not the trim's
+                // coalescing — a resize has no live engine value to feed between frames).
+                acc_screen.x += delta.x * scale;
+                acc_screen.y += delta.y * scale;
+                let (node, orig, acc) = (*node, *orig, *acc_screen);
+                let Some(start) = graph.node(node).and_then(|n| n.spec.instrument_band(orig))
+                else {
+                    return Vec::new(); // not an instrument (it cannot happen — the handle is one)
+                };
+                let world = Vec2::new(acc.x / self.camera.zoom, acc.y / self.camera.zoom);
+                let want = Vec2::new(start.x + world.x, start.y + world.y);
+                let Some(band) = graph.node(node).and_then(|n| n.spec.instrument_band_clamp(want))
+                else {
+                    return Vec::new();
+                };
+                if let Some(n) = graph.node_mut(node) {
+                    n.size = Some(band);
+                }
+            },
             Interaction::Marquee { acc_screen, .. } => {
                 acc_screen.x += delta.x;
                 acc_screen.y += delta.y;
@@ -2475,6 +2571,9 @@ impl CanvasState {
             },
             Interaction::Param { node, index, .. } => self.finish_param(graph, node, index),
             Interaction::Trim { wire, orig, .. } => self.finish_trim(graph, wire, orig, cancelled),
+            Interaction::Resize { node, orig, .. } => {
+                self.finish_resize(graph, node, orig, cancelled)
+            },
             Interaction::Marker { node, .. } => self.finish_marker(node, cancelled),
             Interaction::Marquee { start_screen, acc_screen } => {
                 self.finish_marquee(graph, start_screen, acc_screen, view)
@@ -2535,6 +2634,48 @@ impl CanvasState {
             ))],
             None => Vec::new(),
         }
+    }
+
+    /// The resize drag committed (WO-020 INC6 D15): the release snaps the band the finger left
+    /// to the 8 px grid and records ONE [`Op::ResizeNode`] — one undo for the whole gesture
+    /// (the cable-node precedent). The restore-then-construct dance gives the op the gesture's
+    /// ORIGINAL `from` (an undo returns the card to the size the finger found, never the drag's
+    /// last live waypoint), and the graph's own clamp keeps history inside the ruled window —
+    /// both the grid (8) and the window's edges (480, 248, and any declared face on the grid)
+    /// are grid-aligned, so snapping and clamping commute. A cancel — or a release at the
+    /// effective size the drag started from — leaves the model exactly as it was: no op, no
+    /// history entry (the `op_move_node` discipline; the card itself says the size).
+    fn finish_resize(
+        &mut self,
+        graph: &mut Graph,
+        node: NodeId,
+        orig: Option<Vec2>,
+        cancelled: bool,
+    ) -> Vec<CanvasEvent> {
+        // The live band the drag left, then the model goes back to the gesture's start.
+        let live = graph.node(node).and_then(|n| n.size);
+        if let Some(n) = graph.node_mut(node) {
+            n.size = orig;
+        }
+        if cancelled {
+            return vec![CanvasEvent::Note(
+                "resize cancelled — the card keeps the size it had".to_string(),
+            )];
+        }
+        let Some(to) = live else { return Vec::new() };
+        let snapped = snap(to, LAYOUT_CANVAS_SNAP as f32);
+        let Some(op) = graph.op_resize_node(node, Some(snapped)) else {
+            return Vec::new(); // released at the effective start: nothing to record
+        };
+        self.commit(op);
+        let band = graph.node(node).and_then(|n| n.spec.instrument_band(n.size));
+        vec![match band {
+            Some(b) => CanvasEvent::Applied(format!(
+                "instrument resized — the band is {:.0}×{:.0} world px",
+                b.x, b.y
+            )),
+            None => CanvasEvent::Applied("instrument resized".to_string()),
+        }]
     }
 
     /// Drop a re-patched wire end. The verdict runs on the graph with the old wire ALREADY
@@ -2744,7 +2885,7 @@ impl CanvasState {
         );
         self.selection.clear();
         for n in graph.nodes() {
-            let nr = Rect::from_min_size(n.pos, layout::node_size(&n.spec));
+            let nr = Rect::from_min_size(n.pos, layout::node_card_size(n));
             if intersects(nr, marquee) {
                 self.selection.nodes.insert(n.id);
             }
@@ -4907,5 +5048,447 @@ mod tests {
         let ev = s.on_intent(&mut g, GestureIntent::Activate { pos: tap }, &layout, v, &ctx());
         assert_eq!(g.node(q).unwrap().param_value(1), Some(4.0), "Custom: the key edits the mask");
         assert!(ev.iter().any(|e| matches!(e, CanvasEvent::Applied(_))), "{ev:?}");
+    }
+
+    // --------------------------------------- the resizable instrument card (WO-020 INC6 D15)
+
+    /// The Observatory's shape: a 2176×1120 declared face, a two-row panel band — the default
+    /// card is the O-1 half band (1088×560 → a 1120×728 card).
+    fn obs() -> NodeSpec {
+        gain().with_display(crate::canvas::model::InstrumentDisplay {
+            min_w: 2176.0,
+            min_h: 1120.0,
+            panel_rows: 2,
+            widgets: Vec::new(),
+        })
+    }
+
+    /// A graph with one Observatory node at the origin, its id, and a canvas state that has
+    /// it SELECTED (the handle grows on the selected card — D15).
+    fn selected_obs() -> (Graph, NodeId, CanvasState) {
+        let mut g = Graph::new();
+        let id = nid(&g.op_add_node(obs(), Vec2::ZERO));
+        let mut s = CanvasState::new();
+        s.selection.nodes.insert(id);
+        (g, id, s)
+    }
+
+    #[test]
+    fn a_corner_drag_resizes_the_card_as_one_undo_step() {
+        let (mut g, id, mut s) = selected_obs();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let corner = layout.nodes.iter().find(|n| n.id == id).unwrap().resize_corner.unwrap();
+        assert_eq!(corner, Vec2::new(1120.0, 768.0), "the default card's bottom-right at zoom 1");
+        let undo_before = s.history.undo_len();
+
+        let ev = s.on_intent(&mut g, GestureIntent::DragStart { pos: corner }, &layout, v, &ctx());
+        assert!(matches!(s.interaction, Interaction::Resize { .. }), "{:?}", s.interaction);
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Note(n) if n.contains("8 px grid"))),
+            "the press says what the release will do: {ev:?}"
+        );
+
+        // Two updates, ONE gesture: +300 right, +200 down (screen px at zoom 1 = world px).
+        // The band follows the finger live: 1088×560 + 300×200 = 1388×760 (in-window, exact).
+        for _ in 0..2 {
+            s.on_intent(
+                &mut g,
+                GestureIntent::DragUpdate { delta: Vec2::new(150.0, 100.0), scale: 1.0 },
+                &layout,
+                v,
+                &ctx(),
+            );
+        }
+        assert_eq!(
+            g.node(id).unwrap().size,
+            Some(Vec2::new(1388.0, 760.0)),
+            "the drag is live — the card grows under the hand"
+        );
+        assert_eq!(layout::node_card_size(g.node(id).unwrap()), Vec2::new(1420.0, 968.0));
+
+        // The release snaps to the 8 px grid (1388 → 1392; 760 is already on it) and commits
+        // ONE op carrying the gesture's original `from`.
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: corner, cancelled: false },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(s.history.undo_len(), undo_before + 1, "one drag = one undo step");
+        match s.history.top() {
+            Some(Op::ResizeNode { from, to, .. }) => {
+                assert_eq!(*from, None, "the card was at its default band");
+                assert_eq!(*to, Some(Vec2::new(1392.0, 760.0)), "snapped to the grid");
+            },
+            other => unreachable!("{other:?}"),
+        }
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Applied(t)
+                    if t.contains("1392") && t.contains("760"))),
+            "the lift states the final band once: {ev:?}"
+        );
+        // The engine hears nothing about pixels (the note_patch classification).
+        assert!(s.take_patch_changes().is_empty(), "a resize is not audio");
+
+        // One undo returns the card to the size the finger found: the default band.
+        s.on_intent(&mut g, GestureIntent::Undo, &layout, v, &ctx());
+        assert_eq!(g.node(id).unwrap().size, None);
+        assert_eq!(layout::node_card_size(g.node(id).unwrap()), Vec2::new(1120.0, 768.0));
+    }
+
+    #[test]
+    fn the_drag_clamps_live_into_the_ruled_window() {
+        let v = view();
+        // Past the declared face: the maximum governs (O-1), live and in history.
+        let (mut g, id, mut s) = selected_obs();
+        let layout = compute(&g, &s.camera, v);
+        let corner = layout.nodes.iter().find(|n| n.id == id).unwrap().resize_corner.unwrap();
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: corner }, &layout, v, &ctx());
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragUpdate { delta: Vec2::new(3000.0, 3000.0), scale: 1.0 },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(
+            g.node(id).unwrap().size,
+            Some(Vec2::new(2176.0, 1120.0)),
+            "the guest never renders above its declared face"
+        );
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: corner, cancelled: false },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(g.node(id).unwrap().size, Some(Vec2::new(2176.0, 1120.0)));
+
+        // Below the floor: 480×248 — below that the wall is words, not data (D15).
+        let (mut g, id, mut s) = selected_obs();
+        let layout = compute(&g, &s.camera, v);
+        let corner = layout.nodes.iter().find(|n| n.id == id).unwrap().resize_corner.unwrap();
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: corner }, &layout, v, &ctx());
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragUpdate { delta: Vec2::new(-5000.0, -5000.0), scale: 1.0 },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(g.node(id).unwrap().size, Some(Vec2::new(480.0, 248.0)));
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: corner, cancelled: false },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(g.node(id).unwrap().size, Some(Vec2::new(480.0, 248.0)), "the floor holds");
+    }
+
+    #[test]
+    fn a_cancelled_resize_restores_the_size_the_finger_found() {
+        let (mut g, id, mut s) = selected_obs();
+        // A prior resize is SETUP, not a gesture (the trim test's discipline — it rides no
+        // history, so the cancel's emptiness is unambiguous).
+        g.op_resize_node(id, Some(Vec2::new(1600.0, 800.0))).unwrap();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let corner = layout.nodes.iter().find(|n| n.id == id).unwrap().resize_corner.unwrap();
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: corner }, &layout, v, &ctx());
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragUpdate { delta: Vec2::new(100.0, 100.0), scale: 1.0 },
+            &layout,
+            v,
+            &ctx(),
+        );
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: corner, cancelled: true },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(g.node(id).unwrap().size, Some(Vec2::new(1600.0, 800.0)), "restored exactly");
+        assert_eq!(s.history.undo_len(), 0, "a cancelled drag is not an operation");
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Note(n) if n.contains("cancelled"))),
+            "the cancel says so in words: {ev:?}"
+        );
+    }
+
+    #[test]
+    fn a_press_and_release_on_the_handle_without_a_drag_is_not_an_edit() {
+        let (mut g, id, mut s) = selected_obs();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let corner = layout.nodes.iter().find(|n| n.id == id).unwrap().resize_corner.unwrap();
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: corner }, &layout, v, &ctx());
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: corner, cancelled: false },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(g.node(id).unwrap().size, None, "still the default band");
+        assert_eq!(s.history.undo_len(), 0, "nothing to undo");
+    }
+
+    #[test]
+    fn the_handle_is_offered_only_on_the_selected_instrument_card() {
+        let (mut g, id, mut s) = selected_obs();
+        s.selection.clear(); // NOT selected: the handle is not drawn, so it is not touchable.
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let corner = layout.nodes.iter().find(|n| n.id == id).unwrap().resize_corner.unwrap();
+        // 1 px inside the corner: still well within the handle's capture radius, and inside
+        // the card body (Rect::contains excludes the max edge) — so an unselected card gives
+        // the ordinary body drag from the same point.
+        let inside = Vec2::new(corner.x - 1.0, corner.y - 1.0);
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: inside }, &layout, v, &ctx());
+        assert!(
+            matches!(s.interaction, Interaction::Move { .. }),
+            "an unselected corner is just the card body: {:?}",
+            s.interaction
+        );
+        s.interaction = Interaction::Idle;
+        // Select the card (a tap on its body) and the same point becomes the handle.
+        s.on_intent(
+            &mut g,
+            GestureIntent::Activate { pos: Vec2::new(400.0, 400.0) },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(s.selection.nodes.contains(&id));
+        s.on_intent(&mut g, GestureIntent::DragStart { pos: inside }, &layout, v, &ctx());
+        assert!(matches!(s.interaction, Interaction::Resize { .. }), "{:?}", s.interaction);
+
+        // A BACKBONE card never grows one: its corner is body, selected or not.
+        let (mut g2, bid) = two_nodes_ids();
+        let mut s2 = CanvasState::new();
+        s2.selection.nodes.insert(bid);
+        let layout2 = compute(&g2, &s2.camera, v);
+        let nl = layout2.nodes.iter().find(|n| n.id == bid).unwrap();
+        assert_eq!(nl.resize_corner, None, "no handle geometry on a backbone card");
+        s2.on_intent(
+            &mut g2,
+            GestureIntent::DragStart {
+                pos: Vec2::new(nl.screen.max.x - 1.0, nl.screen.max.y - 1.0),
+            },
+            &layout2,
+            v,
+            &ctx(),
+        );
+        assert!(matches!(s2.interaction, Interaction::Move { .. }), "{:?}", s2.interaction);
+    }
+
+    /// `(graph, backbone id)` — the gain node of [`two_nodes`], alone.
+    fn two_nodes_ids() -> (Graph, NodeId) {
+        let (g, _, bid) = two_nodes();
+        (g, bid)
+    }
+
+    #[test]
+    fn focus_frames_the_resized_card_like_any_other() {
+        // D15: FIT/FOCUS read the size like any card — the camera frames the RESIZED rect.
+        let (mut g, id, mut s) = selected_obs();
+        g.op_resize_node(id, Some(Vec2::new(2176.0, 1120.0))).unwrap();
+        let v = view();
+        s.focus_node(&g, id, v);
+        let card = Rect::from_min_size(
+            g.node(id).unwrap().pos,
+            layout::node_card_size(g.node(id).unwrap()),
+        );
+        let centre_screen = s.camera.to_screen(card.center(), v);
+        assert!(
+            (centre_screen.x - v.center().x).abs() < 0.5
+                && (centre_screen.y - v.center().y).abs() < 0.5,
+            "the resized card's centre sits at the view centre: {centre_screen:?}"
+        );
+        assert!(s.camera.zoom < 1.0, "a 2208×1288 card cannot fit a 1200×800 view at zoom 1");
+    }
+
+    #[test]
+    fn a_locked_card_refuses_the_resize_in_words() {
+        let (mut g, id, mut s) = selected_obs();
+        g.op_set_flags(id, NodeFlags { locked: true, ..NodeFlags::default() }).unwrap();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let corner = layout.nodes.iter().find(|n| n.id == id).unwrap().resize_corner.unwrap();
+        let ev = s.on_intent(&mut g, GestureIntent::DragStart { pos: corner }, &layout, v, &ctx());
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Refused(r) if r.contains("locked"))),
+            "the lock's own words, with the remedy: {ev:?}"
+        );
+        assert!(matches!(s.interaction, Interaction::Idle), "no drag is in flight");
+        assert_eq!(s.history.undo_len(), 0, "a refusal is not an operation");
+    }
+
+    // --------------------------------------------- the typed panel band (WO-020 INC6 D16)
+
+    /// The Observatory from its SHIPPED manifest — the typed widgets included — on a canvas,
+    /// with the param index of a widget's id.
+    fn manifest_obs() -> (Graph, NodeId, CanvasState) {
+        let toml = include_str!("../../../../instruments/observatory/sparqmod.toml");
+        let spec = NodeSpec::from_manifest_text(toml).expect("the shipped manifest parses");
+        let mut g = Graph::new();
+        let id = nid(&g.op_add_node(spec, Vec2::ZERO));
+        let mut s = CanvasState::new();
+        s.selection.nodes.insert(id);
+        (g, id, s)
+    }
+
+    fn param_idx(g: &Graph, id: NodeId, pid: &str) -> usize {
+        g.node(id).unwrap().spec.params.iter().position(|p| p.id == pid).unwrap()
+    }
+
+    fn widget_cell(
+        l: &CanvasLayout,
+        id: NodeId,
+        param: usize,
+    ) -> crate::canvas::layout::PanelWidgetLayout {
+        l.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap()
+            .panel_widgets
+            .iter()
+            .find(|w| w.param == Some(param))
+            .copied()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_band_toggle_tap_flips_its_param_through_the_param_door() {
+        // D16: toggles ride Op::SetParam — undoable, journal-safe — through the SAME door the
+        // card rows and the inspector use (one geometry, one op, every surface).
+        let (mut g, id, mut s) = manifest_obs();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let solo = param_idx(&g, id, "solo");
+        let cell = widget_cell(&layout, id, solo);
+        assert!(cell.visible);
+        let before = s.history.undo_len();
+        s.on_intent(
+            &mut g,
+            GestureIntent::Activate { pos: cell.rect.center() },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(g.node(id).unwrap().param_value(solo), Some(1.0), "the tap flips SOLO on");
+        assert_eq!(s.history.undo_len(), before + 1, "one flip = one undo step");
+        assert!(
+            matches!(s.history.top(), Some(Op::SetParam { node, index, from: 0.0, to: 1.0 }) if *node == id && *index == solo),
+            "the param door's own op: {:?}",
+            s.history.top()
+        );
+        assert!(
+            s.take_patch_changes().param_nodes.contains(&id),
+            "the live engine hears the edit (the ledger's param path — unlike the resize)"
+        );
+        // And the flip reads back through the gate the same frame: a re-layout shows it.
+        s.on_intent(
+            &mut g,
+            GestureIntent::Activate { pos: cell.rect.center() },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert_eq!(g.node(id).unwrap().param_value(solo), Some(0.0), "the second tap flips it off");
+    }
+
+    #[test]
+    fn a_band_enum_tap_opens_the_existing_picker_and_a_row_selects() {
+        // D16: enums open the EXISTING picker (§8.4's sheet) — the band adds no second
+        // dropdown machinery; the selection rides the ordinary undoable param door.
+        let (mut g, id, mut s) = manifest_obs();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let sc = param_idx(&g, id, "selected_cell");
+        let cell = widget_cell(&layout, id, sc);
+        let ev = s.on_intent(
+            &mut g,
+            GestureIntent::Activate { pos: cell.rect.center() },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(s.picker.is_open(), "the CELL chip is a dropdown: {ev:?}");
+        assert_eq!(
+            s.picker.target,
+            Some(crate::canvas::picker::PickerTarget { node: id, param: sc })
+        );
+        assert_eq!(s.picker.rows.len(), 16, "the manifest's 16 cell options");
+        assert!(
+            ev.iter().any(|e| matches!(e, CanvasEvent::Picker(true))),
+            "the shell hears the sheet open: {ev:?}"
+        );
+        // Row 3 selects through the sheet's own geometry (what you see is what you touch).
+        let sheet = s.picker.sheet_rect(v).unwrap();
+        let row3 = s.picker.row_rect(sheet, 3).unwrap().center();
+        s.on_intent(&mut g, GestureIntent::Activate { pos: row3 }, &layout, v, &ctx());
+        assert!(!s.picker.is_open(), "the row select closes the sheet");
+        assert_eq!(g.node(id).unwrap().param_value(sc), Some(3.0), "Cell 04 is the choice");
+        // And the D7 gate followed on the next pass: cell_04's picker is the visible one now.
+        let l2 = compute(&g, &s.camera, v);
+        assert!(widget_cell(&l2, id, param_idx(&g, id, "cell_04")).visible);
+        assert!(!widget_cell(&l2, id, param_idx(&g, id, "cell_01")).visible);
+    }
+
+    #[test]
+    fn a_band_slider_drag_rides_the_param_interaction_as_one_undo() {
+        // D16: sliders are the param row's own idiom — tap-to-set, drag-to-adjust, one
+        // coalesced history entry per gesture (the Interaction::Param discipline).
+        let (mut g, id, mut s) = manifest_obs();
+        let v = view();
+        let layout = compute(&g, &s.camera, v);
+        let hist = param_idx(&g, id, "history");
+        let cell = widget_cell(&layout, id, hist);
+        let grab = crate::canvas::inspector::knob_x(
+            &g.node(id).unwrap().spec.params[hist],
+            cell.track,
+            g.node(id).unwrap().param_value(hist).unwrap(),
+        );
+        let before = s.history.undo_len();
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragStart { pos: Vec2::new(grab, cell.track.center().y) },
+            &layout,
+            v,
+            &ctx(),
+        );
+        assert!(matches!(s.interaction, Interaction::Param { .. }), "{:?}", s.interaction);
+        // Drag to 80% of the track: the exp-curve mapping is the inspector's, not a new one.
+        let x80 = cell.track.min.x + cell.track.width() * 0.8;
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragUpdate { delta: Vec2::new(x80 - grab, 0.0), scale: 1.0 },
+            &layout,
+            v,
+            &ctx(),
+        );
+        s.on_intent(
+            &mut g,
+            GestureIntent::DragEnd { pos: Vec2::new(x80, cell.track.center().y), cancelled: false },
+            &layout,
+            v,
+            &ctx(),
+        );
+        let want = crate::canvas::inspector::value_from_x(
+            &g.node(id).unwrap().spec.params[hist],
+            cell.track,
+            x80,
+        );
+        let got = g.node(id).unwrap().param_value(hist).unwrap();
+        assert!((got - want).abs() < 1e-3, "the value is the track's own mapping: {got} vs {want}");
+        assert_eq!(s.history.undo_len(), before + 1, "one gesture = one undo step");
     }
 }

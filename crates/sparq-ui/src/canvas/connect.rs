@@ -34,6 +34,14 @@ impl Rejection {
 }
 
 /// What a connection attempt produced.
+// Targeted allow (the clippy.toml house pattern), measured not hoped: `Connected` carries an
+// inline `Op`, whose largest variant (`RemoveNode`) owns a whole `Node`. WO-020 INC6's ruled
+// `Node.size: Option<Vec2>` (plan D15) grew `Node` 184→200 bytes, which moved this variant's
+// difference over `Refused` from 187 to 203 — three bytes past the lint's 200. The outcome is
+// control-plane data at gesture rate (one per connection attempt, never on the audio path), so
+// the stack copy the lint guards costs nothing here; boxing the `Op` to satisfy the heuristic
+// would re-shape a public API across three crates for no measured gain.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConnectOutcome {
     /// The connection is legal; apply this op (already applied to the graph by

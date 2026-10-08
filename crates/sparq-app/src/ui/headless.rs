@@ -299,12 +299,15 @@ pub fn run_audit(_opts: &UiOptions) -> i32 {
     }
 }
 
-/// WO-020 INC4's audit rows: the wall-class card coverage rule (D6/R3), the picker's touch floor,
-/// the LOD transition thresholds, and the instrument display band's geometry. Measured, like every
-/// audit row — a number here is a property the shell promises.
+/// WO-020 INC4 + INC6 S1's audit rows: the wall-class card geometry under ruling O-1 / plan
+/// D15 (the default half-face card, the declared-maximum coverage rule D6/R3, the ruled resize
+/// window's readability floor, O-1's 1080p fit), the picker's touch floor, the LOD transition
+/// thresholds — plus the two shell smokes that drive the corner-handle resize and SPAWN+FOCUS
+/// through the real recogniser. Measured, like every audit row — a number here is a property
+/// the shell promises.
 fn run_instrument_smokes(failures: &mut Vec<String>) {
-    use sparq_ui::canvas::layout::{instrument_display_band, node_size};
-    use sparq_ui::canvas::model::NodeSpec;
+    use sparq_ui::canvas::layout::{instrument_display_band, node_card_size, node_size};
+    use sparq_ui::canvas::model::{NodeSpec, Op};
     use sparq_ui::tokens::*;
 
     // The reference wall (2560×1600, design chrome open): canvas rect = the view minus rail,
@@ -324,40 +327,219 @@ fn run_instrument_smokes(failures: &mut Vec<String>) {
         failures.push("instrument audit: the Observatory manifest does not decode".to_string());
         return;
     };
+
+    // The O-1 default: HALF the declared face — the 1088×560 band, a 1120×728 card with the
+    // D6 chrome riding the size exactly as D15 computes it.
     let card = node_size(&spec);
-    let cov = card.x / canvas_w;
+    let half_ok = (card.x - 1120.0).abs() < 0.5 && (card.y - 768.0).abs() < 0.5;
     println!(
-        "[{}] instrument card coverage — {:.0}×{:.0} card vs {:.0}×{:.0} canvas rect at zoom 1.0 = {:.1}% (rule: ≥ 95%)",
-        if cov >= 0.95 { "PASS" } else { "FAIL" },
+        "[{}] default instrument card — {:.0}×{:.0}: HALF the 2176×1120 face + the D6 chrome + the S5 host RATE row (O-1/D15/D16)",
+        if half_ok { "PASS" } else { "FAIL" },
         card.x,
-        card.y,
-        canvas_w,
-        canvas_h,
-        cov * 100.0
+        card.y
     );
-    if cov < 0.95 {
-        failures
-            .push(format!("instrument card covers {:.1}% of the canvas rect (< 95%)", cov * 100.0));
+    if !half_ok {
+        failures.push(format!(
+            "default instrument card is {:.0}×{:.0}, want the O-1 half-face card 1120×768",
+            card.x, card.y
+        ));
     }
-    if card.y > canvas_h {
-        // FIT territory: the card is taller than the canvas rect, so zoom 1.0 cannot show it all —
-        // the plan's own numbers (1288 vs 1260) say FIT ≈ 0.98; record it, do not fail it.
-        println!(
-            "  note: the card is taller than the canvas rect ({} > {}) — FIT ≈ {:.2} at this viewport, per D6",
-            card.y, canvas_h, canvas_h / card.y
-        );
-    }
-    // The display band is exactly the declared min_size inside the gutters.
+    // The default card's band: the half face, gutter-inset.
     let band = instrument_display_band(
         sparq_ui::geom::Rect::from_min_size(sparq_ui::geom::Vec2::ZERO, card),
         &spec,
     );
     match band {
-        Some(b) if (b.width() - 2176.0).abs() < 0.5 && (b.height() - 1120.0).abs() < 0.5 => {
-            println!("[PASS] instrument display band — the declared min_size, gutter-inset");
+        Some(b) if (b.width() - 1088.0).abs() < 0.5 && (b.height() - 560.0).abs() < 0.5 => {
+            println!("[PASS] instrument display band — the O-1 half face, gutter-inset");
         },
-        other => failures.push(format!("instrument display band wrong: {other:?}")),
+        other => failures.push(format!("default instrument band wrong: {other:?}")),
     }
+
+    // The declared maximum stays reachable through a resize (O-1: the manifest's 2176×1120 is
+    // the declared maximum; D15's clamp ceiling). At the full face the card is the D6
+    // 2208×1288 and covers ≥ 95% of the reference canvas width — the wall-class coverage rule
+    // (D6/R3) now lives at the TOP of the ruled window instead of at the default.
+    let mut g = sparq_ui::canvas::Graph::new();
+    let obs_g = match g.op_add_node(spec.clone(), sparq_ui::geom::Vec2::ZERO) {
+        Op::AddNode(n) => n.id,
+        _ => u32::MAX,
+    };
+    let _ = g.op_resize_node(obs_g, Some(sparq_ui::geom::Vec2::new(2176.0, 1120.0)));
+    let full_card = g.node(obs_g).map(node_card_size).unwrap_or(card);
+    let cov = full_card.x / canvas_w;
+    let cov_ok =
+        cov >= 0.95 && (full_card.x - 2208.0).abs() < 0.5 && (full_card.y - 1328.0).abs() < 0.5;
+    println!(
+        "[{}] instrument card coverage at the declared maximum — {:.0}×{:.0} card vs {:.0}×{:.0} canvas rect at zoom 1.0 = {:.1}% (rule: ≥ 95%)",
+        if cov_ok { "PASS" } else { "FAIL" },
+        full_card.x,
+        full_card.y,
+        canvas_w,
+        canvas_h,
+        cov * 100.0
+    );
+    if !cov_ok {
+        failures.push(format!(
+            "the resized-to-maximum card is {:.0}×{:.0} covering {:.1}% — want the 2208×1328 maximum at ≥ 95%",
+            full_card.x,
+            full_card.y,
+            cov * 100.0
+        ));
+    }
+    if full_card.y > canvas_h {
+        // FIT territory at the maximum: the card is taller than the canvas rect, so zoom 1.0
+        // cannot show it all — FIT ≈ 0.95 at the S5 chrome; record it, do not fail it.
+        println!(
+            "  note: at the declared maximum the card is taller than the canvas rect ({} > {}) — FIT ≈ {:.2} at this viewport, per D6",
+            full_card.y,
+            canvas_h,
+            canvas_h / full_card.y
+        );
+    }
+    // The resized-to-maximum card's band: exactly the declared min_size, gutter-inset (D6's
+    // old promise, now at the top of the ruled window).
+    let full_band = instrument_display_band(
+        sparq_ui::geom::Rect::from_min_size(sparq_ui::geom::Vec2::ZERO, full_card),
+        &spec,
+    );
+    match full_band {
+        Some(b) if (b.width() - 2176.0).abs() < 0.5 && (b.height() - 1120.0).abs() < 0.5 => {
+            println!(
+                "[PASS] instrument display band at the declared maximum — the min_size, gutter-inset"
+            );
+        },
+        other => failures.push(format!("resized instrument band wrong: {other:?}")),
+    }
+
+    // O-1's fit: a 1080p viewport's chrome-only canvas rect (an open inspector narrows it
+    // further — 1120 clears even that with 100+ px to spare). The default card FITS at zoom 1,
+    // FOCUS frames it at a Full-LOD zoom ≤ 1, and the 16-cell wall (the manifest's default
+    // layout is 4×4) stays READABLE: a cell's short side ≥ the 44 px touch floor both at the
+    // FOCUS zoom and at D15's ruled floor band (480×248 → 120×62 cells — the floor was chosen
+    // so the wall is data, not words, at its smallest).
+    let fit_w = 1920.0 - LAYOUT_SHELL_RAIL_WIDTH as f32 - LAYOUT_SHELL_LIBRARY_WIDTH as f32;
+    let fit_h = 1080.0
+        - LAYOUT_SHELL_TOP_BAR_HEIGHT as f32
+        - LAYOUT_SHELL_TOOLBAR_HEIGHT as f32
+        - LAYOUT_SHELL_DOCK_HEIGHT as f32;
+    let mut cam = sparq_ui::canvas::Camera::new();
+    cam.zoom_to_fit(
+        Some(sparq_ui::geom::Rect::from_min_size(sparq_ui::geom::Vec2::ZERO, card)),
+        sparq_ui::geom::Rect::from_min_size(
+            sparq_ui::geom::Vec2::ZERO,
+            sparq_ui::geom::Vec2::new(fit_w, fit_h),
+        ),
+        LAYOUT_SPACE_PADDING_SECTION as f32,
+    );
+    // O-1's own words are about the BAND ("default 1088×560 world px band — fits a 1080p
+    // viewport at zoom 1; FOCUS frames the whole wall"): the band fits at zoom 1, and FOCUS
+    // frames the CARD (band + chrome, the S5 host row included) at a Full-LOD zoom ≤ 1.
+    let fits = 1088.0 <= fit_w && 560.0 <= fit_h;
+    let zoom_ok = cam.zoom >= LAYOUT_CANVAS_LOD_1_BELOW_ZOOM && cam.zoom <= LAYOUT_CANVAS_ZOOM_MAX;
+    let touch_floor = LAYOUT_TOUCH_TARGET_S as f32;
+    let cell_focus = (1088.0f32 / 4.0).min(560.0 / 4.0) * cam.zoom;
+    let cell_floor = (480.0f32 / 4.0).min(248.0 / 4.0);
+    let readable = cell_focus >= touch_floor && cell_floor >= touch_floor;
+    println!(
+        "[{}] O-1's fit — the 1088×560 default BAND fits the {:.0}×{:.0} canvas rect at zoom 1; FOCUS frames the {:.0}×{:.0} card at {:.2} (Full LOD); the 16-cell wall reads {:.0} px cells at FOCUS and {:.0} px at the ruled floor (touch floor {:.0})",
+        if fits && zoom_ok && readable { "PASS" } else { "FAIL" },
+        fit_w,
+        fit_h,
+        card.x,
+        card.y,
+        cam.zoom,
+        cell_focus,
+        cell_floor,
+        touch_floor
+    );
+    if !(fits && zoom_ok && readable) {
+        failures.push(format!(
+            "the O-1 fit row failed: fits={fits}, focus zoom {:.2} full-LOD={zoom_ok}, readable={readable}",
+            cam.zoom
+        ));
+    }
+
+    // The host RATE row (S5/D16): the info band's precedent under the guest's display — 40 px,
+    // gutter-inset, and the guest's band STOPS where it starts (the display never grows into
+    // the host's furniture).
+    {
+        let card_rect = sparq_ui::geom::Rect::from_min_size(sparq_ui::geom::Vec2::ZERO, card);
+        let row = sparq_ui::canvas::layout::instrument_rate_row(card_rect, &spec);
+        let band_r = instrument_display_band(card_rect, &spec);
+        let ok = match (row, band_r) {
+            (Some(r), Some(b)) => {
+                (r.height() - 40.0).abs() < 0.5
+                    && (r.min.x - 16.0).abs() < 0.5
+                    && (b.max.y - r.min.y).abs() < 0.5
+            },
+            _ => false,
+        };
+        println!(
+            "[{}] the host RATE row — 40 px under the guest's display, gutter-inset (the info band's precedent, D16)",
+            if ok { "PASS" } else { "FAIL" }
+        );
+        if !ok {
+            failures.push("the host RATE row's geometry is wrong".to_string());
+        }
+    }
+
+    // The typed panel band (INC6 D16): the manifest's widgets, counted by kind, laid out on
+    // D16's 44-px rows, with the D7 gate evaluated at the defaults (selected_cell = 0 → one
+    // STREAM picker visible of the sixteen).
+    {
+        use sparq_ui::canvas::model::PanelWidgetKind;
+        let mut gw = sparq_ui::canvas::Graph::new();
+        let wid = match gw.op_add_node(spec.clone(), sparq_ui::geom::Vec2::ZERO) {
+            Op::AddNode(n) => n.id,
+            _ => u32::MAX,
+        };
+        let lw = sparq_ui::canvas::layout::compute(
+            &gw,
+            &sparq_ui::canvas::Camera::new(),
+            sparq_ui::geom::Rect::from_min_size(
+                sparq_ui::geom::Vec2::ZERO,
+                sparq_ui::geom::Vec2::new(4096.0, 4096.0),
+            ),
+        );
+        let Some(d) = spec.display.as_ref() else {
+            failures.push("typed panel band: the display face is not parsed".to_string());
+            return;
+        };
+        let count = |k: PanelWidgetKind| d.widgets.iter().filter(|w| w.kind == k).count();
+        let laid = lw.nodes.iter().find(|n| n.id == wid).map(|n| &n.panel_widgets);
+        let visible = laid.map(|ws| ws.iter().filter(|w| w.visible).count()).unwrap_or(0);
+        let rows_ok = laid
+            .map(|ws| {
+                ws.iter().all(|w| (w.rect.height() - LAYOUT_TOUCH_TARGET_S as f32).abs() < 0.5)
+            })
+            .unwrap_or(false);
+        let ok = d.widgets.len() == 27
+            && count(PanelWidgetKind::EnumSelect) == 18
+            && count(PanelWidgetKind::Toggle) == 5
+            && count(PanelWidgetKind::Slider) == 3
+            && count(PanelWidgetKind::Label) == 1
+            && visible == 12
+            && rows_ok;
+        println!(
+            "[{}] typed panel band — {} declared widgets ({} enum / {} toggle / {} slider / {} label), {} visible at the defaults (D7), every cell on D16's 44 px row",
+            if ok { "PASS" } else { "FAIL" },
+            d.widgets.len(),
+            count(PanelWidgetKind::EnumSelect),
+            count(PanelWidgetKind::Toggle),
+            count(PanelWidgetKind::Slider),
+            count(PanelWidgetKind::Label),
+            visible
+        );
+        if !ok {
+            failures.push(format!(
+                "the typed panel band row failed: {} widgets, {} visible, rows_ok={rows_ok}",
+                d.widgets.len(),
+                visible
+            ));
+        }
+    }
+
     // The picker's rows are the touch floor, exactly (§8.4).
     if (sparq_ui::canvas::picker::ROW_H - LAYOUT_TOUCH_TARGET_S as f32).abs() < 1e-6 {
         println!("[PASS] picker rows at the 44 px touch floor");
@@ -365,22 +547,795 @@ fn run_instrument_smokes(failures: &mut Vec<String>) {
         failures.push("picker rows are not at the touch floor".to_string());
     }
     // LOD transitions at the canvas tokens' zoom thresholds (the guest degrades on these).
-    let mut cam = sparq_ui::canvas::Camera::new();
+    let mut lod_cam = sparq_ui::canvas::Camera::new();
+    let mut lod_ok = true;
     let lods = [
         (1.0, sparq_ui::canvas::camera::Lod::Full),
         (0.5, sparq_ui::canvas::camera::Lod::Simplified),
         (0.3, sparq_ui::canvas::camera::Lod::Dot),
     ];
     for (zoom, want) in lods {
-        cam.zoom = zoom;
-        if cam.lod() != want {
-            failures.push(format!("LOD at zoom {zoom} is {:?}, want {want:?}", cam.lod()));
+        lod_cam.zoom = zoom;
+        if lod_cam.lod() != want {
+            lod_ok = false;
+            failures.push(format!("LOD at zoom {zoom} is {:?}, want {want:?}", lod_cam.lod()));
         }
     }
     println!(
         "[{}] LOD transitions — zoom 1.0/0.5/0.3 → Full/Simplified/Dot",
-        if failures.is_empty() { "PASS" } else { "FAIL" }
+        if lod_ok { "PASS" } else { "FAIL" }
     );
+
+    // 55. The corner-handle resize through the REAL recogniser (INC6 D15/O-1): the selected
+    //     wall grows a class-L handle, registered in the audit like every command surface; a
+    //     corner drag resizes the band LIVE; the release snaps to the 8 px grid and records
+    //     EXACTLY ONE undo step; a three-finger tap returns the card to its default band.
+    //     The wall joins the canvas through the discovery door (manifest → spec) — the
+    //     convergence sheet's own path; the loader's registration is S4's slice.
+    use sparq_ui::geom::Vec2 as SpVec2;
+    let ctx = egui::Context::default();
+    adapter::apply_style(&ctx, ThemeChoice::PhosphorDark);
+    let (w, h) = (1920.0_f32, 1080.0_f32);
+    let mut shell = ShellUi::new();
+    let mut t = 0.0_f64;
+    let mut now = 0_u64;
+    macro_rules! frame {
+        ($pts:expr) => {{
+            t += 1.0 / 60.0;
+            step(&mut shell, &ctx, w, h, t, now, &$pts)
+        }};
+    }
+    let obs = match shell.graph.op_add_node(spec.clone(), SpVec2::ZERO) {
+        Op::AddNode(n) => n.id,
+        _ => u32::MAX,
+    };
+    shell.canvas.selection.clear();
+    shell.canvas.selection.nodes.insert(obs);
+    frame!([]); // frame 1 builds the registry
+    frame!([]); // frame 2 is what the audit reads
+                // Slide the card so the handle's corner sits well inside THIS frame's canvas rect (the
+                // camera is home; at zoom 1 a world shift is a screen shift). The rect is read from the
+                // frame, never remembered — an inspector width change moves the corner, not the smoke.
+    let corner = match (
+        shell.last_layout.as_ref().map(|l| l.canvas),
+        shell.canvas_layout().nodes.iter().find(|n| n.id == obs).and_then(|n| n.resize_corner),
+    ) {
+        (Some(v), Some(c0)) => {
+            let want = SpVec2::new(v.max.x - 90.0, v.max.y - 60.0);
+            if let Some(n) = shell.graph.node_mut(obs) {
+                n.pos = n.pos.add(want.sub(c0));
+            }
+            frame!([]);
+            shell.canvas_layout().nodes.iter().find(|n| n.id == obs).and_then(|n| n.resize_corner)
+        },
+        _ => None,
+    };
+    // The audit row the acceptance names: the handle is registered under its id, at its
+    // declared class L, measuring at least the class-L floor — with no violation under it.
+    let handle = shell.audit_element(&format!("canvas/resize/{obs}"));
+    let l_px = sparq_ui::audit::TouchClass::L.min_px();
+    check(
+        "the selected instrument card registers its resize handle at the class-L touch floor (audit row)",
+        handle.is_some_and(|e| {
+            e.class == sparq_ui::audit::TouchClass::L && e.rect.min_side() >= l_px - 0.5
+        }) && shell
+            .audit_report()
+            .violations
+            .iter()
+            .all(|v| !v.id.contains("canvas/resize")),
+        failures,
+    );
+    let undo_before = shell.canvas.history.undo_len();
+    let (mut resized, mut one_undo) = (false, false);
+    if let Some(c) = corner {
+        now += 400;
+        frame!([finger(60, c.x, c.y, PointerPhase::Down, now)]);
+        now += 16;
+        frame!([finger(60, c.x + 60.0, c.y + 32.0, PointerPhase::Moved, now)]);
+        now += 16;
+        frame!([finger(60, c.x + 120.0, c.y + 64.0, PointerPhase::Moved, now)]);
+        now += 16;
+        frame!([finger(60, c.x + 120.0, c.y + 64.0, PointerPhase::Up, now)]);
+        // 1088+120 × 560+64 = 1208×624 — both already on the 8 px grid, in-window.
+        resized = shell.graph.node(obs).and_then(|n| n.size) == Some(SpVec2::new(1208.0, 624.0));
+        let top_is_the_resize = match shell.canvas.history.top() {
+            Some(Op::ResizeNode { from: None, to: Some(to), .. }) => {
+                *to == SpVec2::new(1208.0, 624.0)
+            },
+            _ => false,
+        };
+        one_undo = shell.canvas.history.undo_len() == undo_before + 1 && top_is_the_resize;
+    }
+    check(
+        "a corner-handle drag resizes the band, snaps to the 8 px grid, and is ONE undo step",
+        resized && one_undo,
+        failures,
+    );
+    // The three-finger tap: ONE undo returns the card to its default band.
+    if let Some(v) = shell.last_layout.as_ref().map(|l| l.canvas) {
+        let c = v.center();
+        now += 400;
+        frame!([
+            finger(61, c.x - 40.0, c.y, PointerPhase::Down, now),
+            finger(62, c.x, c.y, PointerPhase::Down, now + 5),
+            finger(63, c.x + 40.0, c.y, PointerPhase::Down, now + 10),
+        ]);
+        now += 60;
+        frame!([
+            finger(61, c.x - 40.0, c.y, PointerPhase::Up, now),
+            finger(62, c.x, c.y, PointerPhase::Up, now + 5),
+            finger(63, c.x + 40.0, c.y, PointerPhase::Up, now + 10),
+        ]);
+    }
+    check(
+        "one undo returns the wall to its default half-face band",
+        shell.graph.node(obs).and_then(|n| n.size).is_none(),
+        failures,
+    );
+
+    // 56. SPAWN + FOCUS, the O-1 acceptance on the real viewport: FOCUS frames the WHOLE wall
+    //     inside the 1920×1080 canvas rect at a Full-LOD zoom ≤ 1 — the 16-cell wall is
+    //     readable at zoom 1 without a scroll or a squint.
+    let framed = if let Some(v) = shell.last_layout.as_ref().map(|l| l.canvas) {
+        let ev = shell.canvas.focus_node(&shell.graph, obs, v);
+        frame!([]);
+        let zoom = shell.canvas.camera.zoom;
+        let on_screen = shell.canvas_layout().nodes.iter().find(|n| n.id == obs).map(|n| n.screen);
+        ev.iter().any(|e| matches!(e, sparq_ui::canvas::CanvasEvent::ZoomToFit))
+            && (LAYOUT_CANVAS_LOD_1_BELOW_ZOOM..=LAYOUT_CANVAS_ZOOM_MAX + 1e-6).contains(&zoom)
+            && on_screen.is_some_and(|r| {
+                r.min.x >= v.min.x - 1.0
+                    && r.min.y >= v.min.y - 1.0
+                    && r.max.x <= v.max.x + 1.0
+                    && r.max.y <= v.max.y + 1.0
+            })
+    } else {
+        false
+    };
+    check(
+        "SPAWN + FOCUS frames the whole wall inside the 1920×1080 canvas rect at a Full-LOD zoom ≤ 1 (O-1)",
+        framed,
+        failures,
+    );
+
+    // 57. The typed panel band through the REAL recogniser (INC6 D16): every declared widget
+    //     is painted, routed and registered — and NOTHING undeclared exists. A tap on SOLO
+    //     flips it through the param door (one undo); a tap on the CELL chip opens §8.4's
+    //     EXISTING picker and a row select re-gates the STREAM pickers (D7) the same frame;
+    //     the at-rest card says in words that the painted wall does not move until the loader
+    //     runs (never a frozen lie). A fresh shell at zoom 1: the cells measure their given
+    //     44 px, so the audit sees them at class S with no dense badge.
+    {
+        let ctx2 = egui::Context::default();
+        adapter::apply_style(&ctx2, ThemeChoice::PhosphorDark);
+        let mut shell = ShellUi::new();
+        let mut t = 0.0_f64;
+        let mut now = 0_u64;
+        macro_rules! frame {
+            ($pts:expr) => {{
+                t += 1.0 / 60.0;
+                step(&mut shell, &ctx2, w, h, t, now, &$pts)
+            }};
+        }
+        let obs = match shell.graph.op_add_node(spec.clone(), SpVec2::ZERO) {
+            Op::AddNode(n) => n.id,
+            _ => u32::MAX,
+        };
+        shell.canvas.selection.clear();
+        shell.canvas.selection.nodes.insert(obs);
+        frame!([]);
+        frame!([]);
+        // Slide the card's top-left so the whole band sits inside THIS frame's canvas rect.
+        if let (Some(v), Some(c0)) = (
+            shell.last_layout.as_ref().map(|l| l.canvas),
+            shell.canvas_layout().nodes.iter().find(|n| n.id == obs).map(|n| n.screen.min),
+        ) {
+            let want = SpVec2::new(v.min.x + 40.0, v.min.y + 40.0);
+            if let Some(n) = shell.graph.node_mut(obs) {
+                n.pos = n.pos.add(want.sub(c0));
+            }
+            frame!([]);
+        }
+        let widgets: Vec<_> = shell
+            .canvas_layout()
+            .nodes
+            .iter()
+            .find(|n| n.id == obs)
+            .map(|n| n.panel_widgets.to_vec())
+            .unwrap_or_default();
+        // A local fn, not a closure: the smoke's frames take &mut shell between the lookups,
+        // and a capturing borrow would not survive them (the gate idiom's own hygiene).
+        fn param_of(shell: &ShellUi, obs: u32, pid: &str) -> Option<usize> {
+            shell.graph.node(obs).and_then(|n| n.spec.params.iter().position(|p| p.id == pid))
+        }
+        // Registration: exactly the VISIBLE routed widgets are in the audit — the hidden
+        // STREAM pickers and the status label are NOT (nothing undeclared, nothing invisible,
+        // is touchable or measured).
+        let registered: Vec<usize> = (0..widgets.len())
+            .filter(|i| shell.audit_element(&format!("canvas/panel/{obs}/{i}")).is_some())
+            .collect();
+        let want_registered: Vec<usize> = widgets
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| {
+                w.visible
+                    && w.param.is_some()
+                    && shell
+                        .graph
+                        .node(obs)
+                        .and_then(|n| n.spec.display.as_ref())
+                        .and_then(|d| d.widgets.get(w.widget).map(|dw| dw.kind))
+                        != Some(sparq_ui::canvas::model::PanelWidgetKind::Label)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        check(
+            "the typed band registers exactly its visible routed widgets — nothing undeclared exists anywhere",
+            registered == want_registered && registered.len() == 11,
+            failures,
+        );
+        // A tap on SOLO flips it through the param door: one undo step, the engine's ledger
+        // hears the edit.
+        let solo_i = param_of(&shell, obs, "solo");
+        let solo_cell = solo_i.and_then(|pi| widgets.iter().find(|w| w.param == Some(pi)));
+        let undo_before = shell.canvas.history.undo_len();
+        let mut solo_flipped = false;
+        if let Some(cell) = solo_cell {
+            let c = cell.rect.center();
+            now += 400;
+            frame!([finger(70, c.x, c.y, PointerPhase::Down, now)]);
+            now += 80;
+            frame!([finger(70, c.x, c.y, PointerPhase::Up, now)]);
+            solo_flipped =
+                shell.graph.node(obs).and_then(|n| solo_i.and_then(|pi| n.param_value(pi)))
+                    == Some(1.0)
+                    && shell.canvas.history.undo_len() == undo_before + 1;
+        }
+        check(
+            "a tap on the band's SOLO chip flips the param through the undoable param door",
+            solo_flipped,
+            failures,
+        );
+        // A tap on the CELL chip opens the EXISTING picker; row 4 selects Cell 04 and the D7
+        // gate re-hangs the STREAM pickers the same frame.
+        let sc_i = param_of(&shell, obs, "selected_cell");
+        let sc_cell = sc_i.and_then(|pi| widgets.iter().find(|w| w.param == Some(pi)));
+        let mut picker_route = false;
+        if let (Some(cell), Some(v)) = (sc_cell, shell.last_layout.as_ref().map(|l| l.canvas)) {
+            let c = cell.rect.center();
+            now += 400;
+            frame!([finger(71, c.x, c.y, PointerPhase::Down, now)]);
+            now += 80;
+            frame!([finger(71, c.x, c.y, PointerPhase::Up, now)]);
+            let opened = shell.canvas.picker.is_open()
+                && shell.canvas.picker.target
+                    == Some(sparq_ui::canvas::picker::PickerTarget {
+                        node: obs,
+                        param: sc_i.unwrap_or(usize::MAX),
+                    });
+            // Row 3 (Cell 04) through the sheet's own geometry.
+            let mut selected = false;
+            if opened {
+                if let Some(sheet) = shell.canvas.picker.sheet_rect(v) {
+                    if let Some(row) = shell.canvas.picker.row_rect(sheet, 3) {
+                        let rc = row.center();
+                        now += 400;
+                        frame!([finger(72, rc.x, rc.y, PointerPhase::Down, now)]);
+                        now += 80;
+                        frame!([finger(72, rc.x, rc.y, PointerPhase::Up, now)]);
+                        selected = shell
+                            .graph
+                            .node(obs)
+                            .and_then(|n| sc_i.and_then(|pi| n.param_value(pi)))
+                            == Some(3.0)
+                            && !shell.canvas.picker.is_open();
+                    }
+                }
+            }
+            frame!([]);
+            let gated = shell
+                .canvas_layout()
+                .nodes
+                .iter()
+                .find(|n| n.id == obs)
+                .map(|n| {
+                    let vis = |pid: &str| {
+                        param_of(&shell, obs, pid).and_then(|pi| {
+                            n.panel_widgets.iter().find(|w| w.param == Some(pi)).map(|w| w.visible)
+                        })
+                    };
+                    vis("cell_04") == Some(true) && vis("cell_01") == Some(false)
+                })
+                .unwrap_or(false);
+            picker_route = opened && selected && gated;
+        }
+        check(
+            "the CELL chip opens §8.4's picker; a row select re-gates the sixteen STREAM pickers (D7) the same frame",
+            picker_route,
+            failures,
+        );
+        // The painted proof (S2's "svg" face — the frame's TEXT shapes are exactly what the
+        // SVG dumper serialises): the declared widgets' words reach the frame — the five
+        // toggle chips' ids, the CELL dropdown's current option reading — and the panel band
+        // carries the HOST'S WORDS: with the streams feature the provider's §5.2 sentence
+        // rides the slot (the replay's fixture label); without one — no loader, no provider —
+        // the card says in words that editing params does not move the painted wall (INC6 S2's
+        // refuse-in-words, never a frozen lie, never a blank slot).
+        let (texts, _, _) = frame_collect(&mut shell, &ctx2, w, h, t + 1.0 / 60.0, now);
+        let has = |needle: &str| texts.iter().any(|s| s.contains(needle));
+        let host_words = if cfg!(feature = "streams") {
+            texts.iter().any(|s| {
+                s.contains("LIVE ") || s.contains("the wall re-renders live when the loader runs")
+            })
+        } else {
+            has("the wall re-renders live when the loader runs")
+        };
+        check(
+            "the band's declared widgets are PAINTED (their words ride the frame) — and the panel band carries the host's words (the provider's sentence, or the at-rest sentence when no loader runs)",
+            has("SOLO") && has("FULL") && has("TICKER") && has("GRID") && has("PAUSE")
+                && has("Cell 04") && has("4 × 4 (16)") && host_words,
+            failures,
+        );
+    }
+
+    // 58. The STREAMS dock tab (INC6 S3 — rulings O-2/O-3/O-4, plan D18/D20), driven through
+    //     the real recogniser where fingers are involved (tab tap, field taps, the dock's pan
+    //     scroll) and through the headless key doors where typing is (keys are an input-event
+    //     feed, not a gesture — the rename entry's own idiom). The acceptance's sandbox half:
+    //     a 10 s override is honoured, a 5 s entry refuses in words and keeps the old value,
+    //     the key persists MASKED (the sentinel never rides a log line or a frame's texts —
+    //     the redaction grep), and an env-set key disables the field WITH its words (the
+    //     precedence is visible). The device half — the key flipping neo/epic/power from
+    //     DEMO_KEY/429 to the key's rate — is the run sheet's, not the sandbox's.
+    #[cfg(feature = "streams")]
+    {
+        use sparq_streams::store::Overrides;
+        let store_path = std::env::temp_dir().join("sparq-smoke58-overrides.toml");
+        let _ = std::fs::remove_file(&store_path);
+        std::env::set_var("SPARQ_STREAMS_OVERRIDES", &store_path);
+        let ctx3 = egui::Context::default();
+        adapter::apply_style(&ctx3, ThemeChoice::PhosphorDark);
+        let mut shell = ShellUi::new();
+        let mut t = 0.0_f64;
+        let mut now = 100_000_u64; // a distinct clock: no collision with the sheets above
+        macro_rules! frame {
+            ($pts:expr) => {{
+                t += 1.0 / 60.0;
+                step(&mut shell, &ctx3, w, h, t, now, &$pts)
+            }};
+        }
+        macro_rules! frame_x {
+            ($pts:expr, $extras:expr) => {{
+                t += 1.0 / 60.0;
+                step_x(&mut shell, &ctx3, w, h, t, now, &$pts, &$extras)
+            }};
+        }
+        frame!([]);
+        frame!([]);
+        // The tab is ALIVE (O-2): tap it through the recogniser.
+        let tab = shell.rect_of("dock/tab/STREAMS");
+        if let Some(r) = tab {
+            let c = r.center();
+            now += 400;
+            frame!([finger(80, c.x, c.y, PointerPhase::Down, now)]);
+            now += 80;
+            frame!([finger(80, c.x, c.y, PointerPhase::Up, now)]);
+        }
+        let (texts, _, _) = frame_collect(&mut shell, &ctx3, w, h, t + 1.0 / 60.0, now);
+        let has = |n: &str| texts.iter().any(|s| s.contains(n));
+        let cadence_rows = (0..23)
+            .filter(|i| shell.rect_of(&format!("dock/streams/cadence/{i}")).is_some())
+            .count();
+        check(
+            "the STREAMS tab is alive: fixture-fed rows, the AT REST — fixtures header word (D20, never a frozen lie)",
+            tab.is_some() && has("AT REST — fixtures") && has("swpc.aurora") && has("CADENCE") && cadence_rows >= 3,
+            failures,
+        );
+        // Scroll to the bottom of the list (the dock owns pans over it — the library's rule)
+        // and find the NASA rows.
+        let reg = sparq_streams::Registry::load();
+        let neo_row =
+            reg.as_ref().ok().and_then(|r| r.streams().iter().position(|d| d.id == "space.neo"));
+        if let Some(dock) = shell.last_layout.as_ref().and_then(|l| l.dock) {
+            let c = dock.center();
+            frame_x!([], [GestureIntent::Pan { delta: SpVec2::new(0.0, -4000.0), center: c }]);
+        }
+        frame!([]);
+        let mut floor_refused = false;
+        let mut ten_honoured = false;
+        let mut key_masked = false;
+        let mut env_wins = false;
+        if let (Ok(_reg), Some(neo)) = (reg, neo_row) {
+            let ctxr = &ctx3;
+            let tap_field = move |shell: &mut ShellUi, now: &mut u64, id: &str| -> bool {
+                let Some(r) = shell.rect_of(id) else { return false };
+                let c = r.center();
+                *now += 400;
+                let _ = step(
+                    shell,
+                    ctxr,
+                    w,
+                    h,
+                    t,
+                    *now,
+                    &[finger(81, c.x, c.y, PointerPhase::Down, *now)],
+                );
+                *now += 80;
+                let _ = step(
+                    shell,
+                    ctxr,
+                    w,
+                    h,
+                    t,
+                    *now,
+                    &[finger(81, c.x, c.y, PointerPhase::Up, *now)],
+                );
+                shell.streams_field_focused()
+            };
+            // The 5 s entry refuses in words and keeps the old value (O-3's floor).
+            if tap_field(&mut shell, &mut now, &format!("dock/streams/cadence/{neo}")) {
+                shell.streams_field_set_text("5");
+                shell.streams_field_commit();
+                frame!([]);
+                floor_refused = shell
+                    .log()
+                    .iter()
+                    .any(|l| l.contains("below the 10 s floor") && l.contains("old value"))
+                    && shell.overrides.cadence_s("space.neo").is_none();
+            }
+            // The 10 s override is honoured: the store is written, the row reads it beside the
+            // dimmed registry cadence.
+            if tap_field(&mut shell, &mut now, &format!("dock/streams/cadence/{neo}")) {
+                shell.streams_field_set_text("10");
+                shell.streams_field_commit();
+                let (texts2, _, _) = frame_collect(&mut shell, &ctx3, w, h, t + 1.0 / 60.0, now);
+                ten_honoured = shell.overrides.cadence_s("space.neo") == Some(10)
+                    && texts2.iter().any(|s| s.contains("10 s") && s.contains("(registry 1800 s)"))
+                    && std::fs::read_to_string(&store_path)
+                        .is_ok_and(|f| f.contains("cadence_s = 10"))
+                    && Overrides::load(store_path.clone()).0.cadence_s("space.neo") == Some(10);
+            }
+            // The key entry: typed, committed, persisted — and the sentinel value NEVER rides
+            // a log line or a frame's texts (the redaction acceptance, grepped).
+            const SENTINEL: &str = "NASA-SMOKE-KEY-777";
+            if tap_field(&mut shell, &mut now, &format!("dock/streams/key/{neo}")) {
+                shell.streams_field_set_text(SENTINEL);
+                shell.streams_field_commit();
+                let (texts3, _, _) = frame_collect(&mut shell, &ctx3, w, h, t + 1.0 / 60.0, now);
+                let log_clean = !shell.log().iter().any(|l| l.contains(SENTINEL));
+                let frame_clean = !texts3.iter().any(|s| s.contains(SENTINEL));
+                let file_carries = std::fs::read_to_string(&store_path)
+                    .is_ok_and(|f| f.contains(SENTINEL))
+                    && Overrides::load(store_path.clone()).0.has_key("space.neo");
+                key_masked = log_clean
+                    && frame_clean
+                    && file_carries
+                    && shell.overrides.has_key("space.neo")
+                    && shell.overrides.masked_key("space.neo").as_deref() == Some("••••-777")
+                    && shell
+                        .log()
+                        .iter()
+                        .any(|l| l.contains("SET (file)") && l.contains("••••-777"))
+                    && texts3.iter().any(|s| s.contains("••••-777"))
+                    && texts3.iter().any(|s| s.contains("SET (file)"));
+            }
+            // The env var wins: the field is DISABLED with those words — out of the audit (a
+            // disabled control is not a touch target), and a tap on it logs the precedence,
+            // never an edit (O-4/D20 — refuse in words, never silently inert).
+            let field_rect = shell.rect_of(&format!("dock/streams/key/{neo}"));
+            std::env::set_var("SPARQ_NASA_API_KEY", "ENV-SMOKE-KEY");
+            let (texts4, _, _) = frame_collect(&mut shell, &ctx3, w, h, t + 1.0 / 60.0, now);
+            let out_of_audit = shell.audit_element(&format!("dock/streams/key/{neo}")).is_none();
+            let said_disabled = texts4.iter().any(|s| s.contains("SET (env)"));
+            let mut tapped_words = false;
+            if let Some(r) = field_rect {
+                let c = r.center();
+                now += 400;
+                frame!([finger(82, c.x, c.y, PointerPhase::Down, now)]);
+                now += 80;
+                frame!([finger(82, c.x, c.y, PointerPhase::Up, now)]);
+                tapped_words = shell.log().iter().any(|l| l.contains("DISABLED — SET (env)"));
+            }
+            std::env::remove_var("SPARQ_NASA_API_KEY");
+            let (texts5, _, _) = frame_collect(&mut shell, &ctx3, w, h, t + 1.0 / 60.0, now);
+            env_wins = out_of_audit
+                && said_disabled
+                && tapped_words
+                && !shell.streams_field_focused()
+                && shell.audit_element(&format!("dock/streams/key/{neo}")).is_some()
+                && texts5.iter().any(|s| s.contains("SET (file)"));
+        }
+        check("the cadence field refuses a 5 s entry in words and keeps the old value (O-3's 10 s floor)", floor_refused, failures);
+        check("a 10 s override is honoured — the store is written and the row reads it beside the dimmed registry cadence", ten_honoured, failures);
+        check(
+            "the key persists MASKED: the sentinel rides the user-data file alone — never a log line, never a frame's texts (the redaction grep)",
+            key_masked,
+            failures,
+        );
+        check("an env-set key disables the KEY field WITH its words — the precedence is visible, not a mystery (O-4/D20)", env_wins, failures);
+        std::env::remove_var("SPARQ_STREAMS_OVERRIDES");
+        let _ = std::fs::remove_file(&store_path);
+    }
+
+    // 59. The live display plane's SEAMS (INC6 S4, D17c/D19) — the sandbox-provable half the
+    //     plan names: a scripted instance through the REAL tick — the launch shelf attaches it
+    //     to the module's first node, the pacer draws at the D19 token (15 Hz — a 66 ms period,
+    //     ~4 frames of a 60 Hz shell), an edit forces the next frame regardless of the pace,
+    //     the draw lands on the live shelf at the band's ACTUAL px (O-1: a resize reaches the
+    //     guest), and five consecutive overruns bypass the DISPLAY instance with §3's words —
+    //     the shelf drops, the band falls back to at rest, and no further draw is attempted.
+    //     The wasmtime half is device-first-compile (test008.bat); this smoke is the trait
+    //     boundary where the desk-check ends and the measurement begins.
+    {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        use crate::ui::live_display::{DisplayFrame, LiveDisplay};
+
+        // The scripted instance's state rides ATOMICS, not Rc/Mutex: both are clippy.toml's
+        // disallowed types (the audio-path discipline is workspace-wide, and a smoke is not
+        // exempt from the house it measures). Single-threaded; Relaxed is the honest order.
+        #[derive(Default)]
+        struct Stats {
+            draws: AtomicUsize,
+            fail_remaining: AtomicUsize,
+            last_w: AtomicUsize,
+            last_h: AtomicUsize,
+        }
+        struct Scripted {
+            stats: Arc<Stats>,
+        }
+        impl LiveDisplay for Scripted {
+            fn draw(
+                &mut self,
+                frame: &DisplayFrame,
+            ) -> Result<Vec<sparq_ui::displaylist::Item>, String> {
+                self.stats.last_w.store(frame.width_px as usize, Ordering::Relaxed);
+                self.stats.last_h.store(frame.height_px as usize, Ordering::Relaxed);
+                let fails = self.stats.fail_remaining.load(Ordering::Relaxed);
+                if fails > 0 {
+                    self.stats.fail_remaining.store(fails - 1, Ordering::Relaxed);
+                    return Err(
+                        "fuel budget exhausted (32000001 of 32000000 burned) — the guest overran its budget"
+                            .to_string(),
+                    );
+                }
+                self.stats.draws.fetch_add(1, Ordering::Relaxed);
+                Ok(Vec::new())
+            }
+            fn display_id(&self) -> &str {
+                "wall"
+            }
+        }
+
+        let ctx4 = egui::Context::default();
+        adapter::apply_style(&ctx4, ThemeChoice::PhosphorDark);
+        let mut shell = ShellUi::new();
+        let mut t = 0.0_f64;
+        let mut now = 500_000_u64;
+        macro_rules! frame {
+            ($pts:expr) => {{
+                t += 1.0 / 60.0;
+                now += 16;
+                step(&mut shell, &ctx4, w, h, t, now, &$pts)
+            }};
+        }
+        let obs = match shell.graph.op_add_node(spec.clone(), SpVec2::ZERO) {
+            Op::AddNode(n) => n.id,
+            _ => u32::MAX,
+        };
+        let module = shell.graph.node(obs).map(|n| n.spec.module_id.clone()).unwrap_or_default();
+        let stats = Arc::new(Stats::default());
+        shell
+            .pending_displays
+            .insert(module.clone(), Box::new(Scripted { stats: Arc::clone(&stats) }));
+        // The attach + the first (due) draw; then the pace: frames inside the 66 ms period
+        // draw NOTHING, the frame past it draws.
+        frame!([]);
+        let attached = shell.log().iter().any(|l| l.contains("instrument display attached"))
+            && shell.live_surfaces.get(&module).is_some();
+        let first_draws = stats.draws.load(Ordering::Relaxed);
+        frame!([]); // +16 ms
+        frame!([]); // +32 ms
+        let paced = stats.draws.load(Ordering::Relaxed) == first_draws;
+        frame!([]); // +48
+        frame!([]); // +64 — still inside the 66 ms period
+        let paced2 = stats.draws.load(Ordering::Relaxed) == first_draws;
+        frame!([]); // +80 — past the period: due
+        let repaced = stats.draws.load(Ordering::Relaxed) == first_draws + 1;
+        // The frame context reaches the guest as the band's ACTUAL px (O-1): the draw landed
+        // on the live shelf at the default band's size — the shelf's w/h ARE the frame's.
+        let ctx_ok =
+            shell.live_surfaces.get(&module).is_some_and(|ls| ls.w == 1088.0 && ls.h == 560.0)
+                && stats.last_w.load(Ordering::Relaxed) == 1088
+                && stats.last_h.load(Ordering::Relaxed) == 560;
+        // An edit forces the next frame regardless of the pace (D19).
+        let ticker = shell
+            .graph
+            .node(obs)
+            .and_then(|n| n.spec.params.iter().position(|p| p.id == "ticker_speed"));
+        if let Some(pi) = ticker {
+            let _ = shell.graph.op_set_param(obs, pi, 2.0);
+        }
+        frame!([]); // +16 ms — inside the period, but the edit forces it
+        let forced = stats.draws.load(Ordering::Relaxed) == first_draws + 2;
+        // A resize reaches the guest: the next forced draw re-renders at the NEW band's px,
+        // and the live shelf carries them (O-1: text stays native at every size).
+        let _ = shell.graph.op_resize_node(obs, Some(SpVec2::new(2176.0, 1120.0)));
+        frame!([]);
+        let resized_ctx = stats.last_w.load(Ordering::Relaxed) == 2176
+            && stats.last_h.load(Ordering::Relaxed) == 1120
+            && shell.live_surfaces.get(&module).is_some_and(|ls| ls.w == 2176.0 && ls.h == 1120.0);
+        // Five consecutive overruns: each skips and counts; the fifth bypasses with §3's
+        // words, the live shelf drops (the band falls back to at rest), and the instance is
+        // never asked again. (Each iteration advances the clock past the period, so the draws
+        // are due by pace — the edit force was proven above.)
+        stats.fail_remaining.store(5, Ordering::Relaxed);
+        for _ in 0..5 {
+            now += 70;
+            frame!([]);
+        }
+        let bypassed = shell.log().iter().any(|l| l.contains("DISPLAY BYPASSED"))
+            && shell.live_surfaces.get(&module).is_none();
+        let draws_at_bypass = stats.draws.load(Ordering::Relaxed);
+        for _ in 0..3 {
+            now += 70;
+            frame!([]);
+        }
+        let no_more = stats.draws.load(Ordering::Relaxed) == draws_at_bypass;
+        check(
+            "the launch shelf attaches the instance and the D19 pacer draws at the token's 15 Hz (66 ms) — not every frame",
+            attached && first_draws == 1 && paced && paced2 && repaced,
+            failures,
+        );
+        check(
+            "the paced draw lands on the live shelf at the band's ACTUAL px — and a resize reaches the guest (O-1)",
+            ctx_ok && resized_ctx,
+            failures,
+        );
+        check(
+            "an edit forces the next frame's draw regardless of the pace (D19)",
+            forced,
+            failures,
+        );
+        check(
+            "five consecutive overruns bypass the DISPLAY instance with §3's words — the shelf drops, the band falls back, no further draw",
+            bypassed && no_more,
+            failures,
+        );
+    }
+
+    // 60. The card's RATE row — D20's second door (S5): the words NAME the stream the panel's
+    //     rate governs and the shared-feed truth; the field opens through the recogniser and
+    //     writes the SAME store the STREAMS tab does; a 5 s entry refuses in words (O-3); and
+    //     moving the CELL dropdown moves the governed stream the same frame (the resolution
+    //     reads the node's live params, never a memo).
+    #[cfg(feature = "streams")]
+    {
+        use sparq_streams::store::Overrides;
+        let store_path = std::env::temp_dir().join("sparq-smoke60-overrides.toml");
+        let _ = std::fs::remove_file(&store_path);
+        std::env::set_var("SPARQ_STREAMS_OVERRIDES", &store_path);
+        let ctx5 = egui::Context::default();
+        adapter::apply_style(&ctx5, ThemeChoice::PhosphorDark);
+        let mut shell = ShellUi::new();
+        let mut t = 0.0_f64;
+        let mut now = 900_000_u64;
+        macro_rules! frame {
+            ($pts:expr) => {{
+                t += 1.0 / 60.0;
+                step(&mut shell, &ctx5, w, h, t, now, &$pts)
+            }};
+        }
+        let obs = match shell.graph.op_add_node(spec.clone(), SpVec2::ZERO) {
+            Op::AddNode(n) => n.id,
+            _ => u32::MAX,
+        };
+        shell.canvas.selection.clear();
+        shell.canvas.selection.nodes.insert(obs);
+        frame!([]);
+        frame!([]);
+        // Deterministic framing (the FOCUS proof is smoke 56's job, not this smoke's
+        // dependency): an explicit Full-LOD zoom that keeps the whole 1120×768 card — the
+        // RATE row included — inside the 1920×1080 canvas rect even with the inspector open,
+        // AND keeps the 40-px rate field at its 32-px screen minimum (the dense floor — below
+        // it the row is honestly a reading, not a target, and this smoke would measure
+        // nothing). 0.8 × 40 = 32 exactly: the floor, measured not assumed.
+        shell.canvas.camera.zoom = 0.8;
+        shell.canvas.camera.origin = SpVec2::new(-20.0, -20.0);
+        frame!([]);
+        // The smoke's own precondition, measured not assumed: at Full LOD or it measures
+        // nothing (a gate reports, it never panics).
+        let full_lod = shell.canvas.camera.lod() == sparq_ui::canvas::camera::Lod::Full;
+        let (texts, _, _) = frame_collect(&mut shell, &ctx5, w, h, t + 1.0 / 60.0, now);
+        let words_ok = texts.iter().any(|s| s.contains("RATE · CELL 01 → swpc.aurora"))
+            && texts.iter().any(|s| s.contains("panel(s) ride this feed"));
+        let registered = shell.audit_element(&format!("canvas/rate/{obs}")).is_some();
+        // The field tap through the recogniser; the floor refusal; the honoured 45 s.
+        let field =
+            shell.canvas_layout().nodes.iter().find(|n| n.id == obs).and_then(|n| n.rate_field);
+        let (mut refused, mut honoured) = (false, false);
+        if let Some(f) = field {
+            let c = f.center();
+            now += 400;
+            frame!([finger(90, c.x, c.y, PointerPhase::Down, now)]);
+            now += 80;
+            frame!([finger(90, c.x, c.y, PointerPhase::Up, now)]);
+            let focused = shell.streams_field_focused();
+            shell.streams_field_set_text("5");
+            shell.streams_field_commit();
+            frame!([]);
+            refused = focused
+                && shell.log().iter().any(|l| l.contains("below the 10 s floor"))
+                && shell.overrides.cadence_s("swpc.aurora").is_none();
+            let f2 =
+                shell.canvas_layout().nodes.iter().find(|n| n.id == obs).and_then(|n| n.rate_field);
+            if let Some(f2) = f2 {
+                let c2 = f2.center();
+                now += 400;
+                frame!([finger(91, c2.x, c2.y, PointerPhase::Down, now)]);
+                now += 80;
+                frame!([finger(91, c2.x, c2.y, PointerPhase::Up, now)]);
+                shell.streams_field_set_text("45");
+                shell.streams_field_commit();
+                frame!([]);
+                honoured = shell.overrides.cadence_s("swpc.aurora") == Some(45)
+                    && shell.log().iter().any(|l| {
+                        l.contains("cadence swpc.aurora → 45 s") && l.contains("BOTH doors")
+                    })
+                    && Overrides::load(store_path.clone()).0.cadence_s("swpc.aurora") == Some(45);
+            }
+        }
+        // The CELL dropdown moves the governed stream: select CELL 02 (its default rides
+        // cell_02's own option) and the row's words follow the same frame.
+        let cell2_stream = shell.graph.node(obs).and_then(|n| {
+            let cp = n.spec.params.iter().position(|p| p.id == "cell_02")?;
+            let v = n.param_value(cp)?.round().max(0.0) as usize;
+            n.spec.params[cp].options.get(v).map(|(val, _)| val.clone())
+        });
+        let sc = shell
+            .graph
+            .node(obs)
+            .and_then(|n| n.spec.params.iter().position(|p| p.id == "selected_cell"));
+        if let Some(pi) = sc {
+            let _ = shell.graph.op_set_param(obs, pi, 1.0);
+        }
+        let (texts2, _, _) = frame_collect(&mut shell, &ctx5, w, h, t + 1.0 / 60.0, now);
+        let moved = cell2_stream.as_ref().is_some_and(|st| {
+            texts2.iter().any(|s| s.contains("RATE · CELL 02 →") && s.contains(st.as_str()))
+        });
+        // The shared-feed truth, in words: put CELL 02 on CELL 01's feed (option 1 =
+        // swpc.aurora) and the row counts BOTH panels — one store, one rate, said out loud.
+        let shared_ok = shell
+            .graph
+            .node(obs)
+            .and_then(|n| n.spec.params.iter().position(|p| p.id == "cell_02"))
+            .is_some_and(|cp| {
+                let _ = shell.graph.op_set_param(obs, cp, 1.0);
+                let (texts3, _, _) = frame_collect(&mut shell, &ctx5, w, h, t + 1.0 / 60.0, now);
+                texts3.iter().any(|s| {
+                    s.contains("RATE · CELL 02 → swpc.aurora")
+                        && s.contains("2 panel(s) ride this feed")
+                })
+            });
+        check(
+            "the card's RATE row names the governed stream and the shared-feed truth in words — and follows the CELL dropdown the same frame (D20)",
+            full_lod && words_ok && moved && shared_ok,
+            failures,
+        );
+        check(
+            "the RATE field registers in the audit (the card rows' dense-exception idiom)",
+            registered,
+            failures,
+        );
+        check(
+            "the RATE field writes the SAME store the tab does — and a 5 s entry refuses in words (O-3)",
+            refused && honoured,
+            failures,
+        );
+        std::env::remove_var("SPARQ_STREAMS_OVERRIDES");
+        let _ = std::fs::remove_file(&store_path);
+    }
 }
 
 // ------------------------------------------------------------------ synthetic gesture smoke

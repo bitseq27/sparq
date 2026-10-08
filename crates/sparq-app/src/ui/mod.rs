@@ -24,10 +24,27 @@ pub mod canvas_ui;
 pub mod displaylist_egui;
 #[cfg(feature = "ui")]
 pub mod headless;
+/// The instrument launch registration + the runtime display adapter (WO-020 INC6 S4, D17a/
+/// D17c) — DEVICE-FIRST-COMPILE: rides `instrument-host` (wasmtime), the §8 wall keeps it out
+/// of the sandbox build, `scripts/test008.bat` is its run sheet.
+#[cfg(all(feature = "ui", feature = "instrument-host"))]
+pub mod instrument_launch;
 #[cfg(feature = "ui")]
 pub mod live;
+/// The live display plane's host-side seams (WO-020 INC6 S4, D17c/D19): the pacer, the
+/// [`LiveDisplay`](live_display::LiveDisplay) seam and the live-surface shelf. Toolkit-
+/// independent, but its consumers are the `ui` tick/painter and the device-first
+/// `instrument_launch` adapter — so the module rides `ui`, and its own tests ride every
+/// `cargo test` of the bin (the seam contract is proven in the default workspace run).
+#[cfg(any(test, feature = "ui"))]
+pub mod live_display;
 #[cfg(feature = "ui")]
 pub mod shell_ui;
+/// The stream driver (WO-020 INC6 S4, D17b): the control-plane poll loop over the shared
+/// broker — hermetic `poll_once` core (sandbox-proven with the mock transport), thin device
+/// thread under `streams-net`.
+#[cfg(feature = "streams")]
+pub mod streams_driver;
 #[cfg(feature = "ui-window")]
 pub mod window;
 

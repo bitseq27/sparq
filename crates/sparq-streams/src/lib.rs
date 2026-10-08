@@ -21,8 +21,10 @@
 //!   [`window`]s + stale policy. This is real, tested content, not an empty crate (ADR-000).
 //! * **`streams`:** adds the first third-party dependency (`serde_json`) and with it the
 //!   JSON/GeoJSON/CSV [`normalize`]rs, the disk [`cache`], fixture [`replay`], the live fetch path
-//!   ([`fetch`]: endpoint fill, the transport seam, the retry policy) and the broker's scheduling
-//!   core ([`broker`]: cadence floors, replace-vs-accumulate windows, last-good seeding). All of
+//!   ([`fetch`]: endpoint fill, the transport seam, the retry policy), the broker's scheduling
+//!   core ([`broker`]: cadence floors, replace-vs-accumulate windows, last-good seeding) and the
+//!   key/cadence overrides [`store`] (WO-020 INC6 D18: the user-data file beside the cache, env
+//!   winning over it, the 10 s floor refusing in words). All of
 //!   it hermetic — tests drive the flow through injected transports and clocks.
 //! * **`streams-net`:** the live edge (INC5, landed): `fetch`'s [`HttpTransport`](fetch::HttpTransport)
 //!   (`ureq` + rustls + webpki-roots) and the plane's ONLY two impure helpers —
@@ -54,6 +56,8 @@ pub mod fetch;
 pub mod normalize;
 #[cfg(feature = "streams")]
 pub mod replay;
+#[cfg(feature = "streams")]
+pub mod store;
 
 pub use record::{DataFlags, DataRecord, DataValue};
 pub use registry::{KeyState, Registry, RegistryError, StreamDef};
